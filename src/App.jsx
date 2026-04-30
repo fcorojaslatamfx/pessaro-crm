@@ -68,7 +68,7 @@ function Login({onLogin}){
 }
 
 // ── DASHBOARD ─────────────────────────────────────────────────────────────────
-function Dashboard({contacts,leads}){
+function Dashboard({contacts,leads,onModuleChange}){
   const newC=contacts.filter(c=>c.status==='new').length
   const closedL=leads.filter(l=>l.etapa===5).length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital)||0),0)
@@ -141,7 +141,7 @@ function parseCSV(text){
   return{rows,errors}
 }
 
-function Contacts({user}){
+function Contacts({user,isSuperAdmin}){
   const[contacts,setContacts]=useState([])
   const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
@@ -157,7 +157,7 @@ function Contacts({user}){
   const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
   const[formErr,setFormErr]=useState({})
 
-  const isSuperAdmin=user?.user_metadata?.role==='super_admin'
+  // isSuperAdmin viene como prop verificado desde DB
   const[staffList,setStaffList]=useState([])
   const[filterUser,setFilterUser]=useState('todos')
 
@@ -891,8 +891,14 @@ function Reports({contacts,leads}){
 
 
 // ── CAMPAÑA ───────────────────────────────────────────────────────────────────
-function Campana({leads}){
+function Campana({leads,user,isSuperAdmin}){
   const[config,setConfig]=useState({})
+  const[participants,setParticipants]=useState([])
+  const[campTab,setCampTab]=useState('general') // general | mis_leads
+  const[myContacts,setMyContacts]=useState([])
+  const[showAddLead,setShowAddLead]=useState(false)
+  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:''})
+  const[addSaving,setAddSaving]=useState(false)
   const[referrals,setReferrals]=useState([])
   const[tiers,setTiers]=useState([])
   const[loading,setLoading]=useState(true)
@@ -902,16 +908,20 @@ function Campana({leads}){
   useEffect(()=>{
     const load=async()=>{
       setLoading(true)
-      const[{data:cfg},{data:ref},{data:t}]=await Promise.all([
+      const[{data:cfg},{data:ref},{data:t},{data:parts},{data:myC}]=await Promise.all([
         supabase.from('campaign_config').select('*'),
         supabase.from('campaign_referrals').select('*'),
-        supabase.from('campaign_bonus_tiers').select('*').order('min_referrals')
+        supabase.from('campaign_bonus_tiers').select('*').order('min_referrals'),
+        supabase.from('campaign_participants').select('*').order('created_at',{ascending:false}),
+        supabase.from('crm_contacts').select('id,full_name,email,phone').eq('user_id',user.id)
       ])
       const cfgMap={}
       ;(cfg||[]).forEach(r=>cfgMap[r.key]=r.value)
       setConfig(cfgMap)
       setReferrals(ref||[])
       setTiers(t||[])
+      setParticipants(parts||[])
+      setMyContacts(myC||[])
       setLoading(false)
     }
     load()
@@ -930,6 +940,22 @@ function Campana({leads}){
     setSaving(false)
   }
 
+  const addParticipant=async()=>{
+    if(!addForm.full_name||!addForm.email)return
+    setAddSaving(true)
+    const payload={...addForm,user_id:user.id,etapa:1}
+    if(!payload.crm_contact_id)delete payload.crm_contact_id
+    const{data}=await supabase.from('campaign_participants').insert(payload).select().single()
+    if(data){setParticipants(p=>[data,...p]);setShowAddLead(false);setAddForm({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:''})}
+    setAddSaving(false)
+  }
+
+  const updateParticipant=async(id,updates)=>{
+    await supabase.from('campaign_participants').update({...updates,updated_at:new Date().toISOString()}).eq('id',id)
+    setParticipants(p=>p.map(x=>x.id===id?{...x,...updates}:x))
+  }
+
+  const myParticipants=isSuperAdmin?participants:participants.filter(p=>p.user_id===user.id)
   const sorted=[...leads].sort((a,b)=>b.score-a.score)
 
   const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
@@ -939,6 +965,86 @@ function Campana({leads}){
   return<div>
     <SHdr title="Campaña Q2" sub={`${leads.length} leads · ${depositados.length} depósitos confirmados`}/>
 
+    {/* TABS */}
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[['general','🏆 General'],['mis_leads','👤 Mis Leads']].map(([id,label])=>(
+        <button key={id} onClick={()=>setCampTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
+          background:campTab===id?P.purpleDim:'rgba(255,255,255,0.04)',
+          color:campTab===id?P.purple:P.muted,
+          border:`1px solid ${campTab===id?P.purpleBorder:P.border}`,fontWeight:campTab===id?600:400}}>{label}</button>
+      ))}
+      {campTab==='mis_leads'&&<Btn onClick={()=>setShowAddLead(true)} style={{marginLeft:'auto'}}>+ Añadir lead</Btn>}
+    </div>
+
+    {/* MIS LEADS */}
+    {campTab==='mis_leads'&&<div>
+      <GlassCard style={{padding:0,marginBottom:16}}>
+        <div style={{padding:'12px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <p style={{fontSize:12,fontWeight:600,color:P.textSub,margin:0}}>{isSuperAdmin?'Todos los leads agregados':'Mis leads en campaña'} · {myParticipants.length}</p>
+        </div>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+            {['Nombre','Email','Capital','Equipo','Etapa','Contactado','Cuenta','KYC','Depósito'].map(h=>(
+              <th key={h} style={{padding:'10px 14px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {myParticipants.map((p,i)=>(
+              <tr key={p.id} style={{borderBottom:i<myParticipants.length-1?`1px solid ${P.border}`:'none'}}>
+                <td style={{padding:'11px 14px',fontSize:13,fontWeight:600,color:P.text}}>{p.full_name}</td>
+                <td style={{padding:'11px 14px',fontSize:12,color:P.muted,fontFamily:'monospace'}}>{p.email}</td>
+                <td style={{padding:'11px 14px'}}>{p.investment_range?<Badge label={p.investment_range} color={P.green}/>:'—'}</td>
+                <td style={{padding:'11px 14px'}}>{p.team?<Badge label={p.team} color={p.team==='radex'?'#e74c3c':P.blue}/>:'—'}</td>
+                <td style={{padding:'11px 14px'}}><Badge label={STAGE_LABEL[ETAPA_STAGE[p.etapa]]||p.etapa} color={STAGE_COLOR[ETAPA_STAGE[p.etapa]]||P.muted}/></td>
+                {[['advisor_contacted',p.advisor_contacted,'contactado'],['account_created',p.account_created,'cuenta'],['kyc_verified',p.kyc_verified,'kyc'],['deposit_confirmed',p.deposit_confirmed,'dep']].map(([field,val,lbl])=>(
+                  <td key={field} style={{padding:'11px 14px'}}>
+                    <button onClick={()=>updateParticipant(p.id,{[field]:!val})}
+                      style={{padding:'3px 8px',borderRadius:5,fontSize:11,cursor:'pointer',fontWeight:600,
+                        background:val?P.greenDim:'rgba(255,255,255,0.04)',
+                        color:val?P.green:P.muted,border:`1px solid ${val?P.green+'30':P.border}`}}>
+                      {val?'✓ Sí':'— No'}
+                    </button>
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {myParticipants.length===0&&<div style={{textAlign:'center',padding:32,color:P.muted,fontSize:13}}>
+          Aún no has agregado leads a la campaña. Usa el botón "+ Añadir lead".
+        </div>}
+      </GlassCard>
+
+      {/* Modal añadir lead */}
+      {showAddLead&&<Modal title="Añadir lead a Campaña Q2" onClose={()=>setShowAddLead(false)} accent={P.purple}>
+        <div style={{display:'flex',flexDirection:'column',gap:14}}>
+          <div><Lbl>Desde mis contactos (opcional)</Lbl>
+            <Sel value={addForm.crm_contact_id} onChange={v=>{
+              const c=myContacts.find(x=>x.id===v)
+              if(c)setAddForm(p=>({...p,crm_contact_id:v,full_name:c.full_name,email:c.email,phone:c.phone||''}))
+              else setAddForm(p=>({...p,crm_contact_id:v}))
+            }} options={[{value:'',label:'Ingresar manualmente'},...myContacts.map(c=>({value:c.id,label:`${c.full_name} · ${c.email}`}))]}/>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            <div><Lbl>Nombre *</Lbl><Input value={addForm.full_name} onChange={v=>setAddForm(p=>({...p,full_name:v}))} placeholder="Nombre completo"/></div>
+            <div><Lbl>Email *</Lbl><Input value={addForm.email} onChange={v=>setAddForm(p=>({...p,email:v}))} placeholder="email@ejemplo.com"/></div>
+            <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="+56 9..."/></div>
+            <div><Lbl>Capital</Lbl>
+              <Sel value={addForm.investment_range} onChange={v=>setAddForm(p=>({...p,investment_range:v}))}
+                options={[{value:'',label:'Seleccionar'},{value:'1k-5k',label:'1k-5k'},{value:'5k-20k',label:'5k-20k'},{value:'20k-50k',label:'20k-50k'},{value:'50k+',label:'50k+'}]}/></div>
+            <div><Lbl>Equipo</Lbl>
+              <Sel value={addForm.team} onChange={v=>setAddForm(p=>({...p,team:v}))}
+                options={[{value:'',label:'Sin equipo'},{value:'radex',label:'Radex'},{value:'tradeview',label:'Tradeview'}]}/></div>
+          </div>
+          <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
+            <Btn variant="ghost" onClick={()=>setShowAddLead(false)}>Cancelar</Btn>
+            <Btn onClick={addParticipant} disabled={addSaving||!addForm.full_name||!addForm.email}>{addSaving?'Guardando...':'Añadir a campaña'}</Btn>
+          </div>
+        </div>
+      </Modal>}
+    </div>}
+
+    {campTab==='general'&&<div>
     {/* KPIs */}
     <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
       <StatCard label="Capital levantado" value={`$${(totalCapital/1000).toFixed(0)}k`} sub={`${depositados.length} depósitos`} accent={P.green} Icon="💵"/>
@@ -1041,7 +1147,7 @@ function Campana({leads}){
       </div>
     </div>
 
-    {/* Detail modal */}
+    </div>}{/* Detail modal */}
     {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)} accent={P.purple}>
       <div>
         <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
@@ -1103,9 +1209,27 @@ export default function App(){
   const[leads,setLeads]=useState([])
   const[loading,setLoading]=useState(true)
 
+  const[isSuperAdminGlobal,setIsSuperAdminGlobal]=useState(false)
+
   useEffect(()=>{
-    supabase.auth.getSession().then(({data:{session}})=>{setUser(session?.user??null);setChecking(false)})
-    const{data:{subscription}}=supabase.auth.onAuthStateChange((_,session)=>setUser(session?.user??null))
+    supabase.auth.getSession().then(async({data:{session}})=>{
+      const u=session?.user??null
+      setUser(u)
+      if(u){
+        // Verificar super_admin desde DB (no JWT que puede estar desactualizado)
+        const{data}=await supabase.rpc('get_my_role')
+        setIsSuperAdminGlobal(data==='super_admin')
+      }
+      setChecking(false)
+    })
+    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
+      const u=session?.user??null
+      setUser(u)
+      if(u){
+        const{data}=await supabase.rpc('get_my_role')
+        setIsSuperAdminGlobal(data==='super_admin')
+      }
+    })
     return()=>subscription.unsubscribe()
   },[])
 
@@ -1135,7 +1259,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts user={user}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const mods={dashboard:<Dashboard contacts={contacts} leads={leads} onModuleChange={setModule}/>,contacts:<Contacts user={user} isSuperAdmin={isSuperAdminGlobal}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading} isSuperAdmin={isSuperAdminGlobal}/>,campana:<Campana leads={leads} user={user} isSuperAdmin={isSuperAdminGlobal}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
