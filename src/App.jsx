@@ -157,16 +157,35 @@ function Contacts({user}){
   const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
   const[formErr,setFormErr]=useState({})
 
+  const isSuperAdmin=user?.raw_user_meta_data?.role==='super_admin'
+  const[staffList,setStaffList]=useState([])
+  const[filterUser,setFilterUser]=useState('todos')
+
   const load=useCallback(async()=>{
     setLoading(true)
-    const{data}=await supabase.from('crm_contacts').select('*').eq('user_id',user.id).order('created_at',{ascending:false})
+    // Super admin: todos los contactos con datos del asesor
+    // Asesor normal: solo los suyos
+    let query=supabase.from('crm_contacts').select('*').order('created_at',{ascending:false})
+    if(!isSuperAdmin) query=query.eq('user_id',user.id)
+    const{data}=await query
     setContacts(data||[])
+    // Cargar lista de asesores para el filtro (solo super admin)
+    if(isSuperAdmin){
+      const{data:sp}=await supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email')
+      setStaffList(sp||[])
+    }
     setLoading(false)
-  },[user.id])
+  },[user.id,isSuperAdmin])
 
   useEffect(()=>{load()},[load])
 
-  const filtered=contacts.filter(c=>`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())&&(filter==='todos'||c.status===filter))
+  const filtered=contacts.filter(c=>{
+    const matchSearch=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
+    const matchStatus=filter==='todos'||c.status===filter
+    const matchUser=!isSuperAdmin||filterUser==='todos'||c.user_id===filterUser
+    return matchSearch&&matchStatus&&matchUser
+  })
+  const getAdvisorName=uid=>staffList.find(s=>s.user_id===uid)?.display_name||uid?.slice(0,8)+'...'
 
   // Validar form
   const validate=()=>{
@@ -354,12 +373,16 @@ function Contacts({user}){
           {value:'prospecto',label:'Prospectos'},{value:'cliente',label:'Clientes'},{value:'inactivo',label:'Inactivos'}
         ]}/>
         <Btn variant="ghost" onClick={load} style={{padding:'9px 12px',fontSize:13}}>↺</Btn>
+        {isSuperAdmin&&<Sel value={filterUser} onChange={setFilterUser} style={{maxWidth:200}} options={[
+          {value:'todos',label:'Todos los asesores'},
+          ...staffList.map(s=>({value:s.user_id,label:s.display_name}))
+        ]}/>}
       </div>
 
       {loading?<Spinner/>:<GlassCard style={{padding:0}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
-            {['Nombre','Email','Teléfono','Dirección','Estado','Origen',''].map(h=>(
+            {[...(isSuperAdmin?['Asesor']:[]),'Nombre','Email','Teléfono','Dirección','Estado','Origen',''].map(h=>(
               <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
             ))}
           </tr></thead>
@@ -369,6 +392,11 @@ function Contacts({user}){
                 onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
                 onMouseLeave={e=>e.currentTarget.style.background='transparent'}
                 onClick={()=>setSelected(c)}>
+                {isSuperAdmin&&<td style={{padding:'12px 18px'}}>
+                  <div style={{display:'inline-flex',alignItems:'center',gap:4,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:6,padding:'3px 8px'}}>
+                    <span style={{fontSize:10,color:P.purple,fontWeight:600}}>{getAdvisorName(c.user_id)}</span>
+                  </div>
+                </td>}
                 <td style={{padding:'12px 18px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:10}}>
                     <div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple,flexShrink:0}}>
@@ -399,6 +427,9 @@ function Contacts({user}){
         <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
           <Badge label={selected.status} color={STATUS_COLOR_MAP[selected.status]||P.muted}/>
           <Badge label={selected.source} color={selected.source==='csv'?P.blue:selected.source==='formulario'?P.orange:P.muted}/>
+          {isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:6,padding:'2px 10px'}}>
+            <span style={{fontSize:11,color:P.purple}}>👤 {getAdvisorName(selected.user_id)}</span>
+          </div>}
         </div>
         {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
           <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
