@@ -306,49 +306,167 @@ function Tasks({contacts,leads}){
 }
 
 // ── EMAILS ────────────────────────────────────────────────────────────────────
-function Emails(){
+const TEMPLATES=[
+  {id:'bienvenida_lead',   label:'Bienvenida lead',        color:P.purple, desc:'Primer contacto tras registro'},
+  {id:'seguimiento_lead',  label:'Seguimiento',            color:P.blue,   desc:'Follow-up con mensaje personalizable'},
+  {id:'invitacion_radex',  label:'Invitación Radex',       color:'#e74c3c',desc:'Apertura cuenta Radex'},
+  {id:'invitacion_tradeview',label:'Invitación Tradeview', color:'#3498db',desc:'Apertura cuenta Tradeview'},
+  {id:'deposito_confirmado',label:'Depósito confirmado',   color:P.green,  desc:'Confirmación de depósito'},
+  {id:'personalizado',     label:'Personalizado',          color:P.orange, desc:'Asunto y cuerpo libres'},
+]
+
+function Emails({contacts,leads}){
   const[emails,setEmails]=useState([])
   const[loading,setLoading]=useState(true)
-  const[tab,setTab]=useState('tracking')
-  useEffect(()=>{
-    const load=async()=>{
-      setLoading(true)
-      if(tab==='tracking'){const{data}=await supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(50);setEmails(data||[])}
-      else{const{data}=await supabase.from('followup_emails_sent').select('*').order('sent_at',{ascending:false}).limit(50);setEmails(data||[])}
-      setLoading(false)
-    }
-    load()
-  },[tab])
+  const[tab,setTab]=useState('compose')
+  const[showCompose,setShowCompose]=useState(false)
+  const[sending,setSending]=useState(false)
+  const[sent,setSent]=useState(null)
+  const[form,setForm]=useState({template:'bienvenida_lead',to:'',name:'',custom_subject:'',custom_body:'',source:'',source_id:''})
+
+  const loadHistory=useCallback(async()=>{
+    setLoading(true)
+    const{data}=await supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(60)
+    setEmails(data||[])
+    setLoading(false)
+  },[])
+
+  useEffect(()=>{ if(tab==='historial') loadHistory() },[tab,loadHistory])
+
   const sc={sent:P.blue,delivered:P.blue,opened:P.green,clicked:P.green,bounced:P.red,complained:P.red,delayed:P.orange}
+
+  const allRecipients=[
+    ...contacts.map(c=>({id:c.id,name:c.full_name,email:c.email,type:'contact'})),
+    ...leads.filter(l=>!contacts.find(c=>c.email===l.email)).map(l=>({id:l.id,name:l.full_name,email:l.email,type:'lead'}))
+  ].filter(r=>r.email)
+
+  const selectRecipient=r=>{
+    setForm(p=>({...p,to:r.email,name:r.name||'',
+      source:r.type,
+      source_id:r.id}))
+  }
+
+  const send=async()=>{
+    if(!form.to||!form.template)return
+    setSending(true);setSent(null)
+    try{
+      const{data:{session}}=await supabase.auth.getSession()
+      const res=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/crm_send_email`,{
+        method:'POST',
+        headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
+        body:JSON.stringify({
+          to:form.to, name:form.name, template_id:form.template,
+          custom_subject:form.custom_subject, custom_body:form.custom_body,
+          contact_submission_id:form.source==='contact'?form.source_id:null,
+          campaign_lead_id:form.source==='lead'?form.source_id:null,
+        })
+      })
+      const data=await res.json()
+      if(data.ok){setSent({ok:true,msg:'Email enviado correctamente ✓'});setForm(p=>({...p,to:'',name:'',custom_subject:'',custom_body:'',source:'',source_id:''}))}
+      else setSent({ok:false,msg:data.error||'Error al enviar'})
+    }catch(e){setSent({ok:false,msg:e.message})}
+    setSending(false)
+  }
+
+  const selectedTpl=TEMPLATES.find(t=>t.id===form.template)||TEMPLATES[0]
+
   return<div>
-    <SHdr title="Emails" sub="Historial Resend en tiempo real"/>
-    <div style={{display:'flex',gap:8,marginBottom:18}}>
-      {[['tracking','Email tracking'],['followup','Seguimientos']].map(([id,label])=><button key={id} onClick={()=>setTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',background:tab===id?P.purpleDim:'rgba(255,255,255,0.04)',color:tab===id?P.purple:P.muted,border:`1px solid ${tab===id?P.purpleBorder:P.border}`,fontWeight:tab===id?600:400}}>{label}</button>)}
+    <SHdr title="Emails" sub="Envío con Resend · historial en tiempo real"/>
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[['compose','✉ Redactar'],['historial','📋 Historial']].map(([id,label])=>(
+        <button key={id} onClick={()=>setTab(id)} style={{padding:'8px 16px',borderRadius:8,fontSize:13,cursor:'pointer',
+          background:tab===id?P.purpleDim:'rgba(255,255,255,0.04)',
+          color:tab===id?P.purple:P.muted,
+          border:`1px solid ${tab===id?P.purpleBorder:P.border}`,fontWeight:tab===id?600:400}}>{label}</button>
+      ))}
     </div>
-    {loading?<Spinner/>:<GlassCard style={{padding:0}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
-        <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
-          {(tab==='tracking'?['Destinatario','Asunto','Tipo','Estado','Enviado','Abierto']:['Email','Tipo','Enviado']).map(h=><th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>)}
-        </tr></thead>
-        <tbody>
-          {emails.map((e,i)=><tr key={e.id} style={{borderBottom:i<emails.length-1?`1px solid ${P.border}`:'none'}}>
-            {tab==='tracking'?<>
+
+    {tab==='compose'&&<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+      {/* Templates */}
+      <div>
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14}}>Plantillas preescritas</p>
+        {TEMPLATES.map(t=>(
+          <div key={t.id} onClick={()=>setForm(p=>({...p,template:t.id}))}
+            style={{padding:'12px 14px',marginBottom:8,borderRadius:10,cursor:'pointer',transition:'all 0.15s',
+              background:form.template===t.id?`${t.color}15`:'rgba(255,255,255,0.03)',
+              border:`1px solid ${form.template===t.id?t.color+'50':P.border}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <div style={{width:8,height:8,borderRadius:'50%',background:t.color,flexShrink:0}}/>
+              <span style={{fontSize:13,fontWeight:form.template===t.id?700:500,color:form.template===t.id?t.color:P.text}}>{t.label}</span>
+            </div>
+            <p style={{fontSize:11,color:P.muted,margin:'4px 0 0 16px'}}>{t.desc}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Compositor */}
+      <div>
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14}}>Redactar</p>
+        <GlassCard style={{padding:18}}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+            <div>
+              <Lbl>Destinatario</Lbl>
+              <Sel value={form.source_id} onChange={v=>{const r=allRecipients.find(x=>x.id===v);if(r)selectRecipient(r)}}
+                options={[{value:'',label:'Seleccionar contacto o lead...'},...allRecipients.map(r=>({value:r.id,label:`${r.name||r.email} (${r.type})`}))]}/>
+              {form.to&&<p style={{fontSize:11,color:P.muted,marginTop:5,fontFamily:'monospace'}}>{form.to}</p>}
+            </div>
+
+            {form.template==='personalizado'&&<>
+              <div><Lbl>Asunto *</Lbl><Input value={form.custom_subject} onChange={v=>setForm(p=>({...p,custom_subject:v}))} placeholder="Asunto del email"/></div>
+              <div><Lbl>Mensaje *</Lbl>
+                <textarea value={form.custom_body} onChange={e=>setForm(p=>({...p,custom_body:e.target.value}))} placeholder="Escribe tu mensaje..."
+                  style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:12,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:120,resize:'vertical',fontFamily:'inherit'}}/>
+              </div>
+            </>}
+
+            {form.template==='seguimiento_lead'&&<div><Lbl>Mensaje adicional (opcional)</Lbl>
+              <textarea value={form.custom_body} onChange={e=>setForm(p=>({...p,custom_body:e.target.value}))} placeholder="Añade un mensaje personalizado al seguimiento..."
+                style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:12,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:80,resize:'vertical',fontFamily:'inherit'}}/>
+            </div>}
+
+            {sent&&<div style={{padding:'10px 14px',borderRadius:8,
+              background:sent.ok?P.greenDim:P.redDim,
+              border:`1px solid ${sent.ok?P.green+'40':P.red+'40'}`,
+              color:sent.ok?P.green:P.red,fontSize:13}}>{sent.msg}</div>}
+
+            <div style={{display:'flex',gap:10,alignItems:'center',justifyContent:'space-between',paddingTop:4}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,background:selectedTpl.color+'15',border:`1px solid ${selectedTpl.color}30`,borderRadius:6,padding:'4px 10px'}}>
+                <div style={{width:6,height:6,borderRadius:'50%',background:selectedTpl.color}}/>
+                <span style={{fontSize:11,color:selectedTpl.color,fontWeight:600}}>{selectedTpl.label}</span>
+              </div>
+              <Btn onClick={send} disabled={sending||!form.to||!form.template||(form.template==='personalizado'&&(!form.custom_subject||!form.custom_body))}
+                style={{padding:'9px 20px'}}>
+                {sending?'Enviando...':'Enviar ✉'}
+              </Btn>
+            </div>
+          </div>
+        </GlassCard>
+      </div>
+    </div>}
+
+    {tab==='historial'&&<>
+      {loading?<Spinner/>:<GlassCard style={{padding:0}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+            {['Destinatario','Asunto','Plantilla','Estado','Enviado','Abierto'].map(h=>(
+              <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {emails.map((e,i)=><tr key={e.id} style={{borderBottom:i<emails.length-1?`1px solid ${P.border}`:'none'}}>
               <td style={{padding:'12px 18px'}}><p style={{fontSize:13,fontWeight:600,color:P.text,margin:0}}>{e.recipient_name||e.recipient_email}</p><p style={{fontSize:11,color:P.muted,margin:0,fontFamily:'monospace'}}>{e.recipient_email}</p></td>
-              <td style={{padding:'12px 18px',color:P.textSub,fontSize:12}}>{e.subject||'—'}</td>
-              <td style={{padding:'12px 18px'}}><Badge label={e.email_type||'—'} color={P.blue}/></td>
+              <td style={{padding:'12px 18px',color:P.textSub,fontSize:12,maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.subject||'—'}</td>
+              <td style={{padding:'12px 18px'}}><Badge label={e.email_type||'—'} color={P.purple}/></td>
               <td style={{padding:'12px 18px'}}><Badge label={e.status} color={sc[e.status]||P.muted}/></td>
               <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{fmtDate(e.sent_at)}</td>
               <td style={{padding:'12px 18px',color:e.opened_at?P.green:P.muted,fontSize:12}}>{e.opened_at?fmtDate(e.opened_at):'—'}</td>
-            </>:<>
-              <td style={{padding:'12px 18px',color:P.text,fontSize:13,fontFamily:'monospace'}}>{e.email}</td>
-              <td style={{padding:'12px 18px'}}><Badge label={e.form_type||'—'} color={P.purple}/></td>
-              <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{fmtDate(e.sent_at)}</td>
-            </>}
-          </tr>)}
-        </tbody>
-      </table>
-      {emails.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin registros</div>}
-    </GlassCard>}
+            </tr>)}
+          </tbody>
+        </table>
+        {emails.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin emails registrados</div>}
+      </GlassCard>}
+    </>}
   </div>
 }
 
@@ -626,7 +744,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads}/>,reports:<Reports contacts={contacts} leads={leads}/>}
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
