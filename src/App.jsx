@@ -1215,20 +1215,23 @@ export default function App(){
     supabase.auth.getSession().then(async({data:{session}})=>{
       const u=session?.user??null
       setUser(u)
-      if(u){
-        // Verificar super_admin desde DB (no JWT que puede estar desactualizado)
-        const{data}=await supabase.rpc('get_my_role')
-        setIsSuperAdminGlobal(data==='super_admin')
-      }
-      setChecking(false)
+      try{
+        if(u){
+          const{data}=await supabase.rpc('get_my_role')
+          setIsSuperAdminGlobal(data==='super_admin')
+        }
+      }catch(e){ console.warn('get_my_role:',e) }
+      finally{ setChecking(false) }
     })
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
       const u=session?.user??null
       setUser(u)
-      if(u){
-        const{data}=await supabase.rpc('get_my_role')
-        setIsSuperAdminGlobal(data==='super_admin')
-      }
+      try{
+        if(u){
+          const{data}=await supabase.rpc('get_my_role')
+          setIsSuperAdminGlobal(data==='super_admin')
+        }
+      }catch(e){ console.warn('get_my_role onAuthChange:',e) }
     })
     return()=>subscription.unsubscribe()
   },[])
