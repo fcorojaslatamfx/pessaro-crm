@@ -307,12 +307,13 @@ function Tasks({contacts,leads}){
 
 // ── EMAILS ────────────────────────────────────────────────────────────────────
 const TEMPLATES=[
-  {id:'bienvenida_lead',   label:'Bienvenida lead',        color:P.purple, desc:'Primer contacto tras registro'},
-  {id:'seguimiento_lead',  label:'Seguimiento',            color:P.blue,   desc:'Follow-up con mensaje personalizable'},
-  {id:'invitacion_radex',  label:'Invitación Radex',       color:'#e74c3c',desc:'Apertura cuenta Radex'},
+  {id:'bienvenida_lead',     label:'Bienvenida lead',       color:P.purple, desc:'Primer contacto tras registro'},
+  {id:'seguimiento_lead',   label:'Seguimiento',           color:P.blue,   desc:'Follow-up con mensaje personalizable'},
+  {id:'invitacion_radex',   label:'Invitación Radex',      color:'#e74c3c',desc:'Apertura cuenta Radex'},
   {id:'invitacion_tradeview',label:'Invitación Tradeview', color:'#3498db',desc:'Apertura cuenta Tradeview'},
-  {id:'deposito_confirmado',label:'Depósito confirmado',   color:P.green,  desc:'Confirmación de depósito'},
-  {id:'personalizado',     label:'Personalizado',          color:P.orange, desc:'Asunto y cuerpo libres'},
+  {id:'deposito_confirmado',label:'Depósito confirmado',   color:P.green,  desc:'Confirmación con acceso al portal'},
+  {id:'informe_trimestral', label:'Informe trimestral',    color:'#f0a500',desc:'Resultados Q1 2026 con métricas'},
+  {id:'personalizado',      label:'Personalizado',         color:P.muted,  desc:'Asunto y cuerpo libres'},
 ]
 
 function Emails({contacts,leads}){
