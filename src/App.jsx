@@ -157,7 +157,7 @@ function Contacts({user}){
   const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
   const[formErr,setFormErr]=useState({})
 
-  const isSuperAdmin=user?.raw_user_meta_data?.role==='super_admin'
+  const isSuperAdmin=user?.user_metadata?.role==='super_admin'
   const[staffList,setStaffList]=useState([])
   const[filterUser,setFilterUser]=useState('todos')
 
