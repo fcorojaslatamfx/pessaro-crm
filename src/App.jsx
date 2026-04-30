@@ -316,14 +316,14 @@ const TEMPLATES=[
   {id:'personalizado',       label:'Personalizado',         color:P.muted,  desc:'Asunto y cuerpo completamente libres'},
 ]
 
-function Emails({contacts,leads}){
+function Emails({contacts,leads,staffProfile,user}){
   const[emails,setEmails]=useState([])
   const[loading,setLoading]=useState(true)
   const[tab,setTab]=useState('historial')
   const[showModal,setShowModal]=useState(false)
   const[sending,setSending]=useState(false)
   const[sent,setSent]=useState(null)
-  const[form,setForm]=useState({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:''})
+  const[form,setForm]=useState({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:'',teams_url:''})
   const[files,setFiles]=useState([])
   const[dragOver,setDragOver]=useState(false)
 
@@ -372,6 +372,7 @@ function Emails({contacts,leads}){
           template_id:form.template,
           custom_subject:form.custom_subject,
           extra_text:form.extra_text,
+          teams_url:form.teams_url,
           attachments:files.map(f=>({filename:f.filename,content:f.content})),
           contact_submission_id:selectedRecipient.type==='contact'?selectedRecipient.id:null,
           campaign_lead_id:selectedRecipient.type==='lead'?selectedRecipient.id:null,
@@ -379,8 +380,8 @@ function Emails({contacts,leads}){
       })
       const data=await res.json()
       if(data.ok){
-        setSent({ok:true,msg:`✓ Email enviado a ${selectedRecipient.email}`})
-        setForm({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:''})
+        setSent({ok:true,msg:`✓ Email enviado a ${selectedRecipient.email} · desde ${staffProfile?.pessaro_email||'info@pessaro.cl'}`})
+        setForm({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:'',teams_url:''})
         setFiles([])
         loadHistory()
       } else setSent({ok:false,msg:data.error||'Error al enviar'})
@@ -452,7 +453,12 @@ function Emails({contacts,leads}){
         <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${P.border}`}}>
           <div style={{display:'flex',alignItems:'center',gap:10}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:selectedTpl.color}}/>
-            <h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>Redactar email</h3>
+            <div>
+              <h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>Redactar email</h3>
+              {staffProfile&&<p style={{margin:'2px 0 0',fontSize:11,color:P.purple}}>
+                Enviando como: <strong>{staffProfile.pessaro_email}</strong>
+              </p>}
+            </div>
           </div>
           <button onClick={()=>setShowModal(false)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
         </div>
@@ -508,6 +514,23 @@ function Emails({contacts,leads}){
               placeholder={form.template==='personalizado'?'Escribe el mensaje completo...':`Añade un párrafo personalizado que se insertará en la plantilla "${selectedTpl.label}"...`}
               style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:12,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:100,resize:'vertical',fontFamily:'inherit'}}/>
             {form.template!=='personalizado'&&<p style={{fontSize:11,color:P.muted,marginTop:4}}>Este texto aparecerá destacado dentro del email de plantilla.</p>}
+          </div>
+
+          {/* Teams meeting URL */}
+          <div>
+            <Lbl>Link de reunión Microsoft Teams (opcional)</Lbl>
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <span style={{fontSize:18}}>🎥</span>
+              <input value={form.teams_url} onChange={e=>setForm(p=>({...p,teams_url:e.target.value}))}
+                placeholder="https://teams.microsoft.com/l/meetup-join/..."
+                style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,
+                  padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'monospace'}}/>
+            </div>
+            {form.teams_url&&<div style={{marginTop:6,display:'flex',alignItems:'center',gap:6,
+              padding:'6px 10px',background:'rgba(100,180,255,0.08)',border:'1px solid rgba(100,180,255,0.25)',borderRadius:6}}>
+              <span style={{fontSize:11}}>✓</span>
+              <span style={{fontSize:11,color:'#60a5fa'}}>Se añadirá un botón "Unirse a la reunión" en el email</span>
+            </div>}
           </div>
 
           {/* Adjuntos */}
@@ -813,15 +836,18 @@ export default function App(){
     return()=>subscription.unsubscribe()
   },[])
 
+  const[staffProfile,setStaffProfile]=useState(null)
+
   useEffect(()=>{
     if(!user)return
     const load=async()=>{
       setLoading(true)
-      const[{data:c},{data:l}]=await Promise.all([
+      const[{data:c},{data:l},{data:sp}]=await Promise.all([
         supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}),
-        supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at').order('created_at',{ascending:false})
+        supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at').order('created_at',{ascending:false}),
+        supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).single()
       ])
-      setContacts(c||[]);setLeads(l||[]);setLoading(false)
+      setContacts(c||[]);setLeads(l||[]);setStaffProfile(sp||null);setLoading(false)
     }
     load()
   },[user])
@@ -836,7 +862,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads}/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
@@ -854,10 +880,16 @@ export default function App(){
         </div>
       </div>
       <div style={{padding:'14px 18px'}}>
-        <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:10}}>
-          <div style={{width:28,height:28,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:P.purple}}>{(user?.email||'?')[0].toUpperCase()}</div>
-          <div><div style={{fontSize:11,fontWeight:600,color:P.text}}>{user?.email?.split('@')[0]}</div><div style={{fontSize:10,color:P.muted}}>Equipo interno</div></div>
+        <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:8}}>
+          <div style={{width:28,height:28,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:P.purple}}>{(staffProfile?.display_name||user?.email||'?')[0].toUpperCase()}</div>
+          <div>
+            <div style={{fontSize:11,fontWeight:600,color:P.text}}>{staffProfile?.display_name||user?.email?.split('@')[0]}</div>
+            <div style={{fontSize:10,color:P.muted}}>{staffProfile?.title||'Equipo interno'}</div>
+          </div>
         </div>
+        {staffProfile&&<div style={{padding:'5px 8px',background:'rgba(108,92,231,0.08)',border:`1px solid ${P.purpleBorder}`,borderRadius:6,marginBottom:8}}>
+          <p style={{fontSize:10,color:P.purple,margin:0,fontFamily:'monospace'}}>✉ {staffProfile.pessaro_email}</p>
+        </div>}
         <button onClick={logout} style={{fontSize:11,color:P.muted,background:'none',border:'none',cursor:'pointer',padding:0}}>Cerrar sesión →</button>
       </div>
     </div>
