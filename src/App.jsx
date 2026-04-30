@@ -115,76 +115,318 @@ function Dashboard({contacts,leads}){
 }
 
 // ── CONTACTS ──────────────────────────────────────────────────────────────────
-function Contacts({contacts,setContacts,loading}){
+const STATUS_OPT=[{value:'activo',label:'Activo'},{value:'prospecto',label:'Prospecto'},{value:'cliente',label:'Cliente'},{value:'inactivo',label:'Inactivo'}]
+const STATUS_COLOR_MAP={activo:P.green,prospecto:P.orange,cliente:P.purple,inactivo:P.muted}
+
+function parseCSV(text){
+  const lines=text.trim().split(/\r?\n/)
+  if(lines.length<2)return{rows:[],errors:['El archivo debe tener encabezado y al menos una fila']}
+  const headers=lines[0].split(',').map(h=>h.trim().toLowerCase().replace(/['"]/g,''))
+  const nameCol =headers.findIndex(h=>/nombre|name|full_name/.test(h))
+  const emailCol=headers.findIndex(h=>/correo|email/.test(h))
+  const phoneCol=headers.findIndex(h=>/tel[eé]f|phone|m[oó]vil/.test(h))
+  const addrCol =headers.findIndex(h=>/direcci[oó]n|address/.test(h))
+  const errors=[]
+  if(nameCol<0)errors.push('Columna "nombre" no encontrada')
+  if(emailCol<0)errors.push('Columna "correo" no encontrada')
+  if(phoneCol<0)errors.push('Columna "telefono" no encontrada')
+  if(errors.length)return{rows:[],errors}
+  const rows=[]
+  lines.slice(1).forEach((line,i)=>{
+    const cols=line.split(',').map(c=>c.trim().replace(/^"|"$/g,''))
+    const name=cols[nameCol]||''; const email=cols[emailCol]||''; const phone=cols[phoneCol]||''
+    if(!name||!email||!phone){errors.push(`Fila ${i+2}: faltan campos obligatorios`);return}
+    rows.push({full_name:name,email,phone,address:addrCol>=0?cols[addrCol]||'':'',status:'activo',source:'csv'})
+  })
+  return{rows,errors}
+}
+
+function Contacts({user}){
+  const[contacts,setContacts]=useState([])
+  const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
   const[filter,setFilter]=useState('todos')
+  const[tab,setTab]=useState('lista')         // lista | nuevo | csv
   const[selected,setSelected]=useState(null)
-  const[notes,setNotes]=useState([])
-  const[note,setNote]=useState('')
   const[saving,setSaving]=useState(false)
-  const filtered=contacts.filter(c=>`${c.full_name} ${c.email}`.toLowerCase().includes(search.toLowerCase())&&(filter==='todos'||c.status===filter))
-  const updateStatus=async(id,status)=>{
+  const[csvRows,setCsvRows]=useState([])
+  const[csvErrors,setCsvErrors]=useState([])
+  const[csvImporting,setCsvImporting]=useState(false)
+  const[csvDone,setCsvDone]=useState(null)
+  const[dragOver,setDragOver]=useState(false)
+  const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
+  const[formErr,setFormErr]=useState({})
+
+  const load=useCallback(async()=>{
+    setLoading(true)
+    const{data}=await supabase.from('crm_contacts').select('*').eq('user_id',user.id).order('created_at',{ascending:false})
+    setContacts(data||[])
+    setLoading(false)
+  },[user.id])
+
+  useEffect(()=>{load()},[load])
+
+  const filtered=contacts.filter(c=>`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())&&(filter==='todos'||c.status===filter))
+
+  // Validar form
+  const validate=()=>{
+    const e={}
+    if(!form.full_name.trim())e.full_name='Nombre obligatorio'
+    if(!form.email.trim()||!/\S+@\S+\.\S+/.test(form.email))e.email='Email válido obligatorio'
+    if(!form.phone.trim())e.phone='Teléfono obligatorio'
+    setFormErr(e)
+    return Object.keys(e).length===0
+  }
+
+  const saveContact=async()=>{
+    if(!validate())return
     setSaving(true)
-    await supabase.from('contact_submissions').update({status,updated_at:new Date().toISOString()}).eq('id',id)
+    const{data,error}=await supabase.from('crm_contacts').insert({...form,user_id:user.id,source:'manual'}).select().single()
+    setSaving(false)
+    if(error){setFormErr({email:error.message});return}
+    setContacts(p=>[data,...p])
+    setForm({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
+    setFormErr({})
+    setTab('lista')
+  }
+
+  const deleteContact=async(id)=>{
+    await supabase.from('crm_contacts').delete().eq('id',id).eq('user_id',user.id)
+    setContacts(p=>p.filter(c=>c.id!==id))
+    setSelected(null)
+  }
+
+  const updateStatus=async(id,status)=>{
+    await supabase.from('crm_contacts').update({status}).eq('id',id).eq('user_id',user.id)
     setContacts(p=>p.map(c=>c.id===id?{...c,status}:c))
     if(selected?.id===id)setSelected(p=>({...p,status}))
-    setSaving(false)
   }
-  const openContact=async c=>{
-    setSelected(c);setNotes([]);setNote('')
-    const{data}=await supabase.from('crm_notes').select('*').eq('contact_submission_id',c.id).order('created_at',{ascending:false})
-    setNotes(data||[])
-    if(c.status==='new')updateStatus(c.id,'read')
+
+  const handleCSVFile=async(file)=>{
+    if(!file)return
+    const text=await file.text()
+    const{rows,errors}=parseCSV(text)
+    setCsvRows(rows);setCsvErrors(errors);setCsvDone(null)
   }
-  const addNote=async()=>{
-    if(!note.trim()||!selected)return
-    const{data}=await supabase.from('crm_notes').insert({content:note,contact_submission_id:selected.id}).select().single()
-    if(data){setNotes(p=>[data,...p]);setNote('')}
+
+  const importCSV=async()=>{
+    if(!csvRows.length)return
+    setCsvImporting(true)
+    const payload=csvRows.map(r=>({...r,user_id:user.id}))
+    const{data,error}=await supabase.from('crm_contacts').insert(payload).select()
+    setCsvImporting(false)
+    if(error){setCsvErrors([error.message]);return}
+    setContacts(p=>[...(data||[]),...p])
+    setCsvDone(`✓ ${data?.length||0} contactos importados correctamente`)
+    setCsvRows([]);setCsvErrors([])
   }
-  return<div>
-    <SHdr title="Contactos" sub={`${contacts.length} formularios · ${contacts.filter(c=>c.status==='new').length} sin leer`}/>
-    <div style={{display:'flex',gap:10,marginBottom:16}}>
-      <Input value={search} onChange={setSearch} placeholder="Buscar nombre o email..." style={{maxWidth:300}}/>
-      <Sel value={filter} onChange={setFilter} style={{maxWidth:160}} options={[{value:'todos',label:'Todos'},{value:'new',label:'Sin leer'},{value:'read',label:'Leídos'},{value:'replied',label:'Respondidos'},{value:'archived',label:'Archivados'}]}/>
+
+  const F=({label,field,placeholder,required,type='text'})=>(
+    <div>
+      <Lbl>{label}{required&&<span style={{color:P.red}}> *</span>}</Lbl>
+      <Input value={form[field]} onChange={v=>setForm(p=>({...p,[field]:v}))} placeholder={placeholder} type={type}
+        style={formErr[field]?{border:`1px solid ${P.red}`}:{}}/>
+      {formErr[field]&&<p style={{fontSize:11,color:P.red,marginTop:4}}>{formErr[field]}</p>}
     </div>
-    {loading?<Spinner/>:<GlassCard style={{padding:0}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
-        <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
-          {['Nombre','Email','Capital','Estado','Fecha',''].map(h=><th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>)}
-        </tr></thead>
-        <tbody>
-          {filtered.map((c,i)=><tr key={c.id} style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none',cursor:'pointer',background:c.status==='new'?'rgba(108,92,231,0.05)':'transparent'}}
-            onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
-            onMouseLeave={e=>e.currentTarget.style.background=c.status==='new'?'rgba(108,92,231,0.05)':'transparent'}
-            onClick={()=>openContact(c)}>
-            <td style={{padding:'12px 18px'}}><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple,flexShrink:0}}>{(c.full_name||'?')[0]}</div><div><p style={{fontSize:13,fontWeight:600,color:P.text,margin:0}}>{c.full_name}</p>{c.mobile&&<p style={{fontSize:11,color:P.muted,margin:0}}>{c.mobile}</p>}</div></div></td>
-            <td style={{padding:'12px 18px',color:P.muted,fontSize:12,fontFamily:'monospace'}}>{c.email}</td>
-            <td style={{padding:'12px 18px',color:P.green,fontSize:13,fontFamily:'monospace',fontWeight:600}}>{c.investment_capital>0?fmt(c.investment_capital):'—'}</td>
-            <td style={{padding:'12px 18px'}}><Badge label={c.status} color={STATUS_COLOR[c.status]||P.muted}/></td>
-            <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{fmtDate(c.submitted_at)}</td>
-            <td style={{padding:'12px 18px'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn></td>
-          </tr>)}
-        </tbody>
-      </table>
-      {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin resultados</div>}
+  )
+
+  return<div>
+    <SHdr title="Mis Contactos" sub={`${contacts.length} contactos propios`}
+      action={<div style={{display:'flex',gap:8}}>
+        <Btn variant="ghost" onClick={()=>setTab(tab==='csv'?'lista':'csv')}>📂 Importar CSV</Btn>
+        <Btn onClick={()=>setTab(tab==='nuevo'?'lista':'nuevo')}>+ Nuevo contacto</Btn>
+      </div>}/>
+
+    {/* TABS */}
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[['lista','📋 Lista'],['nuevo','+ Nuevo'],['csv','📂 CSV']].map(([id,label])=>(
+        <button key={id} onClick={()=>setTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
+          background:tab===id?P.purpleDim:'rgba(255,255,255,0.04)',
+          color:tab===id?P.purple:P.muted,
+          border:`1px solid ${tab===id?P.purpleBorder:P.border}`,fontWeight:tab===id?600:400}}>{label}</button>
+      ))}
+    </div>
+
+    {/* ── NUEVO CONTACTO ── */}
+    {tab==='nuevo'&&<GlassCard accent={P.purple} style={{marginBottom:20}}>
+      <p style={{fontSize:14,fontWeight:700,color:P.text,marginBottom:18}}>Nuevo contacto</p>
+      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
+        <F label="Nombre completo" field="full_name" placeholder="Juan García" required/>
+        <F label="Email" field="email" placeholder="juan@empresa.com" required type="email"/>
+        <F label="Teléfono" field="phone" placeholder="+56 9 1234 5678" required/>
+        <div>
+          <Lbl>Estado</Lbl>
+          <Sel value={form.status} onChange={v=>setForm(p=>({...p,status:v}))} options={STATUS_OPT}/>
+        </div>
+        <div style={{gridColumn:'1/-1'}}>
+          <Lbl>Dirección <span style={{color:P.muted,fontSize:11}}>(opcional)</span></Lbl>
+          <Input value={form.address} onChange={v=>setForm(p=>({...p,address:v}))} placeholder="Av. Ejemplo 123, Ciudad"/>
+        </div>
+        <div style={{gridColumn:'1/-1'}}>
+          <Lbl>Notas <span style={{color:P.muted,fontSize:11}}>(opcional)</span></Lbl>
+          <textarea value={form.notes} onChange={e=>setForm(p=>({...p,notes:e.target.value}))} placeholder="Notas internas..."
+            style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:10,
+              color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:70,resize:'vertical',fontFamily:'inherit'}}/>
+        </div>
+      </div>
+      <div style={{display:'flex',gap:10,justifyContent:'flex-end',marginTop:16}}>
+        <Btn variant="ghost" onClick={()=>setTab('lista')}>Cancelar</Btn>
+        <Btn onClick={saveContact} disabled={saving}>{saving?'Guardando...':'Guardar contacto'}</Btn>
+      </div>
     </GlassCard>}
+
+    {/* ── IMPORTAR CSV ── */}
+    {tab==='csv'&&<GlassCard accent={P.blue} style={{marginBottom:20}}>
+      <p style={{fontSize:14,fontWeight:700,color:P.text,marginBottom:6}}>Importar desde CSV</p>
+      <p style={{fontSize:12,color:P.muted,marginBottom:16}}>
+        El CSV debe tener encabezados: <strong style={{color:P.text}}>nombre, correo, telefono</strong> (obligatorios) y <strong style={{color:P.text}}>direccion</strong> (opcional)
+      </p>
+      {/* Plantilla descarga */}
+      <div style={{marginBottom:16}}>
+        <button onClick={()=>{
+          const csv='nombre,correo,telefono,direccion\nJuan García,juan@ejemplo.com,+56912345678,Av. Ejemplo 123\nMaría López,maria@ejemplo.com,+56987654321,'
+          const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent(csv);a.download='plantilla_contactos.csv';a.click()
+        }} style={{fontSize:12,color:P.blue,background:'rgba(9,132,227,0.1)',border:`1px solid ${P.blue}30`,
+          borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>
+          ⬇ Descargar plantilla CSV
+        </button>
+      </div>
+
+      {/* Drop zone */}
+      <div onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)}
+        onDrop={e=>{e.preventDefault();setDragOver(false);handleCSVFile(e.dataTransfer.files[0])}}
+        style={{border:`2px dashed ${dragOver?P.blue:P.border}`,borderRadius:10,padding:'24px 20px',
+          textAlign:'center',background:dragOver?P.blueDim:'rgba(255,255,255,0.02)',
+          cursor:'pointer',transition:'all 0.15s',marginBottom:16}}
+        onClick={()=>document.getElementById('csvInput').click()}>
+        <p style={{fontSize:28,margin:'0 0 8px'}}>📂</p>
+        <p style={{fontSize:14,color:P.textSub,margin:0}}>Arrastra tu CSV aquí o <span style={{color:P.blue,fontWeight:600}}>haz clic para seleccionar</span></p>
+        <input id="csvInput" type="file" accept=".csv,text/csv" style={{display:'none'}}
+          onChange={e=>handleCSVFile(e.target.files[0])}/>
+      </div>
+
+      {/* Errores */}
+      {csvErrors.length>0&&<div style={{marginBottom:12,padding:'10px 14px',background:P.redDim,border:`1px solid ${P.red}30`,borderRadius:8}}>
+        {csvErrors.map((e,i)=><p key={i} style={{fontSize:12,color:P.red,margin:'2px 0'}}>{e}</p>)}
+      </div>}
+
+      {/* Preview */}
+      {csvRows.length>0&&<>
+        <p style={{fontSize:12,color:P.muted,marginBottom:10}}>Vista previa — {csvRows.length} contactos listos para importar:</p>
+        <GlassCard style={{padding:0,marginBottom:14,maxHeight:220,overflow:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+              {['Nombre','Email','Teléfono','Dirección'].map(h=>(
+                <th key={h} style={{padding:'9px 14px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {csvRows.slice(0,20).map((r,i)=>(
+                <tr key={i} style={{borderBottom:`1px solid ${P.border}`}}>
+                  <td style={{padding:'9px 14px',fontSize:13,color:P.text}}>{r.full_name}</td>
+                  <td style={{padding:'9px 14px',fontSize:12,color:P.muted,fontFamily:'monospace'}}>{r.email}</td>
+                  <td style={{padding:'9px 14px',fontSize:12,color:P.muted}}>{r.phone}</td>
+                  <td style={{padding:'9px 14px',fontSize:12,color:P.muted}}>{r.address||'—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {csvRows.length>20&&<p style={{padding:'8px 14px',fontSize:11,color:P.muted}}>...y {csvRows.length-20} más</p>}
+        </GlassCard>
+        {csvDone&&<div style={{marginBottom:12,padding:'10px 14px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}>
+          <p style={{fontSize:13,color:P.green,margin:0}}>{csvDone}</p>
+        </div>}
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
+          <Btn variant="ghost" onClick={()=>{setCsvRows([]);setCsvErrors([]);setCsvDone(null)}}>Cancelar</Btn>
+          <Btn variant="blue" onClick={importCSV} disabled={csvImporting}>
+              {csvImporting?'Importando...':'Importar '+csvRows.length+' contactos'}
+          </Btn>
+        </div>
+      </>}
+    </GlassCard>}
+
+    {/* ── LISTA ── */}
+    {tab==='lista'&&<>
+      <div style={{display:'flex',gap:10,marginBottom:16}}>
+        <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:320}}/>
+        <Sel value={filter} onChange={setFilter} style={{maxWidth:160}} options={[
+          {value:'todos',label:'Todos'},{value:'activo',label:'Activos'},
+          {value:'prospecto',label:'Prospectos'},{value:'cliente',label:'Clientes'},{value:'inactivo',label:'Inactivos'}
+        ]}/>
+        <Btn variant="ghost" onClick={load} style={{padding:'9px 12px',fontSize:13}}>↺</Btn>
+      </div>
+
+      {loading?<Spinner/>:<GlassCard style={{padding:0}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+            {['Nombre','Email','Teléfono','Dirección','Estado','Origen',''].map(h=>(
+              <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {filtered.map((c,i)=>(
+              <tr key={c.id} style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none',cursor:'pointer',transition:'background 0.12s'}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}
+                onClick={()=>setSelected(c)}>
+                <td style={{padding:'12px 18px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple,flexShrink:0}}>
+                      {(c.full_name||'?')[0].toUpperCase()}
+                    </div>
+                    <span style={{fontSize:13,fontWeight:600,color:P.text}}>{c.full_name}</span>
+                  </div>
+                </td>
+                <td style={{padding:'12px 18px',color:P.muted,fontSize:12,fontFamily:'monospace'}}>{c.email}</td>
+                <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.phone}</td>
+                <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.address||'—'}</td>
+                <td style={{padding:'12px 18px'}}><Badge label={c.status} color={STATUS_COLOR_MAP[c.status]||P.muted}/></td>
+                <td style={{padding:'12px 18px'}}><Badge label={c.source} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/></td>
+                <td style={{padding:'12px 18px'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>
+          {contacts.length===0?'Aún no tienes contactos. Añade uno o importa un CSV.':'Sin resultados para esta búsqueda.'}
+        </div>}
+      </GlassCard>}
+    </>}
+
+    {/* MODAL detalle */}
     {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)}>
       <div>
         <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
-          <Badge label={selected.status} color={STATUS_COLOR[selected.status]||P.muted}/>
-          {selected.investment_capital>0&&<div style={{display:'inline-flex',background:'rgba(0,208,132,0.12)',border:'1px solid rgba(0,208,132,0.3)',borderRadius:8,padding:'2px 10px'}}><span style={{fontSize:13,fontWeight:700,color:P.green,fontFamily:'monospace'}}>{fmt(selected.investment_capital)}</span></div>}
+          <Badge label={selected.status} color={STATUS_COLOR_MAP[selected.status]||P.muted}/>
+          <Badge label={selected.source} color={selected.source==='csv'?P.blue:selected.source==='formulario'?P.orange:P.muted}/>
         </div>
-        {[['Email',selected.email],['Teléfono',selected.mobile||'—'],['Gestión',selected.management_type||'—'],['Fecha',fmtDate(selected.submitted_at)]].map(([k,v])=><div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}><p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:4,fontWeight:600}}>{k}</p><p style={{fontSize:13,color:P.text,margin:0}}>{v}</p></div>)}
-        {selected.comments&&<div style={{marginBottom:16,padding:12,background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}><p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:6,fontWeight:600}}>Comentarios</p><p style={{fontSize:13,color:P.textSub,margin:0,lineHeight:1.6}}>{selected.comments}</p></div>}
-        <div style={{marginBottom:20}}><Lbl>Cambiar estado</Lbl>
+        {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
+          <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
+            <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:4,fontWeight:600}}>{k}</p>
+            <p style={{fontSize:13,color:P.text,margin:0,fontFamily:k==='Email'?'monospace':'inherit'}}>{v}</p>
+          </div>
+        ))}
+        {selected.notes&&<div style={{marginBottom:14,padding:'10px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
+          <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:6,fontWeight:600}}>Notas</p>
+          <p style={{fontSize:13,color:P.textSub,margin:0,lineHeight:1.6}}>{selected.notes}</p>
+        </div>}
+        <div style={{marginBottom:18}}>
+          <Lbl>Cambiar estado</Lbl>
           <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {['new','read','replied','archived'].map(s=><button key={s} onClick={()=>updateStatus(selected.id,s)} disabled={saving} style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,background:selected.status===s?STATUS_COLOR[s]+'30':'rgba(255,255,255,0.04)',color:selected.status===s?STATUS_COLOR[s]:P.muted,border:`1px solid ${selected.status===s?STATUS_COLOR[s]+'50':P.border}`}}>{s==='new'?'Sin leer':s==='read'?'Leído':s==='replied'?'Respondido':'Archivado'}</button>)}
+            {STATUS_OPT.map(s=>(
+              <button key={s.value} onClick={()=>updateStatus(selected.id,s.value)}
+                style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,
+                  background:selected.status===s.value?STATUS_COLOR_MAP[s.value]+'30':'rgba(255,255,255,0.04)',
+                  color:selected.status===s.value?STATUS_COLOR_MAP[s.value]:P.muted,
+                  border:`1px solid ${selected.status===s.value?STATUS_COLOR_MAP[s.value]+'50':P.border}`}}>
+                {s.label}
+              </button>
+            ))}
           </div>
         </div>
-        <div>
-          <p style={{fontSize:10,fontWeight:700,color:P.purple,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:10}}>Notas ({notes.length})</p>
-          {notes.map(n=><div key={n.id} style={{padding:'10px 12px',marginBottom:8,background:'rgba(108,92,231,0.08)',borderRadius:8,borderLeft:`3px solid ${P.purple}`}}><p style={{fontSize:13,color:P.textSub,margin:'0 0 4px',lineHeight:1.6}}>{n.content}</p><p style={{fontSize:10,color:P.muted,margin:0}}>{fmtDate(n.created_at)}</p></div>)}
-          <div style={{display:'flex',gap:8,marginTop:10}}><Input value={note} onChange={setNote} placeholder="Añadir nota..." style={{flex:1}}/><Btn onClick={addNote} disabled={!note.trim()}>+</Btn></div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
+          <Btn variant="danger" onClick={()=>deleteContact(selected.id)}>Eliminar</Btn>
+          <Btn onClick={()=>setSelected(null)}>Cerrar</Btn>
         </div>
       </div>
     </Modal>}
@@ -862,7 +1104,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts user={user}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
