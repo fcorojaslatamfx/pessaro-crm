@@ -383,8 +383,211 @@ function Reports({contacts,leads}){
   </div>
 }
 
+
+// ── CAMPAÑA ───────────────────────────────────────────────────────────────────
+function Campana({leads}){
+  const[config,setConfig]=useState({})
+  const[referrals,setReferrals]=useState([])
+  const[tiers,setTiers]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[selected,setSelected]=useState(null)
+  const[saving,setSaving]=useState(false)
+
+  useEffect(()=>{
+    const load=async()=>{
+      setLoading(true)
+      const[{data:cfg},{data:ref},{data:t}]=await Promise.all([
+        supabase.from('campaign_config').select('*'),
+        supabase.from('campaign_referrals').select('*'),
+        supabase.from('campaign_bonus_tiers').select('*').order('min_referrals')
+      ])
+      const cfgMap={}
+      ;(cfg||[]).forEach(r=>cfgMap[r.key]=r.value)
+      setConfig(cfgMap)
+      setReferrals(ref||[])
+      setTiers(t||[])
+      setLoading(false)
+    }
+    load()
+  },[])
+
+  const totalSpots=Number(config.total_spots||50)
+  const spotsTaken=Number(config.spots_taken||0)
+  const depositados=leads.filter(l=>l.deposit_confirmed)
+  const totalCapital=depositados.reduce((s,l)=>s+(Number(l.deposit_amount_usd)||0),0)
+  const getReferidos=lead=>referrals.filter(r=>r.referrer_code===lead?.referral_code&&r.is_valid).length
+
+  const updateLead=async(id,updates)=>{
+    setSaving(true)
+    await supabase.from('campaign_leads').update({...updates,updated_at:new Date().toISOString()}).eq('id',id)
+    if(selected?.id===id)setSelected(p=>({...p,...updates}))
+    setSaving(false)
+  }
+
+  const sorted=[...leads].sort((a,b)=>b.score-a.score)
+
+  const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
+  const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
+  const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
+
+  return<div>
+    <SHdr title="Campaña Q2" sub={`${leads.length} leads · ${depositados.length} depósitos confirmados`}/>
+
+    {/* KPIs */}
+    <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
+      <StatCard label="Capital levantado" value={`$${(totalCapital/1000).toFixed(0)}k`} sub={`${depositados.length} depósitos`} accent={P.green} Icon="💵"/>
+      <StatCard label="Cupos tomados" value={`${spotsTaken}/${totalSpots}`} sub={`${totalSpots-spotsTaken} disponibles`} accent={P.purple} Icon="🎯"/>
+      <StatCard label="Total leads" value={leads.length} sub="en pipeline" accent={P.blue} Icon="👥"/>
+      <StatCard label="Campaña" value={config.campaign_active==='true'?'Activa':'Pausada'} accent={config.campaign_active==='true'?P.green:P.orange} Icon="📡"/>
+    </div>
+
+    {/* Progreso cupos */}
+    <GlassCard style={{marginBottom:18}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:10}}>
+        <p style={{fontSize:12,fontWeight:600,color:P.textSub}}>Cupos disponibles</p>
+        <span style={{fontSize:13,fontFamily:'monospace',color:P.purple,fontWeight:700}}>{spotsTaken} / {totalSpots}</span>
+      </div>
+      <div style={{background:'rgba(255,255,255,0.07)',borderRadius:6,height:10}}>
+        <div style={{background:`linear-gradient(90deg,${P.purple},${P.blue})`,height:10,borderRadius:6,width:`${(spotsTaken/totalSpots)*100}%`,transition:'width 0.6s'}}/>
+      </div>
+      <div style={{display:'flex',gap:20,marginTop:14,flexWrap:'wrap'}}>
+        {[['Retorno histórico',`${config.historical_return_pct||502}%`,P.green],
+          ['Pts registro',config.pts_registro||10,P.blue],
+          ['Pts referido',config.pts_referido||20,P.purple],
+          ['Bonus expiry',`${config.bonus_expiry_days||30}d`,P.orange]].map(([k,v,c])=>(
+          <div key={k} style={{flex:1,minWidth:100,textAlign:'center',padding:'10px 8px',borderRadius:8,background:`${c}10`,border:`1px solid ${c}20`}}>
+            <div style={{fontSize:18,fontWeight:800,color:c,fontFamily:'monospace'}}>{v}</div>
+            <div style={{fontSize:10,color:P.muted,marginTop:4,textTransform:'uppercase',letterSpacing:'0.08em'}}>{k}</div>
+          </div>
+        ))}
+      </div>
+    </GlassCard>
+
+    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}}>
+      {/* Leaderboard */}
+      <GlassCard style={{padding:0}}>
+        <div style={{padding:'16px 18px',borderBottom:`1px solid ${P.border}`}}>
+          <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em'}}>🏆 Leaderboard por score</p>
+        </div>
+        {loading?<Spinner/>:sorted.map((lead,i)=>(
+          <div key={lead.id} onClick={()=>setSelected(lead)}
+            style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',
+              borderBottom:i<sorted.length-1?`1px solid ${P.border}`:'none',cursor:'pointer',transition:'background 0.12s'}}
+            onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
+            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+            <div style={{width:26,height:26,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',
+              background: i===0?'rgba(255,215,0,0.2)':i===1?'rgba(192,192,192,0.15)':i===2?'rgba(205,127,50,0.15)':P.purpleDim,
+              fontSize:12,fontWeight:800,
+              color: i===0?'#ffd700':i===1?'#c0c0c0':i===2?'#cd7f32':P.purple,flexShrink:0}}>
+              {i+1}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <p style={{fontSize:13,fontWeight:600,color:P.text,margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{lead.full_name}</p>
+              <div style={{display:'flex',gap:6,marginTop:3,alignItems:'center',flexWrap:'wrap'}}>
+                <Badge label={etapaLabel[lead.etapa]||lead.etapa} color={etapaColor[lead.etapa]||P.muted}/>
+                {lead.team&&<Badge label={lead.team} color={teamColor[lead.team]||P.muted}/>}
+                {lead.deposit_confirmed&&<span style={{fontSize:10,color:P.green}}>💵 {lead.deposit_amount_usd?`$${Number(lead.deposit_amount_usd).toLocaleString()}`:''}</span>}
+              </div>
+            </div>
+            <div style={{display:'flex',alignItems:'center',gap:4,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:8,padding:'4px 10px',flexShrink:0}}>
+              <span style={{fontSize:14,fontWeight:800,color:P.purple,fontFamily:'monospace'}}>{lead.score}</span>
+              <span style={{fontSize:10,color:P.muted}}>pts</span>
+            </div>
+          </div>
+        ))}
+      </GlassCard>
+
+      {/* Bonus tiers */}
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <GlassCard>
+          <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14}}>Bonus tiers por referidos</p>
+          {tiers.map(t=>(
+            <div key={t.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',
+              padding:'10px 12px',marginBottom:8,borderRadius:8,
+              background:`rgba(108,92,231,0.08)`,border:`1px solid ${P.purpleBorder}`}}>
+              <span style={{fontSize:13,color:P.textSub}}>{t.min_referrals}+ referidos</span>
+              <div style={{display:'flex',alignItems:'center',gap:6}}>
+                <span style={{fontSize:11,color:P.muted}}>{t.label}</span>
+                <div style={{background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:6,padding:'2px 8px'}}>
+                  <span style={{fontSize:13,fontWeight:700,color:P.green}}>+{t.bonus_percentage}%</span>
+                </div>
+              </div>
+            </div>
+          ))}
+        </GlassCard>
+
+        <GlassCard>
+          <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14}}>Capital por rango</p>
+          {['1k-5k','5k-20k','20k-50k','50k+'].map(r=>{
+            const count=leads.filter(l=>l.investment_range===r).length
+            const dep=leads.filter(l=>l.investment_range===r&&l.deposit_confirmed).length
+            return<div key={r} style={{marginBottom:10}}>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
+                <span style={{fontSize:12,color:P.textSub}}>{r}</span>
+                <span style={{fontSize:12,color:P.muted}}>{dep}/{count} depósitos</span>
+              </div>
+              <div style={{background:'rgba(255,255,255,0.06)',borderRadius:3,height:5}}>
+                <div style={{background:P.green,height:5,borderRadius:3,width:`${leads.length?count/leads.length*100:0}%`}}/>
+              </div>
+            </div>
+          })}
+        </GlassCard>
+      </div>
+    </div>
+
+    {/* Detail modal */}
+    {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)} accent={P.purple}>
+      <div>
+        <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
+          <Badge label={etapaLabel[selected.etapa]} color={etapaColor[selected.etapa]}/>
+          {selected.team&&<Badge label={selected.team} color={teamColor[selected.team]||P.muted}/>}
+          <div style={{display:'inline-flex',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:8,padding:'2px 10px'}}>
+            <span style={{fontSize:13,fontWeight:800,color:P.purple,fontFamily:'monospace'}}>{selected.score} pts</span>
+          </div>
+        </div>
+
+        {[['Email',selected.email],['Teléfono',selected.phone||'—'],['Capital',selected.investment_range||'—'],
+          ['Depósito USD',selected.deposit_amount_usd?`$${Number(selected.deposit_amount_usd).toLocaleString()}`:'—'],
+          ['Asesor',selected.advisor_assigned||'Sin asignar'],
+          ['Fuente',selected.source||'—'],['Referidos',getReferidos(selected)],
+          ['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
+          <div key={k} style={{paddingBottom:10,marginBottom:10,borderBottom:`1px solid ${P.border}`}}>
+            <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:3,fontWeight:600}}>{k}</p>
+            <p style={{fontSize:13,color:P.text,margin:0}}>{String(v)}</p>
+          </div>
+        ))}
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:8,marginBottom:16}}>
+          {[['Contactado',selected.advisor_contacted,'advisor_contacted'],
+            ['Cuenta',selected.account_created,'account_created'],
+            ['KYC',selected.kyc_verified,'kyc_verified'],
+            ['Depósito',selected.deposit_confirmed,'deposit_confirmed']].map(([k,v,field])=>(
+            <button key={k} onClick={()=>updateLead(selected.id,{[field]:!v})} disabled={saving}
+              style={{padding:'10px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                background:v?'rgba(0,208,132,0.12)':'rgba(255,255,255,0.03)',
+                border:`1px solid ${v?'rgba(0,208,132,0.3)':P.border}`}}>
+              <p style={{fontSize:10,color:P.muted,margin:'0 0 4px',textTransform:'uppercase',letterSpacing:'0.06em'}}>{k}</p>
+              <p style={{fontSize:13,fontWeight:700,color:v?P.green:P.muted,margin:0}}>{v?'✓ Sí':'— No'}</p>
+            </button>
+          ))}
+        </div>
+
+        {selected.meeting_url&&<div style={{marginBottom:14,padding:'10px 12px',background:'rgba(9,132,227,0.1)',borderRadius:8,border:`1px solid ${P.blue}30`}}>
+          <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4}}>Meeting URL</p>
+          <a href={selected.meeting_url} target="_blank" rel="noopener noreferrer"
+            style={{fontSize:12,color:P.blue,wordBreak:'break-all'}}>{selected.meeting_url}</a>
+        </div>}
+
+        <div style={{display:'flex',justifyContent:'flex-end',paddingTop:8}}>
+          <Btn variant="ghost" onClick={()=>setSelected(null)}>Cerrar</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>
+}
+
 // ── APP ───────────────────────────────────────────────────────────────────────
-const NAV=[{id:'dashboard',label:'Dashboard',icon:'⊞'},{id:'contacts',label:'Contactos',icon:'📋'},{id:'pipeline',label:'Pipeline',icon:'◈'},{id:'tasks',label:'Tareas',icon:'✓'},{id:'emails',label:'Emails',icon:'✉'},{id:'reports',label:'Reportes',icon:'▦'}]
+const NAV=[{id:'dashboard',label:'Dashboard',icon:'⊞'},{id:'contacts',label:'Contactos',icon:'📋'},{id:'pipeline',label:'Pipeline',icon:'◈'},{id:'campana',label:'Campaña Q2',icon:'🚀'},{id:'tasks',label:'Tareas',icon:'✓'},{id:'emails',label:'Emails',icon:'✉'},{id:'reports',label:'Reportes',icon:'▦'}]
 
 export default function App(){
   const[user,setUser]=useState(null)
@@ -423,7 +626,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const mods={dashboard:<Dashboard contacts={contacts} leads={leads}/>,contacts:<Contacts contacts={contacts} setContacts={setContacts} loading={loading}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading}/>,campana:<Campana leads={leads}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails/>,reports:<Reports contacts={contacts} leads={leads}/>}
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
