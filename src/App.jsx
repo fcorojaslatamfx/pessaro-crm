@@ -109,7 +109,7 @@ function Dashboard({contacts,leads,onModuleChange}){
           <Badge label={c.status} color={STATUS_COLOR[c.status]||P.muted}/>
         </div>
       </div>)}
-      {contacts.length===0&&<p style={{color:P.muted,fontSize:13}}>Sin formularios aún</p>}
+      {contacts.length===0&&<p style={{color:P.muted,fontSize:13,padding:'8px 0'}}>Sin formularios recibidos aún</p>}
     </GlassCard>
   </div>
 }
@@ -157,23 +157,23 @@ function Contacts({user,isSuperAdmin}){
   const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
   const[formErr,setFormErr]=useState({})
 
-  // isSuperAdmin viene como prop verificado desde DB
+  // isSuperAdmin prop viene verificado desde DB via get_my_role()
   const[staffList,setStaffList]=useState([])
   const[filterUser,setFilterUser]=useState('todos')
 
   const load=useCallback(async()=>{
     setLoading(true)
-    // Super admin: todos los contactos con datos del asesor
-    // Asesor normal: solo los suyos
-    let query=supabase.from('crm_contacts').select('*').order('created_at',{ascending:false})
-    if(!isSuperAdmin) query=query.eq('user_id',user.id)
-    const{data}=await query
-    setContacts(data||[])
-    // Cargar lista de asesores para el filtro (solo super admin)
-    if(isSuperAdmin){
-      const{data:sp}=await supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email')
-      setStaffList(sp||[])
-    }
+    try{
+      let query=supabase.from('crm_contacts').select('*').order('created_at',{ascending:false})
+      if(!isSuperAdmin) query=query.eq('user_id',user.id)
+      const{data,error}=await query
+      if(error) console.error('contacts load error:',error)
+      setContacts(data||[])
+      if(isSuperAdmin){
+        const{data:sp}=await supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email')
+        setStaffList(sp||[])
+      }
+    }catch(e){console.error(e)}
     setLoading(false)
   },[user.id,isSuperAdmin])
 
@@ -705,14 +705,14 @@ function Emails({contacts,leads,staffProfile,user}){
     {tab==='plantillas'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:14}}>
       {TEMPLATES.map(t=>(
         <GlassCard key={t.id} style={{borderLeft:`3px solid ${t.color}`,cursor:'pointer'}}
-          onClick={()=>{setForm(p=>({...p,template:t.id}));openModal()}}>
+          onClick={()=>{setForm(p=>({...p,template:t.id}));setTab('historial');setShowModal(true);setSent(null)}}>
           <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
             <div style={{width:8,height:8,borderRadius:'50%',background:t.color}}/>
             <span style={{fontSize:14,fontWeight:600,color:P.text}}>{t.label}</span>
           </div>
           <p style={{fontSize:12,color:P.muted,margin:0}}>{t.desc}</p>
           <div style={{marginTop:10}}>
-            <Btn variant="ghost" style={{padding:'4px 10px',fontSize:11,width:'100%',justifyContent:'center'}}>Usar plantilla →</Btn>
+            <button onClick={e=>{e.stopPropagation();setForm(p=>({...p,template:t.id}));setTab('historial');setShowModal(true);setSent(null)}} style={{width:'100%',padding:'7px 10px',borderRadius:6,fontSize:12,cursor:'pointer',background:t.color+'18',color:t.color,border:`1px solid ${t.color}30`,fontWeight:600}}>Usar plantilla →</button>
           </div>
         </GlassCard>
       ))}
