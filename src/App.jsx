@@ -164,16 +164,44 @@ function Contacts({user,isSuperAdmin}){
   const load=useCallback(async()=>{
     setLoading(true)
     try{
-      let query=supabase.from('crm_contacts').select('*').order('created_at',{ascending:false})
-      if(!isSuperAdmin) query=query.eq('user_id',user.id)
-      const{data,error}=await query
-      if(error) console.error('contacts load error:',error)
-      setContacts(data||[])
+      // Cargar crm_contacts (contactos manuales/csv por asesor)
+      let q=supabase.from('crm_contacts').select('*').order('created_at',{ascending:false})
+      if(!isSuperAdmin) q=q.eq('user_id',user.id)
+      const{data:crmData}=await q
+
+      let merged=crmData||[]
+
+      // Super admin: también ver contact_submissions (formularios web) como fuente adicional
       if(isSuperAdmin){
+        const{data:subs}=await supabase
+          .from('contact_submissions')
+          .select('id,full_name,email,mobile,investment_capital,status,submitted_at,management_type')
+          .order('submitted_at',{ascending:false})
+        // Normalizar contact_submissions al formato crm_contacts
+        const normalized=(subs||[]).map(s=>({
+          id:'sub_'+s.id,
+          user_id:null,
+          full_name:s.full_name||'Sin nombre',
+          email:s.email,
+          phone:s.mobile||'—',
+          address:'',
+          notes:s.management_type||'',
+          status: s.status==='new'?'prospecto':s.status==='read'?'activo':s.status==='replied'?'cliente':'inactivo',
+          source:'formulario',
+          created_at:s.submitted_at,
+          _investment:s.investment_capital,
+        }))
+        // Evitar duplicados por email
+        const existingEmails=new Set(merged.map(c=>c.email))
+        const newSubs=normalized.filter(n=>!existingEmails.has(n.email))
+        merged=[...merged,...newSubs]
+        // Cargar asesores para filtro
         const{data:sp}=await supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email')
         setStaffList(sp||[])
       }
-    }catch(e){console.error(e)}
+
+      setContacts(merged)
+    }catch(e){console.error('contacts load:',e)}
     setLoading(false)
   },[user.id,isSuperAdmin])
 
@@ -382,7 +410,7 @@ function Contacts({user,isSuperAdmin}){
       {loading?<Spinner/>:<GlassCard style={{padding:0}}>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
-            {[...(isSuperAdmin?['Asesor']:[]),'Nombre','Email','Teléfono','Dirección','Estado','Origen',''].map(h=>(
+            {[...(isSuperAdmin?['Asesor','Capital']:[]),'Nombre','Email','Teléfono','Estado','Origen',''].map(h=>(
               <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
             ))}
           </tr></thead>
@@ -407,7 +435,7 @@ function Contacts({user,isSuperAdmin}){
                 </td>
                 <td style={{padding:'12px 18px',color:P.muted,fontSize:12,fontFamily:'monospace'}}>{c.email}</td>
                 <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.phone}</td>
-                <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.address||'—'}</td>
+                {isSuperAdmin&&<td style={{padding:'12px 18px',fontSize:12,color:P.green,fontFamily:'monospace',fontWeight:600}}>{c._investment>0?'$'+Number(c._investment).toLocaleString():'—'}</td>}
                 <td style={{padding:'12px 18px'}}><Badge label={c.status} color={STATUS_COLOR_MAP[c.status]||P.muted}/></td>
                 <td style={{padding:'12px 18px'}}><Badge label={c.source} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/></td>
                 <td style={{padding:'12px 18px'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn></td>
@@ -431,7 +459,7 @@ function Contacts({user,isSuperAdmin}){
             <span style={{fontSize:11,color:P.purple}}>👤 {getAdvisorName(selected.user_id)}</span>
           </div>}
         </div>
-        {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
+        {[['Email',selected.email],['Teléfono',selected.phone||'—'],['Dirección',selected.address||'—'],['Origen',selected.source],['Registro',fmtDate(selected.created_at)],...(selected._investment>0?[['Capital invertido','$'+Number(selected._investment).toLocaleString()]]:[]),(selected.notes?[['Notas/Gestión',selected.notes]]:[])].map(([k,v])=>(
           <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
             <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:4,fontWeight:600}}>{k}</p>
             <p style={{fontSize:13,color:P.text,margin:0,fontFamily:k==='Email'?'monospace':'inherit'}}>{v}</p>
@@ -891,7 +919,7 @@ function Reports({contacts,leads}){
 
 
 // ── CAMPAÑA ───────────────────────────────────────────────────────────────────
-function Campana({leads,user,isSuperAdmin}){
+function CampanaModule({campaign,user,isSuperAdmin,allLeads}){
   const[config,setConfig]=useState({})
   const[participants,setParticipants]=useState([])
   const[campTab,setCampTab]=useState('general') // general | mis_leads
@@ -912,7 +940,7 @@ function Campana({leads,user,isSuperAdmin}){
         supabase.from('campaign_config').select('*'),
         supabase.from('campaign_referrals').select('*'),
         supabase.from('campaign_bonus_tiers').select('*').order('min_referrals'),
-        supabase.from('campaign_participants').select('*').order('created_at',{ascending:false}),
+        supabase.from('campaign_participants').select('*').eq('campaign_id',campaign.id).order('created_at',{ascending:false}),
         supabase.from('crm_contacts').select('id,full_name,email,phone').eq('user_id',user.id)
       ])
       const cfgMap={}
@@ -927,10 +955,10 @@ function Campana({leads,user,isSuperAdmin}){
     load()
   },[])
 
-  const totalSpots=Number(config.total_spots||50)
-  const spotsTaken=Number(config.spots_taken||0)
-  const depositados=leads.filter(l=>l.deposit_confirmed)
-  const totalCapital=depositados.reduce((s,l)=>s+(Number(l.deposit_amount_usd)||0),0)
+  const totalSpots=Number(campaign.total_spots||config.total_spots||50)
+  const spotsTaken=participants.filter(p=>p.deposit_confirmed).length
+  const depositados=participants.filter(p=>p.deposit_confirmed)
+  const totalCapital=depositados.reduce((s,p)=>s+(Number(p.deposit_amount_usd)||0),0)
   const getReferidos=lead=>referrals.filter(r=>r.referrer_code===lead?.referral_code&&r.is_valid).length
 
   const updateLead=async(id,updates)=>{
@@ -943,7 +971,7 @@ function Campana({leads,user,isSuperAdmin}){
   const addParticipant=async()=>{
     if(!addForm.full_name||!addForm.email)return
     setAddSaving(true)
-    const payload={...addForm,user_id:user.id,etapa:1}
+    const payload={...addForm,user_id:user.id,etapa:1,campaign_id:campaign.id}
     if(!payload.crm_contact_id)delete payload.crm_contact_id
     const{data}=await supabase.from('campaign_participants').insert(payload).select().single()
     if(data){setParticipants(p=>[data,...p]);setShowAddLead(false);setAddForm({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:''})}
@@ -956,14 +984,14 @@ function Campana({leads,user,isSuperAdmin}){
   }
 
   const myParticipants=isSuperAdmin?participants:participants.filter(p=>p.user_id===user.id)
-  const sorted=[...leads].sort((a,b)=>b.score-a.score)
+  const sorted=[...(allLeads||[])].sort((a,b)=>b.score-a.score)
 
   const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
   const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
   const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
 
   return<div>
-    <SHdr title="Campaña Q2" sub={`${leads.length} leads · ${depositados.length} depósitos confirmados`}/>
+    <SHdr title={campaign.name} sub={`${participants.length} leads · ${depositados.length} depósitos confirmados · ${campaign.status}`}/>
 
     {/* TABS */}
     <div style={{display:'flex',gap:8,marginBottom:20}}>
@@ -1047,10 +1075,10 @@ function Campana({leads,user,isSuperAdmin}){
     {campTab==='general'&&<div>
     {/* KPIs */}
     <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
-      <StatCard label="Capital levantado" value={`$${(totalCapital/1000).toFixed(0)}k`} sub={`${depositados.length} depósitos`} accent={P.green} Icon="💵"/>
+      <StatCard label="Capital levantado" value={totalCapital>0?`$${(totalCapital/1000).toFixed(0)}k`:'$0'} sub={`${depositados.length} depósitos`} accent={P.green} Icon="💵"/>
       <StatCard label="Cupos tomados" value={`${spotsTaken}/${totalSpots}`} sub={`${totalSpots-spotsTaken} disponibles`} accent={P.purple} Icon="🎯"/>
-      <StatCard label="Total leads" value={leads.length} sub="en pipeline" accent={P.blue} Icon="👥"/>
-      <StatCard label="Campaña" value={config.campaign_active==='true'?'Activa':'Pausada'} accent={config.campaign_active==='true'?P.green:P.orange} Icon="📡"/>
+      <StatCard label="Total leads" value={participants.length} sub="agregados" accent={P.blue} Icon="👥"/>
+      <StatCard label="Estado" value={campaign.status[0].toUpperCase()+campaign.status.slice(1)} accent={campaign.status==='activa'?P.green:P.orange} Icon="📡"/>
     </div>
 
     {/* Progreso cupos */}
@@ -1198,8 +1226,150 @@ function Campana({leads,user,isSuperAdmin}){
   </div>
 }
 
+// ── ADMIN CAMPAÑAS ────────────────────────────────────────────────────────────
+function AdminCampaigns({campaigns,setCampaigns,user}){
+  const[showNew,setShowNew]=useState(false)
+  const[saving,setSaving]=useState(false)
+  const[form,setForm]=useState({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
+  const[err,setErr]=useState({})
+
+  const validate=()=>{
+    const e={}
+    if(!form.name.trim())e.name='Nombre obligatorio'
+    if(!form.slug.trim())e.slug='Slug obligatorio'
+    else if(!/^[a-z0-9-]+$/.test(form.slug))e.slug='Solo minúsculas, números y guiones'
+    setErr(e); return Object.keys(e).length===0
+  }
+
+  const create=async()=>{
+    if(!validate())return
+    setSaving(true)
+    const{data,error}=await supabase.from('campaigns').insert({
+      ...form, total_spots:Number(form.total_spots)||50, created_by:user.id
+    }).select().single()
+    setSaving(false)
+    if(error){setErr({slug:error.message});return}
+    setCampaigns(p=>[...p,data])
+    setShowNew(false)
+    setForm({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
+    setErr({})
+  }
+
+  const updateStatus=async(id,status)=>{
+    await supabase.from('campaigns').update({status}).eq('id',id)
+    setCampaigns(p=>p.map(c=>c.id===id?{...c,status}:c))
+  }
+
+  const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted}
+
+  return<div>
+    <SHdr title="Gestionar Campañas" sub="Solo visible para super admin"
+      action={<Btn onClick={()=>setShowNew(true)}>+ Nueva campaña</Btn>}/>
+
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      {campaigns.map(c=>(
+        <GlassCard key={c.id} accent={STATUS_C[c.status]} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:10}}>
+            <div>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                <Badge label={c.status} color={STATUS_C[c.status]}/>
+                <span style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{c.slug}</span>
+              </div>
+              <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:700,color:P.text}}>{c.name}</h3>
+              {c.description&&<p style={{margin:0,fontSize:13,color:P.muted}}>{c.description}</p>}
+              <div style={{display:'flex',gap:12,marginTop:10,flexWrap:'wrap'}}>
+                {[['Cupos',c.total_spots],['Broker',c.broker||'—'],['Retorno',c.historical_return||'—'],['Capital objetivo',c.target_capital||'—']].map(([k,v])=>(
+                  <div key={k} style={{fontSize:11,color:P.muted}}>
+                    <span style={{color:P.textSub,fontWeight:600}}>{k}:</span> {v}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              {['activa','pausada','cerrada'].map(s=>(
+                <button key={s} onClick={()=>updateStatus(c.id,s)} disabled={c.status===s}
+                  style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:c.status===s?'default':'pointer',
+                    background:c.status===s?STATUS_C[s]+'25':'rgba(255,255,255,0.04)',
+                    color:c.status===s?STATUS_C[s]:P.muted,
+                    border:`1px solid ${c.status===s?STATUS_C[s]+'40':P.border}`,fontWeight:600}}>
+                  {s[0].toUpperCase()+s.slice(1)}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div style={{marginTop:12,padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
+            <p style={{fontSize:11,color:P.muted,margin:0}}>
+              Los asesores ven esta campaña en su sidebar como <strong style={{color:P.text}}>🚀 {c.name}</strong> y pueden agregar sus propios leads.
+              {c.status!=='activa'&&<span style={{color:P.orange}}> · Pausar o cerrar la oculta del sidebar de los asesores.</span>}
+            </p>
+          </div>
+        </GlassCard>
+      ))}
+      {campaigns.length===0&&<GlassCard>
+        <p style={{color:P.muted,fontSize:14,textAlign:'center',padding:'20px 0'}}>No hay campañas creadas. Crea la primera.</p>
+      </GlassCard>}
+    </div>
+
+    {showNew&&<Modal title="Nueva campaña" onClose={()=>setShowNew(false)} accent={P.green}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div>
+            <Lbl>Nombre *</Lbl>
+            <Input value={form.name} onChange={v=>{
+              setForm(p=>({...p,name:v,slug:v.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'')}))
+            }} placeholder="Campaña Q3 2026"/>
+            {err.name&&<p style={{fontSize:11,color:P.red,marginTop:3}}>{err.name}</p>}
+          </div>
+          <div>
+            <Lbl>Slug (URL) *</Lbl>
+            <Input value={form.slug} onChange={v=>setForm(p=>({...p,slug:v}))} placeholder="q3-2026"/>
+            {err.slug&&<p style={{fontSize:11,color:P.red,marginTop:3}}>{err.slug}</p>}
+          </div>
+          <div>
+            <Lbl>Broker</Lbl>
+            <Input value={form.broker} onChange={v=>setForm(p=>({...p,broker:v}))} placeholder="Radex / Tradeview"/>
+          </div>
+          <div>
+            <Lbl>Cupos totales</Lbl>
+            <Input value={form.total_spots} onChange={v=>setForm(p=>({...p,total_spots:v}))} type="number" placeholder="50"/>
+          </div>
+          <div>
+            <Lbl>Retorno histórico</Lbl>
+            <Input value={form.historical_return} onChange={v=>setForm(p=>({...p,historical_return:v}))} placeholder="+502%"/>
+          </div>
+          <div>
+            <Lbl>Capital objetivo</Lbl>
+            <Input value={form.target_capital} onChange={v=>setForm(p=>({...p,target_capital:v}))} placeholder="$500,000 USD"/>
+          </div>
+          <div>
+            <Lbl>Fecha inicio</Lbl>
+            <Input value={form.start_date} onChange={v=>setForm(p=>({...p,start_date:v}))} type="date"/>
+          </div>
+          <div>
+            <Lbl>Estado inicial</Lbl>
+            <Sel value={form.status} onChange={v=>setForm(p=>({...p,status:v}))} options={[{value:'activa',label:'Activa'},{value:'pausada',label:'Pausada'}]}/>
+          </div>
+        </div>
+        <div>
+          <Lbl>Descripción</Lbl>
+          <textarea value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))} placeholder="Descripción de la campaña..."
+            style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:10,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:70,resize:'vertical',fontFamily:'inherit'}}/>
+        </div>
+        <div style={{padding:'10px 12px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}>
+          <p style={{fontSize:12,color:P.green,margin:0}}>✓ Al crear, la campaña aparecerá automáticamente en el sidebar de todos los asesores.</p>
+        </div>
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:4}}>
+          <Btn variant="ghost" onClick={()=>setShowNew(false)}>Cancelar</Btn>
+          <Btn onClick={create} disabled={saving}>{saving?'Creando...':'Crear campaña'}</Btn>
+        </div>
+      </div>
+    </Modal>}
+  </div>
+}
+
+
 // ── APP ───────────────────────────────────────────────────────────────────────
-const NAV=[{id:'dashboard',label:'Dashboard',icon:'⊞'},{id:'contacts',label:'Contactos',icon:'📋'},{id:'pipeline',label:'Pipeline',icon:'◈'},{id:'campana',label:'Campaña Q2',icon:'🚀'},{id:'tasks',label:'Tareas',icon:'✓'},{id:'emails',label:'Emails',icon:'✉'},{id:'reports',label:'Reportes',icon:'▦'}]
+// NAV is now dynamic — built in App based on campaigns
 
 export default function App(){
   const[user,setUser]=useState(null)
@@ -1237,17 +1407,24 @@ export default function App(){
   },[])
 
   const[staffProfile,setStaffProfile]=useState(null)
+  const[campaigns,setCampaigns]=useState([])
+  const[activeCampaign,setActiveCampaign]=useState(null)
 
   useEffect(()=>{
     if(!user)return
     const load=async()=>{
       setLoading(true)
-      const[{data:c},{data:l},{data:sp}]=await Promise.all([
+      const[{data:c},{data:l},{data:sp},{data:camps}]=await Promise.all([
         supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}),
         supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at').order('created_at',{ascending:false}),
-        supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).single()
+        supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).single(),
+        supabase.from('campaigns').select('*').eq('status','activa').order('created_at')
       ])
-      setContacts(c||[]);setLeads(l||[]);setStaffProfile(sp||null);setLoading(false)
+      setContacts(c||[]);setLeads(l||[]);setStaffProfile(sp||null)
+      const campList=camps||[]
+      setCampaigns(campList)
+      if(campList.length>0)setActiveCampaign(campList[0])
+      setLoading(false)
     }
     load()
   },[user])
@@ -1262,7 +1439,35 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid rgba(255,255,255,0.07)`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
   const logout=async()=>{await supabase.auth.signOut();setUser(null)}
-  const mods={dashboard:<Dashboard contacts={contacts} leads={leads} onModuleChange={setModule}/>,contacts:<Contacts user={user} isSuperAdmin={isSuperAdminGlobal}/>,pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading} isSuperAdmin={isSuperAdminGlobal}/>,campana:<Campana leads={leads} user={user} isSuperAdmin={isSuperAdminGlobal}/>,tasks:<Tasks contacts={contacts} leads={leads}/>,emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,reports:<Reports contacts={contacts} leads={leads}/>}
+  const campMods={}
+  campaigns.forEach(camp=>{
+    campMods['camp_'+camp.id]=<CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdminGlobal} allLeads={leads}/>
+  })
+
+  const mods={
+    dashboard:<Dashboard contacts={contacts} leads={leads} onModuleChange={setModule}/>,
+    contacts:<Contacts user={user} isSuperAdmin={isSuperAdminGlobal}/>,
+    pipeline:<Pipeline leads={leads} setLeads={setLeads} loading={loading} isSuperAdmin={isSuperAdminGlobal}/>,
+    tasks:<Tasks contacts={contacts} leads={leads}/>,
+    emails:<Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,
+    reports:<Reports contacts={contacts} leads={leads}/>,
+    ...(isSuperAdminGlobal?{admin_campaigns:<AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>}:{}),
+    ...campMods,
+  }
+
+  const BASE_NAV=[
+    {id:'dashboard',label:'Dashboard',icon:'⊞'},
+    {id:'contacts', label:'Contactos', icon:'📋'},
+    {id:'pipeline', label:'Pipeline',  icon:'◈'},
+  ]
+  const CAMP_NAV=campaigns.map(c=>({id:'camp_'+c.id,label:c.name,icon:'🚀',color:c.status==='activa'?P.green:P.muted}))
+  const END_NAV=[
+    {id:'tasks',   label:'Tareas',   icon:'✓'},
+    {id:'emails',  label:'Emails',   icon:'✉'},
+    {id:'reports', label:'Reportes', icon:'▦'},
+    ...(isSuperAdminGlobal?[{id:'admin_campaigns',label:'Gestionar campañas',icon:'⚙',color:P.orange}]:[]),
+  ]
+  const NAV=[...BASE_NAV,...CAMP_NAV,...END_NAV]
 
   return<div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
