@@ -1414,17 +1414,21 @@ export default function App(){
     if(!user)return
     const load=async()=>{
       setLoading(true)
-      const[{data:c},{data:l},{data:sp},{data:camps}]=await Promise.all([
-        supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}),
-        supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at').order('created_at',{ascending:false}),
-        supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).single(),
-        supabase.from('campaigns').select('*').eq('status','activa').order('created_at')
-      ])
-      setContacts(c||[]);setLeads(l||[]);setStaffProfile(sp||null)
-      const campList=camps||[]
-      setCampaigns(campList)
-      if(campList.length>0)setActiveCampaign(campList[0])
-      setLoading(false)
+      try{
+        const[r1,r2,r3,r4]=await Promise.all([
+          supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}),
+          supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at').order('created_at',{ascending:false}),
+          supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).single(),
+          supabase.from('campaigns').select('*').eq('status','activa').order('created_at')
+        ])
+        setContacts(r1.data||[])
+        setLeads(r2.data||[])
+        setStaffProfile(r3.data||null)
+        const campList=r4.data||[]
+        setCampaigns(campList)
+        if(campList.length>0)setActiveCampaign(campList[0])
+      }catch(e){console.error('main load:',e)}
+      finally{setLoading(false)}
     }
     load()
   },[user])
