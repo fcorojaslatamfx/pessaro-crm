@@ -229,7 +229,7 @@ function Contacts({user,isSuperAdmin}){
           id:'sub_'+s.id, user_id:null,
           full_name:s.full_name||'Sin nombre', email:s.email, phone:s.mobile||'—', address:'',
           notes:s.management_type||'', status:s.status==='new'?'prospecto':s.status==='read'?'activo':s.status==='replied'?'cliente':'inactivo',
-          source:'formulario', created_at:s.submitted_at, _capital:s.investment_capital,
+          _origStatus:s.status, source:'formulario', created_at:s.submitted_at, _capital:s.investment_capital,
         }))
         setContacts([...(crm||[]),...normalized])
       } else {
@@ -270,30 +270,45 @@ function Contacts({user,isSuperAdmin}){
 
   const openContact=async c=>{
     setSelected(c);setNotes([]);setNoteText('')
-    const{data}=await supabase.from('crm_notes').select('*').eq('contact_submission_id',c.id.replace('sub_','')).order('created_at',{ascending:false})
-    setNotes(data||[])
-    if(c.source==='formulario'&&c.status==='prospecto'){
-      await supabase.from('contact_submissions').update({status:'read'}).eq('id',c.id.replace('sub_',''))
-      setContacts(p=>p.map(x=>x.id===c.id?{...x,status:'activo'}:x))
+    try{
+      let q=supabase.from('crm_notes').select('*').order('created_at',{ascending:false})
+      if(c.id.startsWith('sub_')) q=q.eq('contact_submission_id',c.id.replace('sub_',''))
+      else q=q.eq('crm_contact_id',c.id)
+      const{data}=await q
+      setNotes(data||[])
+    }catch(e){console.error('loadNotes:',e)}
+    if(c.source==='formulario'&&c._origStatus==='new'){
+      try{
+        await supabase.from('contact_submissions').update({status:'read'}).eq('id',c.id.replace('sub_',''))
+        setContacts(p=>p.map(x=>x.id===c.id?{...x,status:'activo',_origStatus:'read'}:x))
+        setSelected(s=>s?{...s,status:'activo',_origStatus:'read'}:s)
+      }catch(e){console.error('markRead:',e)}
     }
   }
 
   const addNote=async()=>{
     if(!noteText.trim()||!selected)return
-    const subId=selected.id.startsWith('sub_')?selected.id.replace('sub_',''):null
-    const crmId=!selected.id.startsWith('sub_')?selected.id:null
-    const{data}=await supabase.from('crm_notes').insert({content:noteText,contact_submission_id:subId,crm_contact_id:crmId}).select().single()
+    const isSub=selected.id.startsWith('sub_')
+    const payload={content:noteText}
+    if(isSub) payload.contact_submission_id=selected.id.replace('sub_','')
+    else payload.crm_contact_id=selected.id
+    const{data,error}=await supabase.from('crm_notes').insert(payload).select().single()
+    if(error){console.error('addNote:',error);return}
     if(data){setNotes(p=>[data,...p]);setNoteText('')}
   }
 
   const updateStatus=async(id,status)=>{
-    if(id.startsWith('sub_')){
-      await supabase.from('contact_submissions').update({status}).eq('id',id.replace('sub_',''))
-    } else {
-      await supabase.from('crm_contacts').update({status}).eq('id',id)
-    }
-    setContacts(p=>p.map(c=>c.id===id?{...c,status}:c))
-    if(selected?.id===id)setSelected(p=>({...p,status}))
+    try{
+      if(id.startsWith('sub_')){
+        const subStatus=status==='activo'?'read':status==='cliente'?'replied':status==='inactivo'?'archived':'new'
+        await supabase.from('contact_submissions').update({status:subStatus}).eq('id',id.replace('sub_',''))
+      } else {
+        await supabase.from('crm_contacts').update({status}).eq('id',id)
+      }
+      const orig=status==='activo'?'read':status==='cliente'?'replied':status==='inactivo'?'archived':'new'
+      setContacts(p=>p.map(c=>c.id===id?{...c,status,_origStatus:orig}:c))
+      if(selected?.id===id)setSelected(p=>({...p,status}))
+    }catch(e){console.error('updateStatus:',e)}
   }
 
   const parseCSV=text=>{
@@ -427,7 +442,7 @@ function Contacts({user,isSuperAdmin}){
               <td style={{padding:'12px 18px',color:P.muted,fontSize:12,fontFamily:'monospace'}}>{c.email}</td>
               <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.phone}</td>
               <td style={{padding:'12px 18px'}}><Badge label={c.status} color={SCOLOR_MAP[c.status]||P.muted}/></td>
-              <td style={{padding:'12px 18px'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/></td>
+              <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/>{c._origStatus==='new'&&<Badge label="nuevo" color={P.orange}/>}</div></td>
               <td style={{padding:'12px 18px'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn></td>
             </tr>
           ))}
@@ -1179,7 +1194,11 @@ export default function App(){
     }).catch(()=>setChecking(false))
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
       const u=session?.user??null
-      setUser(u)
+      // Only update user state if ID changed (prevents loop on token refresh)
+      setUser(prev=>{
+        if(prev?.id===u?.id) return prev
+        return u
+      })
       await checkRole(u)
     })
     return()=>subscription.unsubscribe()
@@ -1205,7 +1224,7 @@ export default function App(){
       finally{setLoading(false)}
     }
     load()
-  },[user])
+  },[user?.id])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
   useEffect(()=>{
