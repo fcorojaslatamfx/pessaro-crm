@@ -150,7 +150,7 @@ function Dashboard({contacts,leads,onNav}){
   return <div>
     <SHdr title="Dashboard" sub="Datos en tiempo real desde Supabase"/>
     <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
-      <StatCard label="Formularios" value={contacts.length} sub={`${newC} sin leer`} accent={P.purple} Icon="📋"/>
+      <StatCard label="Formularios" value={contacts.length} sub={newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'} accent={newC>0?P.orange:P.purple} Icon="📋"/>
       <StatCard label="Leads pipeline" value={leads.length} sub={`${closed} cerrados`} accent={P.blue} Icon="◈"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
@@ -164,7 +164,7 @@ function Dashboard({contacts,leads,onNav}){
       </GlassCard>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Estado formularios</p>
-        {[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados',P.muted]].map(([s,l,c])=>{
+        {[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados / Spam',P.muted]].map(([s,l,c])=>{
           const cnt=contacts.filter(x=>x.status===s).length
           return <div key={s} style={{marginBottom:12}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:13,color:P.textSub}}>{l}</span><span style={{fontSize:13,fontFamily:'monospace',color:c,fontWeight:600}}>{cnt}</span></div>
@@ -175,7 +175,7 @@ function Dashboard({contacts,leads,onNav}){
     </div>
     <GlassCard>
       <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Últimos formularios</p>
-      {contacts.slice(0,6).map((c,i)=>(
+      {contacts.filter(c=>c.status!=='archived').slice(0,6).map((c,i)=>(
         <div key={c.id} onClick={()=>onNav('contacts')} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<5?`1px solid ${P.border}`:'none',cursor:'pointer',borderRadius:6}} onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.03)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             <div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple}}>{(c.full_name||'?')[0]}</div>
@@ -244,7 +244,7 @@ function Contacts({user,isSuperAdmin}){
 
   const filtered=contacts.filter(c=>{
     const ms=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
-    const mst=statusFilter==='todos'||c.status===statusFilter
+    const mst=statusFilter==='todos'||(statusFilter==='activos'&&c.status!=='inactivo')||c.status===statusFilter
     const mu=userFilter==='todos'||c.user_id===userFilter
     return ms&&mst&&mu
   })
@@ -358,6 +358,12 @@ function Contacts({user,isSuperAdmin}){
     <SHdr title={isSuperAdmin?'Todos los Contactos':'Mis Contactos'}
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
       action={<div style={{display:'flex',gap:8}}>
+        {isSuperAdmin&&contacts.filter(c=>c._origStatus==='new').length>0&&<Btn variant="ghost" onClick={async()=>{
+          const newIds=contacts.filter(c=>c._origStatus==='new'&&c.id.startsWith('sub_')).map(c=>c.id.replace('sub_',''))
+          if(!newIds.length)return
+          await supabase.from('contact_submissions').update({status:'read'}).in('id',newIds)
+          setContacts(p=>p.map(c=>c._origStatus==='new'?{...c,status:'activo',_origStatus:'read'}:c))
+        }} style={{fontSize:12}}>✓ Marcar todos leídos ({contacts.filter(c=>c._origStatus==='new').length})</Btn>}
         <Btn variant="ghost" onClick={()=>setTab(tab==='csv'?'lista':'csv')}>📂 CSV</Btn>
         <Btn onClick={()=>setTab(tab==='nuevo'?'lista':'nuevo')}>+ Nuevo</Btn>
       </div>}/>
@@ -413,7 +419,7 @@ function Contacts({user,isSuperAdmin}){
 
     <div style={{display:'flex',gap:10,marginBottom:16}}>
       <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:300}}/>
-      <Sel value={statusFilter} onChange={setStatusFilter} style={{maxWidth:150}} options={[{value:'todos',label:'Todos'},...STATUS_OPT]}/>
+      <Sel value={statusFilter} onChange={setStatusFilter} style={{maxWidth:160}} options={[{value:'todos',label:'Todos (incl. spam)'},{value:'activos',label:'Activos (excl. spam)'},...STATUS_OPT]}/>
       {isSuperAdmin&&staffList.length>0&&<Sel value={userFilter} onChange={setUserFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los asesores'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
       <Btn variant="ghost" onClick={load} style={{padding:'9px 12px'}}>↺</Btn>
     </div>
