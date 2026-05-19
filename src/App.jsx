@@ -958,13 +958,29 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
   const[err,setErr]=useState({})
   const[pendingCamps,setPendingCamps]=useState([])
   const[loadingPending,setLoadingPending]=useState(true)
-  const[rejectModal,setRejectModal]=useState(null) // {id, name}
+  const[allCamps,setAllCamps]=useState([])
+  const[loadingAll,setLoadingAll]=useState(true)
+  const[rejectModal,setRejectModal]=useState(null)
   const[rejectNote,setRejectNote]=useState('')
   const[adminTab,setAdminTab]=useState('activas')
 
   const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted,pendiente_aprobacion:P.orange,rechazada:P.red,borrador:P.muted}
 
-  // Cargar campañas pendientes de aprobación
+  // Cargar TODAS las campañas aprobadas (activa + pausada + cerrada + legacy sin approval_status)
+  const loadAll=async()=>{
+    setLoadingAll(true)
+    try{
+      const{data}=await supabase.from('campaigns')
+        .select('*')
+        .or('approval_status.eq.aprobada,approval_status.is.null')
+        .order('created_at',{ascending:false})
+      setAllCamps(data||[])
+      setCampaigns((data||[]).filter(c=>c.status==='activa'))
+    }catch(e){console.error('loadAll:',e)}
+    finally{setLoadingAll(false)}
+  }
+
+  // Cargar campañas pendientes de aprobacion
   const loadPending=async()=>{
     setLoadingPending(true)
     try{
@@ -973,7 +989,19 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
     }catch(e){console.error('loadPending:',e)}
     finally{setLoadingPending(false)}
   }
-  useEffect(()=>{loadPending()},[])
+  useEffect(()=>{loadAll();loadPending()},[])
+
+  const updateAllCamps=(id,updates)=>{
+    setAllCamps(p=>p.map(c=>c.id===id?{...c,...updates}:c))
+    setCampaigns(prev=>{
+      const updated=prev.map(c=>c.id===id?{...c,...updates}:c)
+      if(updates.status==='activa'){
+        const exists=prev.find(c=>c.id===id)
+        if(!exists) return [...prev,{...allCamps.find(c=>c.id===id)||{},...updates}]
+      }
+      return updated.filter(c=>c.status==='activa')
+    })
+  }
 
   const validate=()=>{
     const e={}
@@ -997,7 +1025,8 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
     }).select().single()
     setSaving(false)
     if(error){setErr({slug:error.message});return}
-    setCampaigns(p=>[...p,data])
+    setAllCamps(p=>[data,...p])
+    if(data.status==='activa') setCampaigns(p=>[...p,data])
     setShowNew(false)
     setForm({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
     setErr({})
@@ -1005,7 +1034,7 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
 
   const updateStatus=async(id,status)=>{
     await supabase.from('campaigns').update({status}).eq('id',id)
-    setCampaigns(p=>p.map(c=>c.id===id?{...c,status}:c))
+    updateAllCamps(id,{status})
   }
 
   const approve=async(camp)=>{
@@ -1017,8 +1046,10 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
       published_at:now,
       status:'activa',
     }).eq('id',camp.id)
+    const approved={...camp,approval_status:'aprobada',status:'activa',approved_at:now,published_at:now}
     setPendingCamps(p=>p.filter(c=>c.id!==camp.id))
-    setCampaigns(p=>[...p,{...camp,approval_status:'aprobada',status:'activa',approved_at:now,published_at:now}])
+    setAllCamps(p=>[approved,...p])
+    setCampaigns(p=>[...p,approved])
   }
 
   const reject=async()=>{
@@ -1054,7 +1085,7 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
 
     {/* TAB: ACTIVAS */}
     {adminTab==='activas'&&<div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {campaigns.map(c=>(
+      {loadingAll?<div style={{padding:40,textAlign:'center',color:'#636e72',fontSize:13}}>Cargando campañas...</div>:allCamps.length===0?<div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:14,padding:20}}><p style={{color:'#636e72',fontSize:14,textAlign:'center',margin:0}}>No hay campañas. Crea la primera.</p></div>:allCamps.map(c=>(
         <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
             <div>
@@ -1090,7 +1121,6 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
           </div>
         </GlassCard>
       ))}
-      {campaigns.length===0&&<GlassCard><p style={{color:P.muted,fontSize:14,textAlign:'center',padding:'20px 0',margin:0}}>No hay campañas activas. Crea la primera.</p></GlassCard>}
     </div>}
 
     {/* TAB: POR APROBAR */}
@@ -1880,7 +1910,7 @@ export default function App(){
           supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200),
           supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil').order('created_at',{ascending:false}),
           supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
-          supabase.from('campaigns').select('*').in('status',['activa','pausada']).in('approval_status',['aprobada']).order('created_at'),
+          supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
         setContacts(r1.data||[])
         setLeads(r2.data||[])
