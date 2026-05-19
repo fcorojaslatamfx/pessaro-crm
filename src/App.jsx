@@ -715,7 +715,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
     <SHdr title={campaign.name} sub={`${leads.length} leads · ${deposited.length} depósitos · ${campaign.status}`}/>
 
     <div style={{display:'flex',gap:8,marginBottom:20}}>
-      {[['general','🏆 General'],['mis_leads','👤 Mis Leads']].map(([id,label])=>(
+      {[['general','🏆 General'],['landings','🚀 Landings'],['mis_leads','👤 Mis Leads']].map(([id,label])=>(
         <button key={id} onClick={()=>setCampTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
           background:campTab===id?P.purpleDim:'rgba(255,255,255,0.04)',
           color:campTab===id?P.purple:P.muted,
@@ -790,6 +790,76 @@ return <div key={r} style={{marginBottom:12}}>
         </div>
       </div>
     </div>)}
+
+
+    {campTab==='landings'&&<div>
+      <p style={{fontSize:12,color:P.muted,marginBottom:20}}>Variantes de landing page activas para esta campaña. Haz clic para abrir en nueva pestaña.</p>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16,marginBottom:28}}>
+        {[
+          {id:'navy',     label:'Navy',     desc:'Fondo azul marino · tipografía Syne · estilo profesional', color:'#4a7cdc', url:'/campana/navy'},
+          {id:'editorial',label:'Editorial',desc:'Fondo crema · Instrument Serif · estilo editorial', color:'#a8451f', url:'/campana/editorial'},
+          {id:'bold',     label:'Bold',     desc:'Fondo negro · Space Grotesk · estilo tecnológico', color:'#c8e000', url:'/campana/bold'},
+        ].map(v=>{
+          const cnt=leads.filter(l=>l.variant===v.id).length
+          const dep=leads.filter(l=>l.variant===v.id&&l.deposit_confirmed).length
+          const top=leads.filter(l=>l.variant===v.id).sort((a,b)=>b.score-a.score).slice(0,1)[0]
+          return <GlassCard key={v.id} style={{borderLeft:`3px solid ${v.color}`,padding:20}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
+              <div>
+                <div style={{fontSize:11,fontWeight:700,color:v.color,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:4}}>{v.label}</div>
+                <div style={{fontSize:12,color:P.muted,lineHeight:1.5}}>{v.desc}</div>
+              </div>
+              <div style={{background:v.color+'18',border:`1px solid ${v.color}40`,borderRadius:8,padding:'4px 10px',textAlign:'center',flexShrink:0,marginLeft:10}}>
+                <div style={{fontSize:18,fontWeight:800,color:v.color}}>{cnt}</div>
+                <div style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>leads</div>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:10,marginBottom:14}}>
+              <div style={{flex:1,background:'rgba(255,255,255,0.04)',borderRadius:8,padding:'8px 12px',textAlign:'center'}}>
+                <div style={{fontSize:15,fontWeight:700,color:P.green}}>{dep}</div>
+                <div style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.06em'}}>depósitos</div>
+              </div>
+              <div style={{flex:1,background:'rgba(255,255,255,0.04)',borderRadius:8,padding:'8px 12px',textAlign:'center'}}>
+                <div style={{fontSize:15,fontWeight:700,color:P.purple}}>{cnt>0?Math.round(dep/cnt*100):0}%</div>
+                <div style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.06em'}}>conversión</div>
+              </div>
+            </div>
+            {top&&<div style={{fontSize:11,color:P.muted,marginBottom:12,padding:'6px 10px',background:'rgba(255,255,255,0.03)',borderRadius:6}}>
+              🏆 Top: <span style={{color:P.text,fontWeight:600}}>{top.full_name}</span> · {top.score} pts
+            </div>}
+            <div style={{display:'flex',gap:8}}>
+              <a href={`https://pessaro.cl${v.url}`} target="_blank" rel="noopener noreferrer"
+                style={{flex:1,padding:'9px 0',background:v.color,color:'#000',border:'none',borderRadius:8,
+                  fontSize:12,fontWeight:700,cursor:'pointer',textAlign:'center',textDecoration:'none',display:'block'}}>
+                Ver landing →
+              </a>
+              <a href={`https://pessaro.cl${v.url}?ref=DEMO`} target="_blank" rel="noopener noreferrer"
+                style={{padding:'9px 12px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,
+                  borderRadius:8,fontSize:12,cursor:'pointer',textDecoration:'none',display:'block'}}>
+                + Ref
+              </a>
+            </div>
+          </GlassCard>
+        })}
+      </div>
+
+      {/* Links de referido por variante */}
+      <GlassCard>
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Links de referido por variante</p>
+        {['navy','editorial','bold'].map(v=>(
+          <div key={v} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
+            <span style={{fontSize:12,fontWeight:600,color:P.text,minWidth:70,textTransform:'capitalize'}}>{v}</span>
+            <code style={{flex:1,fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'5px 10px',borderRadius:6,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              {`https://pessaro.cl/campana/${v}?ref=CODIGO`}
+            </code>
+            <button onClick={()=>navigator.clipboard.writeText(`https://pessaro.cl/campana/${v}?ref=CODIGO`)}
+              style={{padding:'5px 10px',background:'rgba(255,255,255,0.06)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:6,fontSize:11,cursor:'pointer'}}>
+              Copiar
+            </button>
+          </div>
+        ))}
+      </GlassCard>
+    </div>}
 
     {campTab==='mis_leads'&&(loading?<Spinner/>:<div>
       <GlassCard style={{padding:0,marginBottom:16}}>
