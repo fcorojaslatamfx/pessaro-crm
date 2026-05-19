@@ -782,7 +782,7 @@ return <div key={r} style={{marginBottom:12}}>
                   <span style={{fontSize:12,color:P.muted}}>{dep}/{cnt}</span>
                 </div>
                 <div style={{background:'rgba(255,255,255,0.06)',borderRadius:3,height:4}}>
-                  <div style={{background:P.green,height:4,borderRadius:3,width:`${participants.length?cnt/participants.length*100:0}%`}}/>
+                  <div style={{background:P.green,height:4,borderRadius:3,width:`${leads.length?cnt/leads.length*100:0}%`}}/>
                 </div>
               </div>
             })}
