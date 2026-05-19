@@ -794,7 +794,7 @@ return <div key={r} style={{marginBottom:12}}>
     {campTab==='mis_leads'&&(loading?<Spinner/>:<div>
       <GlassCard style={{padding:0,marginBottom:16}}>
         <div style={{padding:'12px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <p style={{fontSize:12,fontWeight:600,color:P.textSub,margin:0}}>{isSuperAdmin?'Todos los leads':'Mis leads'} · {myParts.length}</p>
+          <p style={{fontSize:12,fontWeight:600,color:P.textSub,margin:0}}>{isSuperAdmin?'Todos los leads':'Mis leads'} · {filtered.length}</p>
         </div>
         <table style={{width:'100%',borderCollapse:'collapse'}}>
           <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
@@ -803,8 +803,9 @@ return <div key={r} style={{marginBottom:12}}>
             ))}
           </tr></thead>
           <tbody>
-            {myParts.map((p,i)=>(
-              <tr key={p.id} style={{borderBottom:i<myParts.length-1?`1px solid ${P.border}`:'none',cursor:'pointer'}}
+            {filtered.map((p,i)=>(
+
+              <tr key={p.id} style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none',cursor:'pointer'}}
                 onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
                 onMouseLeave={e=>e.currentTarget.style.background='transparent'}
                 onClick={()=>setSelPart(p)}>
@@ -824,7 +825,7 @@ return <div key={r} style={{marginBottom:12}}>
             ))}
           </tbody>
         </table>
-        {myParts.length===0&&<div style={{textAlign:'center',padding:32,color:P.muted,fontSize:13}}>Añade tu primer lead con el botón "+ Añadir lead".</div>}
+        {filtered.length===0&&<div style={{textAlign:'center',padding:32,color:P.muted,fontSize:13}}>Sin leads. Añade uno con el botón "+ Añadir lead".</div>}
       </GlassCard>
     </div>)}
 
