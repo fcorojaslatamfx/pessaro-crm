@@ -623,62 +623,96 @@ function Pipeline({leads,setLeads,isSuperAdmin}){
 }
 
 // ─── CAMPAÑA MODULE ───────────────────────────────────────────────────────────
-function CampanaModule({campaign,user,isSuperAdmin,globalLeads}){
-  const[participants,setParticipants]=useState([])
+function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   const[myContacts,setMyContacts]=useState([])
   const[tiers,setTiers]=useState([])
   const[loading,setLoading]=useState(true)
   const[campTab,setCampTab]=useState('general')
   const[showAdd,setShowAdd]=useState(false)
-  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:''})
+  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:'navy'})
   const[addSaving,setAddSaving]=useState(false)
   const[selPart,setSelPart]=useState(null)
+  const[filterVariant,setFilterVariant]=useState('all')
+  const[filterPerfil,setFilterPerfil]=useState('all')
+
+  // campaign_leads es la fuente única — globalLeads viene del fetch principal
+  const leads=globalLeads||[]
+  const deposited=leads.filter(l=>l.deposit_confirmed)
+  const capital=deposited.reduce((s,l)=>s+(Number(l.deposit_amount_usd)||0),0)
+  const myLeads=isSuperAdmin?leads:leads.filter(l=>l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes((user?.email||'').split('@')[0].toLowerCase()))
+  const sorted=[...leads].sort((a,b)=>b.score-a.score)
+  const variants=[...new Set(leads.map(l=>l.variant).filter(Boolean))].sort()
+  const perfiles=[...new Set(leads.map(l=>l.perfil).filter(Boolean))].sort()
+  const filtered=myLeads.filter(l=>{
+    if(filterVariant!=='all'&&l.variant!==filterVariant)return false
+    if(filterPerfil!=='all'&&l.perfil!=='all'&&l.perfil!==filterPerfil)return false
+    return true
+  })
+
+  const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
+  const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
+  const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
+  const variantColor={navy:'#4a7cdc',bold:'#c8e000',editorial:'#a8451f'}
+  const perfilColor={retail:P.green,mam:P.purple,asesor:P.orange}
 
   const load=useCallback(async()=>{
     setLoading(true)
     try{
-      const[{data:parts},{data:myC},{data:t}]=await Promise.all([
-        supabase.from('campaign_participants').select('*').eq('campaign_id',campaign.id).order('created_at',{ascending:false}),
+      const[{data:myC},{data:t}]=await Promise.all([
         supabase.from('crm_contacts').select('id,full_name,email,phone').eq('user_id',user.id),
         supabase.from('campaign_bonus_tiers').select('*').order('min_referrals'),
       ])
-      setParticipants(parts||[])
       setMyContacts(myC||[])
       setTiers(t||[])
     }catch(e){console.error('campaign load:',e)}
     finally{setLoading(false)}
-  },[campaign.id,user.id])
+  },[user.id])
 
   useEffect(()=>{load()},[load])
 
-  const myParts=isSuperAdmin?participants:participants.filter(p=>p.user_id===user.id)
-  const deposited=participants.filter(p=>p.deposit_confirmed)
-  const capital=deposited.reduce((s,p)=>s+(Number(p.deposit_amount_usd)||0),0)
-
-  const addParticipant=async()=>{
+  // Añadir lead directamente a campaign_leads
+  const addLead=async()=>{
     if(!addForm.full_name||!addForm.email)return
     setAddSaving(true)
-    const payload={...addForm,user_id:user.id,campaign_id:campaign.id,etapa:1}
-    if(!payload.crm_contact_id)delete payload.crm_contact_id
-    const{data}=await supabase.from('campaign_participants').insert(payload).select().single()
-    if(data){setParticipants(p=>[data,...p]);setShowAdd(false);setAddForm({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:''})}
+    // Generar referral_code único
+    const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
+    const code=Array.from({length:6},()=>chars[Math.floor(Math.random()*chars.length)]).join('')
+    const cnt=leads.length
+    const payload={
+      full_name:addForm.full_name,email:addForm.email,phone:addForm.phone||null,
+      investment_range:addForm.investment_range||null,team:addForm.team||null,
+      perfil:addForm.perfil||null,variant:addForm.variant||'navy',
+      referral_code:code,position_in_queue:cnt+1,
+      source:'crm_manual',advisor_assigned:user?.email?.split('@')[0]||null,etapa:1,
+    }
+    const{data,error}=await supabase.from('campaign_leads').insert(payload).select(
+      'id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,deposit_amount_usd'
+    ).single()
+    if(data&&!error){
+      setGlobalLeads(p=>[data,...p])
+      setShowAdd(false)
+      setAddForm({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:'navy'})
+    }
     setAddSaving(false)
   }
 
-  const updatePart=async(id,updates)=>{
-    await supabase.from('campaign_participants').update({...updates,updated_at:new Date().toISOString()}).eq('id',id)
-    setParticipants(p=>p.map(x=>x.id===id?{...x,...updates}:x))
+  // Actualizar lead en campaign_leads
+  const updateLead=async(id,updates)=>{
+    await supabase.from('campaign_leads').update({...updates}).eq('id',id)
+    setGlobalLeads(p=>p.map(l=>l.id===id?{...l,...updates}:l))
     if(selPart?.id===id)setSelPart(p=>({...p,...updates}))
   }
 
-  // Leaderboard: show globalLeads (campaign_leads from pessaro CMS) sorted by score
-  const sorted=[...(globalLeads||[])].sort((a,b)=>b.score-a.score)
-  const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
-  const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
-  const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
+  const FilterBtn=({active,onClick,children,color})=>(
+    <button onClick={onClick} style={{fontSize:11,padding:'4px 10px',borderRadius:6,cursor:'pointer',fontWeight:active?700:400,
+      background:active?(color+'22'):'rgba(255,255,255,0.04)',color:active?(color||P.purple):P.muted,
+      border:`1px solid ${active?(color||P.purple)+'55':P.border}`,transition:'all 0.15s'}}>
+      {children}
+    </button>
+  )
 
   return <div>
-    <SHdr title={campaign.name} sub={`${participants.length} leads agregados · ${deposited.length} depósitos · ${campaign.status}`}/>
+    <SHdr title={campaign.name} sub={`${leads.length} leads · ${deposited.length} depósitos · ${campaign.status}`}/>
 
     <div style={{display:'flex',gap:8,marginBottom:20}}>
       {[['general','🏆 General'],['mis_leads','👤 Mis Leads']].map(([id,label])=>(
@@ -694,28 +728,31 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads}){
       <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
         <StatCard label="Capital levantado" value={capital>0?`$${(capital/1000).toFixed(0)}k`:'$0'} sub={`${deposited.length} depósitos`} accent={P.green} Icon="💵"/>
         <StatCard label="Cupos" value={`${deposited.length}/${campaign.total_spots||50}`} sub={`${(campaign.total_spots||50)-deposited.length} libres`} accent={P.purple} Icon="🎯"/>
-        <StatCard label="Leads totales" value={participants.length} accent={P.blue} Icon="👥"/>
+        <StatCard label="Leads totales" value={leads.length} accent={P.blue} Icon="👥"/>
         <StatCard label="Estado" value={campaign.status[0].toUpperCase()+campaign.status.slice(1)} accent={campaign.status==='activa'?P.green:P.orange} Icon="📡"/>
       </div>
 
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18}}>
         <GlassCard style={{padding:0}}>
           <div style={{padding:'14px 18px',borderBottom:`1px solid ${P.border}`}}>
-            <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',margin:0}}>🏆 Leaderboard (campaign_leads)</p>
+            <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',margin:0}}>🏆 Leaderboard</p>
           </div>
-          {sorted.length===0&&<p style={{padding:20,color:P.muted,fontSize:13,margin:0}}>Sin leads en el leaderboard</p>}
+          {sorted.length===0&&<p style={{padding:20,color:P.muted,fontSize:13,margin:0}}>Sin leads</p>}
           {sorted.map((lead,i)=>(
             <div key={lead.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 18px',borderBottom:`1px solid ${P.border}`}}>
-              <div style={{width:26,height:26,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',background:i===0?'rgba(255,215,0,0.2)':i===1?'rgba(192,192,192,0.15)':i===2?'rgba(205,127,50,0.15)':P.purpleDim,fontSize:12,fontWeight:800,color:i===0?'#ffd700':i===1?'#c0c0c0':i===2?'#cd7f32':P.purple,flexShrink:0}}>{i+1}</div>
+              <div style={{width:26,height:26,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',
+                background:i===0?'rgba(255,215,0,0.2)':i===1?'rgba(192,192,192,0.15)':i===2?'rgba(205,127,50,0.15)':P.purpleDim,
+                fontSize:12,fontWeight:800,color:i===0?'#ffd700':i===1?'#c0c0c0':i===2?'#cd7f32':P.purple,flexShrink:0}}>{i+1}</div>
               <div style={{flex:1,minWidth:0}}>
                 <p style={{fontSize:13,fontWeight:600,color:P.text,margin:0,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{lead.full_name}</p>
-                <div style={{display:'flex',gap:6,marginTop:3}}>
-                  <Badge label={etapaLabel[lead.etapa]||lead.etapa} color={etapaColor[lead.etapa]||P.muted}/>
+                <div style={{display:'flex',gap:4,marginTop:3,flexWrap:'wrap'}}>
+                  <Badge label={etapaLabel[lead.etapa]||'—'} color={etapaColor[lead.etapa]||P.muted}/>
+                  {lead.variant&&<Badge label={lead.variant} color={variantColor[lead.variant]||P.muted}/>}
                   {lead.team&&<Badge label={lead.team} color={teamColor[lead.team]||P.muted}/>}
                 </div>
               </div>
               <div style={{display:'flex',alignItems:'center',gap:4,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:8,padding:'4px 10px',flexShrink:0}}>
-                <span style={{fontSize:14,fontWeight:800,color:P.purple,fontFamily:'monospace'}}>{lead.score}</span>
+                <span style={{fontSize:14,fontWeight:800,color:P.purple,fontFamily:'monospace'}}>{lead.score||0}</span>
                 <span style={{fontSize:10,color:P.muted}}>pts</span>
               </div>
             </div>
@@ -737,9 +774,9 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads}){
           <GlassCard>
             <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Leads por capital</p>
             {['1k-5k','5k-20k','20k-50k','50k+'].map(r=>{
-              const cnt=participants.filter(p=>p.investment_range===r).length
-              const dep=participants.filter(p=>p.investment_range===r&&p.deposit_confirmed).length
-              return <div key={r} style={{marginBottom:12}}>
+              const cnt=leads.filter(l=>l.investment_range===r).length
+              const dep=leads.filter(l=>l.investment_range===r&&l.deposit_confirmed).length
+return <div key={r} style={{marginBottom:12}}>
                 <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}>
                   <span style={{fontSize:12,color:P.textSub}}>{r}</span>
                   <span style={{fontSize:12,color:P.muted}}>{dep}/{cnt}</span>
@@ -840,6 +877,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads}){
     </Modal>}
   </div>
 }
+
 
 // ─── ADMIN CAMPAÑAS ───────────────────────────────────────────────────────────
 function AdminCampaigns({campaigns,setCampaigns,user}){
@@ -1671,7 +1709,7 @@ export default function App(){
   // ── Modules ───────────────────────────────────────────────────────────────
   const campMods={}
   campaigns.forEach(camp=>{
-    campMods['camp_'+camp.id]=<CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads}/>
+    campMods['camp_'+camp.id]=<CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
   })
 
   const mods={
