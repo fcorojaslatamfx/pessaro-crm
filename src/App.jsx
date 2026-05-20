@@ -33,6 +33,7 @@ const TEMPLATES=[
   {id:'invitacion_tradeview',label:'Invitación Tradeview',  color:'#3498db',desc:'Apertura cuenta Tradeview'},
   {id:'deposito_confirmado', label:'Depósito confirmado',   color:P.green,  desc:'Confirmación con acceso al portal'},
   {id:'informe_trimestral',  label:'Informe trimestral',    color:'#f0a500',desc:'Resultados Q1 2026 con métricas'},
+  {id:'accesos_crm',         label:'Accesos CRM',           color:'#2563eb',desc:'Entrega de credenciales provisionales al equipo'},
   {id:'personalizado',       label:'Personalizado',         color:P.muted,  desc:'Asunto y cuerpo libres'},
 ]
 
@@ -358,6 +359,7 @@ function Contacts({user,isSuperAdmin}){
     <SHdr title={isSuperAdmin?'Todos los Contactos':'Mis Contactos'}
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
       action={<div style={{display:'flex',gap:8}}>
+        <Btn variant="ghost" onClick={()=>{setLoading(true);load()}} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
         {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
           <Btn variant="ghost" onClick={()=>exportContactsCSV(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ CSV</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsExcel(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ Excel</Btn>
@@ -956,52 +958,7 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
   const[saving,setSaving]=useState(false)
   const[form,setForm]=useState({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
   const[err,setErr]=useState({})
-  const[pendingCamps,setPendingCamps]=useState([])
-  const[loadingPending,setLoadingPending]=useState(true)
-  const[allCamps,setAllCamps]=useState([])
-  const[loadingAll,setLoadingAll]=useState(true)
-  const[rejectModal,setRejectModal]=useState(null)
-  const[rejectNote,setRejectNote]=useState('')
-  const[adminTab,setAdminTab]=useState('activas')
-
-  const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted,pendiente_aprobacion:P.orange,rechazada:P.red,borrador:P.muted}
-
-  // Cargar TODAS las campañas aprobadas (activa + pausada + cerrada + legacy sin approval_status)
-  const loadAll=async()=>{
-    setLoadingAll(true)
-    try{
-      const{data}=await supabase.from('campaigns')
-        .select('*')
-        .or('approval_status.eq.aprobada,approval_status.is.null')
-        .order('created_at',{ascending:false})
-      setAllCamps(data||[])
-      setCampaigns((data||[]).filter(c=>c.status==='activa'))
-    }catch(e){console.error('loadAll:',e)}
-    finally{setLoadingAll(false)}
-  }
-
-  // Cargar campañas pendientes de aprobacion
-  const loadPending=async()=>{
-    setLoadingPending(true)
-    try{
-      const{data}=await supabase.from('campaigns').select('*').eq('approval_status','pendiente_aprobacion').order('created_at',{ascending:false})
-      setPendingCamps(data||[])
-    }catch(e){console.error('loadPending:',e)}
-    finally{setLoadingPending(false)}
-  }
-  useEffect(()=>{loadAll();loadPending()},[])
-
-  const updateAllCamps=(id,updates)=>{
-    setAllCamps(p=>p.map(c=>c.id===id?{...c,...updates}:c))
-    setCampaigns(prev=>{
-      const updated=prev.map(c=>c.id===id?{...c,...updates}:c)
-      if(updates.status==='activa'){
-        const exists=prev.find(c=>c.id===id)
-        if(!exists) return [...prev,{...allCamps.find(c=>c.id===id)||{},...updates}]
-      }
-      return updated.filter(c=>c.status==='activa')
-    })
-  }
+  const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted}
 
   const validate=()=>{
     const e={}
@@ -1014,19 +971,10 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
   const create=async()=>{
     if(!validate())return
     setSaving(true)
-    const{data,error}=await supabase.from('campaigns').insert({
-      ...form,
-      total_spots:Number(form.total_spots)||50,
-      created_by:user.id,
-      approval_status:'aprobada',
-      approved_by:user.id,
-      approved_at:new Date().toISOString(),
-      published_at:new Date().toISOString(),
-    }).select().single()
+    const{data,error}=await supabase.from('campaigns').insert({...form,total_spots:Number(form.total_spots)||50,created_by:user.id}).select().single()
     setSaving(false)
     if(error){setErr({slug:error.message});return}
-    setAllCamps(p=>[data,...p])
-    if(data.status==='activa') setCampaigns(p=>[...p,data])
+    setCampaigns(p=>[...p,data])
     setShowNew(false)
     setForm({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
     setErr({})
@@ -1034,64 +982,19 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
 
   const updateStatus=async(id,status)=>{
     await supabase.from('campaigns').update({status}).eq('id',id)
-    updateAllCamps(id,{status})
+    setCampaigns(p=>p.map(c=>c.id===id?{...c,status}:c))
   }
-
-  const approve=async(camp)=>{
-    const now=new Date().toISOString()
-    await supabase.from('campaigns').update({
-      approval_status:'aprobada',
-      approved_by:user.id,
-      approved_at:now,
-      published_at:now,
-      status:'activa',
-    }).eq('id',camp.id)
-    const approved={...camp,approval_status:'aprobada',status:'activa',approved_at:now,published_at:now}
-    setPendingCamps(p=>p.filter(c=>c.id!==camp.id))
-    setAllCamps(p=>[approved,...p])
-    setCampaigns(p=>[...p,approved])
-  }
-
-  const reject=async()=>{
-    if(!rejectModal)return
-    await supabase.from('campaigns').update({
-      approval_status:'rechazada',
-      rejection_notes:rejectNote||'Rechazada por super admin',
-      status:'pausada',
-    }).eq('id',rejectModal.id)
-    setPendingCamps(p=>p.filter(c=>c.id!==rejectModal.id))
-    setRejectModal(null);setRejectNote('')
-  }
-
-  const pendingCount=pendingCamps.length
 
   return <div>
-    <SHdr title="Gestionar Campañas" sub="Crea, aprueba y administra campañas · solo super admin"
+    <SHdr title="Gestionar Campañas" sub="Crea y administra campañas · solo super admin"
       action={<Btn onClick={()=>setShowNew(true)}>+ Nueva campaña</Btn>}/>
-
-    {/* Tabs */}
-    <div style={{display:'flex',gap:8,marginBottom:20}}>
-      {[['activas','🚀 Activas'],['pendientes',`⏳ Por aprobar${pendingCount>0?` (${pendingCount})`:''}`]].map(([id,label])=>(
-        <button key={id} onClick={()=>setAdminTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
-          background:adminTab===id?(id==='pendientes'&&pendingCount>0?P.orangeDim:P.purpleDim):'rgba(255,255,255,0.04)',
-          color:adminTab===id?(id==='pendientes'&&pendingCount>0?P.orange:P.purple):P.muted,
-          border:`1px solid ${adminTab===id?(id==='pendientes'&&pendingCount>0?P.orange+'55':P.purpleBorder):P.border}`,
-          fontWeight:adminTab===id?600:400,position:'relative'}}>
-          {label}
-          {id==='pendientes'&&pendingCount>0&&adminTab!=='pendientes'&&<span style={{position:'absolute',top:-4,right:-4,width:16,height:16,borderRadius:'50%',background:P.orange,color:'#000',fontSize:9,fontWeight:800,display:'flex',alignItems:'center',justifyContent:'center'}}>{pendingCount}</span>}
-        </button>
-      ))}
-    </div>
-
-    {/* TAB: ACTIVAS */}
-    {adminTab==='activas'&&<div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {loadingAll?<div style={{padding:40,textAlign:'center',color:'#636e72',fontSize:13}}>Cargando campañas...</div>:allCamps.length===0?<div style={{background:'rgba(255,255,255,0.02)',border:'1px solid rgba(255,255,255,0.07)',borderRadius:14,padding:20}}><p style={{color:'#636e72',fontSize:14,textAlign:'center',margin:0}}>No hay campañas. Crea la primera.</p></div>:allCamps.map(c=>(
+    <div style={{display:'flex',flexDirection:'column',gap:14}}>
+      {campaigns.map(c=>(
         <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
           <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
             <div>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                 <Badge label={c.status} color={STATUS_C[c.status]}/>
-                {c.approval_status&&c.approval_status!=='aprobada'&&<Badge label={c.approval_status} color={STATUS_C[c.approval_status]||P.muted}/>}
                 <span style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{c.slug}</span>
               </div>
               <h3 style={{margin:'0 0 4px',fontSize:16,fontWeight:700,color:P.text}}>{c.name}</h3>
@@ -1121,50 +1024,9 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
           </div>
         </GlassCard>
       ))}
-    </div>}
+      {campaigns.length===0&&<GlassCard><p style={{color:P.muted,fontSize:14,textAlign:'center',padding:'20px 0',margin:0}}>No hay campañas. Crea la primera.</p></GlassCard>}
+    </div>
 
-    {/* TAB: POR APROBAR */}
-    {adminTab==='pendientes'&&<div>
-      {loadingPending?<Spinner/>:pendingCamps.length===0?(
-        <GlassCard><div style={{textAlign:'center',padding:'28px 0'}}>
-          <div style={{fontSize:28,marginBottom:10}}>✓</div>
-          <p style={{color:P.green,fontSize:14,fontWeight:600,margin:0}}>Sin campañas pendientes de aprobación</p>
-          <p style={{color:P.muted,fontSize:12,margin:'6px 0 0'}}>Todas las campañas han sido revisadas</p>
-        </div></GlassCard>
-      ):(
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          {pendingCamps.map(c=>(
-            <GlassCard key={c.id} style={{borderLeft:`3px solid ${P.orange}`}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
-                <div style={{flex:1}}>
-                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
-                    <Badge label="pendiente aprobación" color={P.orange}/>
-                    <span style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{c.slug}</span>
-                  </div>
-                  <h3 style={{margin:'0 0 6px',fontSize:16,fontWeight:700,color:P.text}}>{c.name}</h3>
-                  {c.description&&<p style={{margin:'0 0 10px',fontSize:13,color:P.muted}}>{c.description}</p>}
-                  <div style={{display:'flex',gap:14,flexWrap:'wrap',marginBottom:8}}>
-                    {[['Cupos',c.total_spots],['Broker',c.broker||'—'],['Retorno',c.historical_return||'—'],['Capital',c.target_capital||'—']].map(([k,v])=>(
-                      <span key={k} style={{fontSize:11,color:P.muted}}><strong style={{color:P.textSub}}>{k}:</strong> {v}</span>
-                    ))}
-                  </div>
-                  {c.landing_config&&Object.keys(c.landing_config).length>0&&<div style={{padding:'8px 12px',background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:8,marginTop:8}}>
-                    <p style={{fontSize:11,color:P.blue,margin:0,fontWeight:600}}>Config landing: {JSON.stringify(c.landing_config).slice(0,80)}…</p>
-                  </div>}
-                  <p style={{fontSize:11,color:P.muted,margin:'8px 0 0'}}>Enviada el {new Date(c.created_at).toLocaleDateString('es-CL')}</p>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',gap:8,minWidth:120}}>
-                  <Btn variant="green" onClick={()=>approve(c)} style={{justifyContent:'center'}}>✓ Aprobar</Btn>
-                  <Btn variant="danger" onClick={()=>{setRejectModal({id:c.id,name:c.name});setRejectNote('')}} style={{justifyContent:'center'}}>✕ Rechazar</Btn>
-                </div>
-              </div>
-            </GlassCard>
-          ))}
-        </div>
-      )}
-    </div>}
-
-    {/* Modal nueva campaña */}
     {showNew&&<Modal title="Nueva campaña" onClose={()=>setShowNew(false)} accent={P.green}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
@@ -1188,28 +1050,11 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
             style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:10,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:60,resize:'vertical',fontFamily:'inherit'}}/>
         </div>
         <div style={{padding:'8px 12px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}>
-          <p style={{fontSize:12,color:P.green,margin:0}}>✓ Como super admin, esta campaña se aprueba y publica directamente.</p>
+          <p style={{fontSize:12,color:P.green,margin:0}}>✓ Aparecerá automáticamente en el sidebar de todos los asesores.</p>
         </div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
           <Btn variant="ghost" onClick={()=>setShowNew(false)}>Cancelar</Btn>
-          <Btn onClick={create} disabled={saving}>{saving?'Creando...':'Crear y publicar'}</Btn>
-        </div>
-      </div>
-    </Modal>}
-
-    {/* Modal rechazo */}
-    {rejectModal&&<Modal title={`Rechazar: ${rejectModal.name}`} onClose={()=>setRejectModal(null)} accent={P.red}>
-      <div style={{display:'flex',flexDirection:'column',gap:14}}>
-        <div style={{padding:'10px 14px',background:P.redDim,border:`1px solid ${P.red}30`,borderRadius:8}}>
-          <p style={{fontSize:13,color:P.red,margin:0}}>La campaña volverá a estado <strong>rechazada</strong> y el advisor verá tu nota.</p>
-        </div>
-        <div><Lbl>Motivo de rechazo</Lbl>
-          <textarea value={rejectNote} onChange={e=>setRejectNote(e.target.value)} placeholder="Ej: Falta descripción del broker, ajustar retorno histórico..."
-            style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:10,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:80,resize:'vertical',fontFamily:'inherit'}}/>
-        </div>
-        <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
-          <Btn variant="ghost" onClick={()=>setRejectModal(null)}>Cancelar</Btn>
-          <Btn variant="danger" onClick={reject}>Confirmar rechazo</Btn>
+          <Btn onClick={create} disabled={saving}>{saving?'Creando...':'Crear campaña'}</Btn>
         </div>
       </div>
     </Modal>}
@@ -1867,7 +1712,6 @@ export default function App(){
   const[staffProfile,setSP]   =useState(null)
   const[campaigns,setCampaigns]=useState([])
   const[loading,setLoading]   =useState(true)
-  const[pendingApprovalCount,setPendingApprovalCount]=useState(0)
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -1916,17 +1760,14 @@ export default function App(){
         setLeads(r2.data||[])
         setSP(r3.data||null)
         setCampaigns(r4.data||[])
-        // Fetch pending approval count for super admin badge
-        if(isSuperAdmin){
-          try{
-            const{count}=await supabase.from('campaigns').select('id',{count:'exact',head:true}).eq('approval_status','pendiente_aprobacion')
-            setPendingApprovalCount(count||0)
-          }catch(e){console.warn('pending count:',e)}
-        }
       }catch(e){console.error('data load:',e)}
       finally{setLoading(false)}
     }
     load()
+    // Recargar al volver a la pestaña (detecta datos insertados externamente)
+    const onVisible = () => { if(document.visibilityState === 'visible') load() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
   },[user?.id])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
@@ -1969,7 +1810,7 @@ export default function App(){
     {id:'emails',   label:'Emails',    icon:'✉'},
     {id:'reports',  label:'Reportes',  icon:'▦'},
     {id:'equipo',label:'Equipo',icon:'👥'},
-    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas',icon:'⚙',color:P.orange,badge:pendingApprovalCount>0?pendingApprovalCount:null}]:[]),
+    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas',icon:'⚙',color:P.orange}]:[]),
   ]
 
   // Ensure current module exists, fallback to dashboard
@@ -1993,8 +1834,7 @@ export default function App(){
               fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
             <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7}}>{item.icon}</span>
             <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>
-            {item.badge&&<span style={{background:P.orange,color:'#000',borderRadius:10,fontSize:9,fontWeight:800,padding:'1px 5px',minWidth:16,textAlign:'center'}}>{item.badge}</span>}
-            {active&&!item.badge&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
+            {active&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
           </button>
         })}
       </nav>
