@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Component } from 'react'
+import { useState, useEffect, useCallback, Component, useMemo } from 'react'
 import { supabase } from './lib/supabase.js'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 
@@ -233,6 +233,7 @@ function Contacts({user,isSuperAdmin}){
 
   const load=useCallback(async()=>{
     setLoading(true)
+    const timeout=setTimeout(()=>setLoading(false),10000) // safety timeout
     try{
       if(isSuperAdmin){
         // Super admin: crm_contacts + contact_submissions fusionados
@@ -255,10 +256,14 @@ function Contacts({user,isSuperAdmin}){
         setContacts(data||[])
       }
     }catch(e){console.error('contacts load:',e)}
-    finally{setLoading(false)}
+    finally{clearTimeout(timeout);setLoading(false)}
   },[user.id,isSuperAdmin])
 
-  useEffect(()=>{load()},[load])
+  useEffect(()=>{
+    // Small delay to let isSuperAdmin resolve before first load
+    const t=setTimeout(()=>load(),50)
+    return()=>clearTimeout(t)
+  },[load])
 
   const filtered=contacts.filter(c=>{
     const ms=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
@@ -376,7 +381,7 @@ function Contacts({user,isSuperAdmin}){
     <SHdr title={isSuperAdmin?'Todos los Contactos':'Mis Contactos'}
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
       action={<div style={{display:'flex',gap:8}}>
-        <Btn variant="ghost" onClick={()=>{setLoading(true);load()}} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
+        <Btn variant="ghost" onClick={()=>load()} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
         {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
           <Btn variant="ghost" onClick={()=>exportContactsCSV(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ CSV</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsExcel(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ Excel</Btn>
@@ -676,6 +681,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
 
   const load=useCallback(async()=>{
     setLoading(true)
+    const timeout=setTimeout(()=>setLoading(false),8000) // safety timeout
     try{
       const[{data:myC},{data:t}]=await Promise.all([
         supabase.from('crm_contacts').select('id,full_name,email,phone').eq('user_id',user.id),
@@ -684,7 +690,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
       setMyContacts(myC||[])
       setTiers(t||[])
     }catch(e){console.error('campaign load:',e)}
-    finally{setLoading(false)}
+    finally{clearTimeout(timeout);setLoading(false)}
   },[user.id])
 
   useEffect(()=>{load()},[load])
@@ -1999,6 +2005,9 @@ export default function App(){
   // Ensure current module exists, fallback to dashboard
   const currentMod=validMods.includes(module)?module:'dashboard'
 
+  // Memoize active module to prevent remounting on every App render
+  const activeModule=useMemo(()=>renderModule(currentMod),[currentMod,contacts,leads,staffProfile,campaigns,isSuperAdmin,isBroker,user])
+
   return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     {/* Sidebar */}
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
@@ -2041,7 +2050,7 @@ export default function App(){
     </div>
     {/* Main */}
     <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:renderModule(currentMod)}</ErrorBoundary>
+      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:activeModule}</ErrorBoundary>
     </div>
   </div>
 }
