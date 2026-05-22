@@ -1233,7 +1233,7 @@ function Emails({contacts,leads,staffProfile,user}){
           <div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:8,height:8,borderRadius:'50%',background:selectedTpl.color}}/><h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>Redactar email</h3></div>
             {staffProfile&&<p style={{margin:'2px 0 0',fontSize:11,color:P.purple}}>Enviando como: <strong>{staffProfile.pessaro_email}</strong></p>}
           </div>
-          <button onClick={()=>setShowModal(false);setRecipientSearch('');setRecipientOpen(false)}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
+          <button onClick={()=>{setShowModal(false);setRecipientSearch('');setRecipientOpen(false)}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
         </div>
         <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
           <div>
