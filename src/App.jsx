@@ -1744,10 +1744,149 @@ function Equipo({user,isSuperAdmin}){
 }
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
+
+// ─── BROKER VIEW ─────────────────────────────────────────────────────────────
+function BrokerView({user,campaigns,leads}){
+  const[assignments,setAssignments]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[tab,setTab]=useState('campanas')
+
+  useEffect(()=>{
+    const load=async()=>{
+      setLoading(true)
+      try{
+        const{data}=await supabase.from('broker_assignments')
+          .select('*,campaigns(id,name),crm_staff_profiles!advisor_user_id(display_name,pessaro_email)')
+          .eq('broker_user_id',user.id)
+        setAssignments(data||[])
+      }catch(e){console.error('broker load:',e)}
+      finally{setLoading(false)}
+    }
+    load()
+  },[user.id])
+
+  const assignedCampaignIds=new Set(assignments.filter(a=>a.campaign_id).map(a=>a.campaign_id))
+  const assignedAdvisorIds=new Set(assignments.filter(a=>a.advisor_user_id).map(a=>a.advisor_user_id))
+  const myCampaigns=campaigns.filter(c=>assignedCampaignIds.has(c.id))
+  const myLeads=leads.filter(l=>assignedAdvisorIds.has(l.advisor_assigned)||assignedCampaignIds.size===0)
+
+  const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
+  const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
+
+  return <div style={{minHeight:'100vh',background:P.bg,padding:'28px 32px'}}>
+    <div style={{marginBottom:24,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+      <div>
+        <h1 style={{margin:0,fontSize:22,fontWeight:800,color:P.text}}>Panel Broker</h1>
+        <p style={{margin:'4px 0 0',fontSize:13,color:P.muted}}>Vista supervisora — Pessaro Capital</p>
+      </div>
+      <div style={{padding:'4px 12px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
+        <span style={{fontSize:11,color:P.orange,fontWeight:700}}>⬡ Broker</span>
+      </div>
+    </div>
+
+    {/* KPIs */}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12,marginBottom:24}}>
+      {[
+        ['Campañas asignadas', myCampaigns.length, P.purple],
+        ['Asesores supervisados', assignedAdvisorIds.size, P.blue],
+        ['Leads totales', myLeads.length, P.green],
+        ['Con depósito', myLeads.filter(l=>l.deposit_confirmed).length, P.orange],
+      ].map(([label,val,color])=>(
+        <div key={label} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'16px 18px'}}>
+          <div style={{fontSize:22,fontWeight:800,color}}>{val}</div>
+          <div style={{fontSize:12,color:P.muted,marginTop:4}}>{label}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[['campanas','🚀 Campañas'],['leads','👥 Leads'],['asesores','🧑‍💼 Asesores']].map(([id,label])=>(
+        <button key={id} onClick={()=>setTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
+          background:tab===id?P.purpleDim:'rgba(255,255,255,0.04)',color:tab===id?P.purple:P.muted,
+          border:`1px solid ${tab===id?P.purpleBorder:P.border}`,fontWeight:tab===id?600:400}}>{label}</button>
+      ))}
+    </div>
+
+    {loading?<div style={{textAlign:'center',padding:48,color:P.muted}}>Cargando...</div>:(<>
+
+      {tab==='campanas'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14}}>
+        {myCampaigns.length===0?<p style={{color:P.muted,fontSize:13}}>Sin campañas asignadas aún.</p>:
+        myCampaigns.map(c=>{
+          const campLeads=myLeads.filter(l=>l.team||true) // all for now
+          const deposited=campLeads.filter(l=>l.deposit_confirmed).length
+          return <div key={c.id} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:18}}>
+            <div style={{fontWeight:700,color:P.text,marginBottom:6}}>{c.name}</div>
+            <div style={{fontSize:12,color:P.muted,marginBottom:12}}>Estado: <span style={{color:P.green}}>{c.status}</span></div>
+            <div style={{display:'flex',gap:8,fontSize:12}}>
+              <div style={{flex:1,background:P.purpleDim,borderRadius:8,padding:'8px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.purple}}>{campLeads.length}</div>
+                <div style={{color:P.muted}}>Leads</div>
+              </div>
+              <div style={{flex:1,background:P.greenDim,borderRadius:8,padding:'8px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.green}}>{deposited}</div>
+                <div style={{color:P.muted}}>Depósitos</div>
+              </div>
+            </div>
+          </div>
+        })}
+      </div>}
+
+      {tab==='leads'&&<div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+            {['Nombre','Email','Etapa','Asesor','Depósito'].map(h=><th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',fontWeight:600}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {myLeads.slice(0,50).map((l,i)=><tr key={l.id} style={{borderBottom:i<myLeads.length-1?`1px solid ${P.border}`:'none'}}>
+              <td style={{padding:'10px 16px',fontSize:13,color:P.text,fontWeight:600}}>{l.full_name||'—'}</td>
+              <td style={{padding:'10px 16px',fontSize:12,color:P.muted,fontFamily:'monospace'}}>{l.email}</td>
+              <td style={{padding:'10px 16px'}}><span style={{fontSize:11,padding:'3px 8px',borderRadius:5,background:(etapaColor[l.etapa]||P.muted)+'20',color:etapaColor[l.etapa]||P.muted,fontWeight:600}}>{etapaLabel[l.etapa]||'—'}</span></td>
+              <td style={{padding:'10px 16px',fontSize:12,color:P.muted}}>{l.advisor_assigned||'—'}</td>
+              <td style={{padding:'10px 16px'}}>{l.deposit_confirmed?<span style={{color:P.green,fontSize:12,fontWeight:700}}>✓ ${l.deposit_amount_usd||0}</span>:<span style={{color:P.muted,fontSize:12}}>—</span>}</td>
+            </tr>)}
+          </tbody>
+        </table>
+        {myLeads.length===0&&<p style={{textAlign:'center',padding:32,color:P.muted,fontSize:13}}>Sin leads asignados</p>}
+      </div>}
+
+      {tab==='asesores'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:14}}>
+        {assignments.filter(a=>a.advisor_user_id).length===0?<p style={{color:P.muted,fontSize:13}}>Sin asesores asignados aún.</p>:
+        assignments.filter(a=>a.advisor_user_id).map(a=>{
+          const advisorLeads=myLeads.filter(l=>l.advisor_assigned===a.advisor_user_id)
+          const profile=a.crm_staff_profiles
+          return <div key={a.id} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:18}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+              <div style={{width:34,height:34,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:700,color:P.purple}}>
+                {(profile?.display_name||'?')[0].toUpperCase()}
+              </div>
+              <div>
+                <div style={{fontWeight:700,color:P.text,fontSize:13}}>{profile?.display_name||'Asesor'}</div>
+                <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{profile?.pessaro_email||'—'}</div>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,fontSize:12}}>
+              <div style={{flex:1,background:P.purpleDim,borderRadius:8,padding:'7px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.purple}}>{advisorLeads.length}</div>
+                <div style={{color:P.muted,fontSize:11}}>Leads</div>
+              </div>
+              <div style={{flex:1,background:P.greenDim,borderRadius:8,padding:'7px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.green}}>{advisorLeads.filter(l=>l.deposit_confirmed).length}</div>
+                <div style={{color:P.muted,fontSize:11}}>Depósitos</div>
+              </div>
+            </div>
+          </div>
+        })}
+      </div>}
+    </>)}
+  </div>
+}
+
 export default function App(){
   const[user,setUser]         =useState(null)
   const[checking,setChecking] =useState(true)
   const[isSuperAdmin,setSA]   =useState(false)
+  const[isBroker,setIsBroker] =useState(false)
   const[module,setModule]     =useState('dashboard')
   const[contacts,setContacts] =useState([])
   const[leads,setLeads]       =useState([])
@@ -1762,10 +1901,12 @@ export default function App(){
       try{
         const{data}=await supabase.rpc('get_my_role')
         setSA(data==='super_admin')
+        setIsBroker(data==='broker')
       }catch(e){
         console.warn('get_my_role fallback:',e)
         // Fallback: check user_metadata directly
         setSA(u?.user_metadata?.role==='super_admin'||u?.app_metadata?.role==='super_admin')
+        setIsBroker(u?.user_metadata?.role==='broker'||u?.app_metadata?.role==='broker')
       }
     }
     supabase.auth.getSession().then(async({data:{session}})=>{
@@ -1822,24 +1963,28 @@ export default function App(){
   const logout=async()=>{await supabase.auth.signOut();setUser(null);setSA(false)}
 
   // ── Modules ───────────────────────────────────────────────────────────────
-  const campMods={}
-  campaigns.forEach(camp=>{
-    campMods['camp_'+camp.id]=<CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
-  })
+  // campMods removed — lazy rendering via renderModule()
 
-  const mods={
-    dashboard: <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>,
-    contacts:  <Contacts user={user} isSuperAdmin={isSuperAdmin}/>,
-    pipeline:  <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>,
-    tasks:     <Tasks contacts={contacts} leads={leads}/>,
-    emails:    <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,
-    reports:   <Reports contacts={contacts} leads={leads}/>,
-    equipo:<Equipo user={user} isSuperAdmin={isSuperAdmin}/>,
-    ...(isSuperAdmin?{admin_campaigns:<AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>}:{}),
-    ...campMods,
+  const renderModule=(mod)=>{
+    if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads}/>
+    if(mod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+    if(mod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
+    if(mod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+    if(mod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
+    if(mod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>
+    if(mod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+    if(mod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin}/>
+    if(mod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+    const camp=campaigns.find(c=>'camp_'+c.id===mod)
+    if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
+    return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
   }
 
-  const NAV=[
+  const validMods=isBroker?['broker']:['dashboard','contacts','pipeline','tasks','emails','reports','equipo',
+    ...(isSuperAdmin?['admin_campaigns']:[]),
+    ...campaigns.map(c=>'camp_'+c.id)]
+
+  const NAV=isBroker?[]:[
     {id:'dashboard',label:'Dashboard',icon:'⊞'},
     {id:'contacts', label:'Contactos', icon:'📋'},
     {id:'pipeline', label:'Pipeline',  icon:'◈'},
@@ -1852,7 +1997,7 @@ export default function App(){
   ]
 
   // Ensure current module exists, fallback to dashboard
-  const currentMod=mods[module]?module:'dashboard'
+  const currentMod=validMods.includes(module)?module:'dashboard'
 
   return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     {/* Sidebar */}
@@ -1896,7 +2041,7 @@ export default function App(){
     </div>
     {/* Main */}
     <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:mods[currentMod]}</ErrorBoundary>
+      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:renderModule(currentMod)}</ErrorBoundary>
     </div>
   </div>
 }
