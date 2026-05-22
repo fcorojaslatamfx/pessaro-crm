@@ -1142,6 +1142,8 @@ function Emails({contacts,leads,staffProfile,user}){
   const[sending,setSending]=useState(false)
   const[sent,setSent]=useState(null)
   const[form,setForm]=useState({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:'',teams_url:''})
+  const[recipientSearch,setRecipientSearch]=useState('')
+  const[recipientOpen,setRecipientOpen]=useState(false)
   const[files,setFiles]=useState([])
   const[dragOver,setDragOver]=useState(false)
 
@@ -1184,7 +1186,7 @@ function Emails({contacts,leads,staffProfile,user}){
         body:JSON.stringify({to:selectedRecipient.email,name:selectedRecipient.name,template_id:form.template,custom_subject:form.custom_subject,extra_text:form.extra_text,teams_url:form.teams_url,attachments:files.map(f=>({filename:f.filename,content:f.content}))})
       })
       const data=await res.json()
-      if(data.ok){setSent({ok:true,msg:`✓ Enviado a ${selectedRecipient.email} · desde ${staffProfile?.pessaro_email||'info@pessaro.cl'}`});setForm({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:'',teams_url:''});setFiles([]);loadHistory()}
+      if(data.ok){setSent({ok:true,msg:`✓ Enviado a ${selectedRecipient.email} · desde ${staffProfile?.pessaro_email||'info@pessaro.cl'}`});setForm({template:'bienvenida_lead',source_id:'',extra_text:'',custom_subject:'',teams_url:''});setRecipientSearch('');setRecipientOpen(false);setFiles([]);loadHistory()}
       else setSent({ok:false,msg:data.error||'Error al enviar'})
     }catch(e){setSent({ok:false,msg:e.message})}
     setSending(false)
@@ -1218,7 +1220,7 @@ function Emails({contacts,leads,staffProfile,user}){
       {emails.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin emails enviados</div>}
     </GlassCard>)}
     {tab==='plantillas'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:14}}>
-      {TEMPLATES.map(t=><GlassCard key={t.id} style={{borderLeft:`3px solid ${t.color}`}}>
+      {TEMPLATES.filter(t=>t.id!=='accesos_crm'||isSuperAdmin).map(t=><GlassCard key={t.id} style={{borderLeft:`3px solid ${t.color}`}}>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}><div style={{width:8,height:8,borderRadius:'50%',background:t.color}}/><span style={{fontSize:14,fontWeight:600,color:P.text}}>{t.label}</span></div>
         <p style={{fontSize:12,color:P.muted,margin:'0 0 12px'}}>{t.desc}</p>
         <button onClick={()=>openModal(t.id)} style={{width:'100%',padding:'7px',borderRadius:6,fontSize:12,cursor:'pointer',background:t.color+'18',color:t.color,border:`1px solid ${t.color}30`,fontWeight:600}}>Usar plantilla →</button>
@@ -1231,31 +1233,54 @@ function Emails({contacts,leads,staffProfile,user}){
           <div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:8,height:8,borderRadius:'50%',background:selectedTpl.color}}/><h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>Redactar email</h3></div>
             {staffProfile&&<p style={{margin:'2px 0 0',fontSize:11,color:P.purple}}>Enviando como: <strong>{staffProfile.pessaro_email}</strong></p>}
           </div>
-          <button onClick={()=>setShowModal(false)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
+          <button onClick={()=>setShowModal(false);setRecipientSearch('');setRecipientOpen(false)}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
         </div>
         <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
           <div>
             <Lbl>Plantilla</Lbl>
             <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-              {TEMPLATES.map(t=><button key={t.id} onClick={()=>setForm(p=>({...p,template:t.id}))}
+              {TEMPLATES.filter(t=>t.id!=='accesos_crm'||isSuperAdmin).map(t=><button key={t.id} onClick={()=>setForm(p=>({...p,template:t.id}))}
                 style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,background:form.template===t.id?t.color+'25':'rgba(255,255,255,0.04)',color:form.template===t.id?t.color:P.muted,border:`1px solid ${form.template===t.id?t.color+'60':P.border}`}}>{t.label}</button>)}
             </div>
           </div>
-          <div>
+          <div style={{position:'relative'}}>
             <Lbl>Destinatario *</Lbl>
-            <select value={form.source_id} onChange={e=>setForm(p=>({...p,source_id:e.target.value}))}
-              style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit'}}>
-              <option value="">Seleccionar contacto o lead...</option>
-              <optgroup label="── Contactos"><>{contacts.slice(0,100).map(c=><option key={c.id} value={c.id}>{c.full_name||c.email} · {c.email}</option>)}</></optgroup>
-              <optgroup label="── Leads pipeline"><>{leads.filter(l=>!contacts.find(c=>c.email===l.email)).map(l=><option key={l.id} value={l.id}>{l.full_name||l.email} · {l.email}</option>)}</></optgroup>
-            </select>
-            {selectedRecipient&&<p style={{fontSize:11,color:P.muted,marginTop:4,margin:'4px 0 0',fontFamily:'monospace'}}>{selectedRecipient.email}</p>}
+            <input value={recipientSearch} onChange={e=>{setRecipientSearch(e.target.value);setForm(p=>({...p,source_id:''}));setRecipientOpen(true)}}
+              onFocus={()=>setRecipientOpen(true)}
+              placeholder="Buscar contacto o lead..." autoComplete="off"
+              style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${selectedRecipient?P.purple:P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',boxSizing:'border-box'}}/>
+            {selectedRecipient&&<p style={{fontSize:11,color:P.purple,marginTop:4,margin:'4px 0 0',fontFamily:'monospace'}}>✓ {selectedRecipient.email}</p>}
+            {recipientOpen&&recipientSearch.length>0&&(()=>{
+              const q=recipientSearch.toLowerCase()
+              const hits=allRecipients.filter(r=>(r.name||'').toLowerCase().includes(q)||(r.email||'').toLowerCase().includes(q)).slice(0,12)
+              return hits.length>0?<div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:999,background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,boxShadow:'0 8px 24px rgba(0,0,0,0.5)',maxHeight:220,overflowY:'auto',marginTop:2}}>
+                {hits.map(r=><div key={r.id} onMouseDown={e=>{e.preventDefault();setForm(p=>({...p,source_id:r.id}));setRecipientSearch(r.name||r.email);setRecipientOpen(false)}}
+                  style={{padding:'9px 14px',cursor:'pointer',borderBottom:`1px solid ${P.border}`,display:'flex',flexDirection:'column',gap:2}}
+                  onMouseEnter={e=>e.currentTarget.style.background='rgba(108,92,231,0.12)'}
+                  onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                  <span style={{fontSize:13,fontWeight:600,color:P.text}}>{r.name||r.email}</span>
+                  <span style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{r.email} · <span style={{color:r.type==='contact'?P.blue:P.orange}}>{r.type==='contact'?'contacto':'lead'}</span></span>
+                </div>)}
+              </div>:null
+            })()}
           </div>
           {needsSubject&&<div><Lbl>Asunto *</Lbl><Input value={form.custom_subject} onChange={v=>setForm(p=>({...p,custom_subject:v}))} placeholder="Asunto del email"/></div>}
           <div>
-            <Lbl>{form.template==='personalizado'?'Mensaje *':'Texto adicional (opcional)'}</Lbl>
-            <textarea value={form.extra_text} onChange={e=>setForm(p=>({...p,extra_text:e.target.value}))} placeholder={form.template==='personalizado'?'Escribe el mensaje completo...':'Añade un párrafo personalizado que se insertará en la plantilla...'}
-              style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:12,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:100,resize:'vertical',fontFamily:'inherit'}}/>
+            <Lbl>{form.template==='personalizado'?'Mensaje *':form.template==='accesos_crm'?'Contraseña provisional *':'Texto adicional (opcional)'}</Lbl>
+            {form.template==='accesos_crm'&&<div style={{display:'flex',gap:8,marginBottom:8,alignItems:'center'}}>
+              <div style={{flex:1,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'7px 12px',fontFamily:'monospace',fontSize:13,color:form.extra_text?P.text:P.muted,letterSpacing:'0.08em',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{form.extra_text||'Haz clic en Generar →'}</div>
+              <button onClick={()=>{
+                const upper='ABCDEFGHJKLMNPQRSTUVWXYZ',lower='abcdefghjkmnpqrstuvwxyz',digits='23456789',specials='@#!&$';
+                const pick=(s)=>s[Math.floor(Math.random()*s.length)];
+                const pool=upper+lower+digits+specials;
+                let pwd=[pick(upper),pick(upper),pick(lower),pick(lower),pick(digits),pick(digits),pick(specials),...Array.from({length:5},()=>pick(pool))];
+                for(let i=pwd.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[pwd[i],pwd[j]]=[pwd[j],pwd[i]]}
+                setForm(p=>({...p,extra_text:pwd.join('')}))
+              }} style={{padding:'7px 14px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(37,99,235,0.15)',color:'#60a5fa',border:'1px solid rgba(37,99,235,0.3)',fontWeight:600,whiteSpace:'nowrap'}}>⚡ Generar</button>
+              {form.extra_text&&<button onClick={()=>navigator.clipboard.writeText(form.extra_text).then(()=>alert('Contraseña copiada al portapapeles'))} style={{padding:'7px 10px',borderRadius:8,fontSize:12,cursor:'pointer',background:'rgba(255,255,255,0.04)',color:P.muted,border:`1px solid ${P.border}`}}>⎘</button>}
+            </div>}
+            <textarea value={form.extra_text} onChange={e=>setForm(p=>({...p,extra_text:e.target.value}))} placeholder={form.template==='personalizado'?'Escribe el mensaje completo...':form.template==='accesos_crm'?'O escribe una contraseña manualmente...':'Añade un párrafo personalizado que se insertará en la plantilla...'}
+              style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${form.template==='accesos_crm'&&!form.extra_text?P.red:P.border}`,borderRadius:8,padding:12,color:P.text,fontSize:13,outline:'none',width:'100%',minHeight:form.template==='accesos_crm'?52:100,resize:'vertical',fontFamily:form.template==='accesos_crm'?'monospace':'inherit',letterSpacing:form.template==='accesos_crm'?'0.08em':'normal'}}/>
           </div>
           <div>
             <Lbl>Link reunión Teams (opcional)</Lbl>
