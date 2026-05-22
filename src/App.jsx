@@ -1806,10 +1806,6 @@ export default function App(){
       finally{setLoading(false)}
     }
     load()
-    // Recargar al volver a la pestaña (detecta datos insertados externamente)
-    const onVisible = () => { if(document.visibilityState === 'visible') load() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
   },[user?.id])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
@@ -1900,7 +1896,7 @@ export default function App(){
     </div>
     {/* Main */}
     <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      {loading&&currentMod==='dashboard'?<Spinner/>:mods[currentMod]}
+      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:mods[currentMod]}</ErrorBoundary>
     </div>
   </div>
 }
