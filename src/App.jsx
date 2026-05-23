@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Component, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, Component, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 
@@ -1967,21 +1967,6 @@ export default function App(){
   // ── Modules ───────────────────────────────────────────────────────────────
   // campMods removed — lazy rendering via renderModule()
 
-  const renderModule=(mod)=>{
-    if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads}/>
-    if(mod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
-    if(mod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
-    if(mod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
-    if(mod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
-    if(mod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>
-    if(mod==='reports')   return <Reports contacts={contacts} leads={leads}/>
-    if(mod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin}/>
-    if(mod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-    const camp=campaigns.find(c=>'camp_'+c.id===mod)
-    if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
-    return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
-  }
-
   const validMods=isBroker?['broker']:['dashboard','contacts','pipeline','tasks','emails','reports','equipo',
     ...(isSuperAdmin?['admin_campaigns']:[]),
     ...campaigns.map(c=>'camp_'+c.id)]
@@ -1998,11 +1983,7 @@ export default function App(){
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas',icon:'⚙',color:P.orange}]:[]),
   ]
 
-  // Ensure current module exists, fallback to dashboard
   const currentMod=validMods.includes(module)?module:'dashboard'
-
-  // Memoize active module to prevent remounting on every App render
-  const activeModule=useMemo(()=>renderModule(currentMod),[currentMod,isSuperAdmin,isBroker,campaigns,user?.id])
 
   return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     {/* Sidebar */}
@@ -2046,7 +2027,21 @@ export default function App(){
     </div>
     {/* Main */}
     <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      <ErrorBoundary key={currentMod}>{loading&&currentMod==='dashboard'?<Spinner/>:activeModule}</ErrorBoundary>
+      <ErrorBoundary key={currentMod}>{(()=>{
+        if(loading&&currentMod==='dashboard') return <Spinner/>
+        if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads}/>
+        if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+        if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
+        if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+        if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
+        if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>
+        if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+        if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin}/>
+        if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+        const camp=campaigns.find(c=>'camp_'+c.id===currentMod)
+        if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
+        return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+      })()}</ErrorBoundary>
     </div>
   </div>
 }
