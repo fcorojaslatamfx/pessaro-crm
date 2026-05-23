@@ -1747,6 +1747,184 @@ function Equipo({user,isSuperAdmin}){
 
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
+// ─── TEAM ADMIN (Super Admin only) ───────────────────────────────────────────
+// Gestiona equipos, asesores asignados y herramientas habilitadas por equipo
+function TeamAdmin({user}){
+  const[teams,setTeams]       =useState([])
+  const[modules,setModules]   =useState([])
+  const[teamTools,setTeamTools]=useState({}) // {team_id: [module_id,...]}
+  const[staff,setStaff]       =useState([])
+  const[loading,setLoading]   =useState(true)
+  const[selTeam,setSelTeam]   =useState(null)
+  const[showNewTeam,setShowNewTeam]=useState(false)
+  const[newTeamName,setNewTeamName]=useState('')
+  const[saving,setSaving]     =useState(false)
+  const[msg,setMsg]           =useState(null)
+
+  const load=useCallback(async()=>{
+    setLoading(true)
+    try{
+      const[{data:t},{data:m},{data:tt},{data:s}]=await Promise.all([
+        supabase.from('crm_teams').select('*').order('created_at'),
+        supabase.from('crm_modules').select('*').order('sort_order'),
+        supabase.from('team_tools').select('*'),
+        supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email,role,team_id').order('display_name'),
+      ])
+      setTeams(t||[])
+      setModules(m||[])
+      setStaff(s||[])
+      // Build map: {team_id: Set<module_id>}
+      const map={}
+      ;(tt||[]).forEach(r=>{
+        if(!map[r.team_id]) map[r.team_id]=new Set()
+        if(r.enabled) map[r.team_id].add(r.module_id)
+      })
+      setTeamTools(map)
+      if(!selTeam&&t?.length>0) setSelTeam(t[0].id)
+    }catch(e){console.error('TeamAdmin load:',e)}
+    finally{setLoading(false)}
+  },[])
+
+  useEffect(()=>{load()},[load])
+
+  const flash=(m,ok=true)=>{setMsg({text:m,ok});setTimeout(()=>setMsg(null),3000)}
+
+  const createTeam=async()=>{
+    if(!newTeamName.trim()) return
+    setSaving(true)
+    try{
+      const{data,error}=await supabase.from('crm_teams').insert({name:newTeamName.trim(),created_by:user.id}).select().single()
+      if(error) throw error
+      // Enable all modules by default for new team
+      const rows=modules.map(m=>({team_id:data.id,module_id:m.id,enabled:true,updated_by:user.id}))
+      await supabase.from('team_tools').insert(rows)
+      setNewTeamName('');setShowNewTeam(false)
+      await load()
+      setSelTeam(data.id)
+      flash('Equipo creado')
+    }catch(e){flash('Error: '+e.message,false)}
+    finally{setSaving(false)}
+  }
+
+  const toggleTool=async(teamId,moduleId,current)=>{
+    const enabled=!current
+    try{
+      await supabase.from('team_tools').upsert(
+        {team_id:teamId,module_id:moduleId,enabled,updated_by:user.id},
+        {onConflict:'team_id,module_id'}
+      )
+      setTeamTools(prev=>{
+        const m=new Set(prev[teamId]||[])
+        enabled?m.add(moduleId):m.delete(moduleId)
+        return{...prev,[teamId]:m}
+      })
+    }catch(e){flash('Error al guardar',false)}
+  }
+
+  const assignAdvisor=async(userId,newTeamId)=>{
+    try{
+      await supabase.from('crm_staff_profiles').update({team_id:newTeamId||null}).eq('user_id',userId)
+      setStaff(prev=>prev.map(s=>s.user_id===userId?{...s,team_id:newTeamId||null}:s))
+      flash('Asesor actualizado')
+    }catch(e){flash('Error al asignar',false)}
+  }
+
+  const selTeamData=teams.find(t=>t.id===selTeam)
+  const selTeamStaff=staff.filter(s=>s.team_id===selTeam)
+  const unassigned=staff.filter(s=>!s.team_id)
+  const enabledMods=teamTools[selTeam]||new Set()
+
+  return <div>
+    <SHdr title="Gestión de Equipos" sub="Configura equipos, asesores y herramientas por equipo"
+      action={<Btn onClick={()=>setShowNewTeam(true)}>+ Nuevo equipo</Btn>}/>
+
+    {msg&&<div style={{margin:'0 0 16px',padding:'10px 16px',borderRadius:8,background:msg.ok?P.greenDim:P.redDim,border:`1px solid ${msg.ok?P.green:P.red}30`,color:msg.ok?P.green:P.red,fontSize:13}}>{msg.text}</div>}
+
+    {showNewTeam&&<GlassCard style={{marginBottom:16,padding:16}}>
+      <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 12px'}}>Nuevo equipo</p>
+      <div style={{display:'flex',gap:8}}>
+        <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}
+          placeholder="Nombre del equipo..."
+          style={{flex:1,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
+        <Btn onClick={createTeam} disabled={saving}>{saving?'Creando...':'Crear'}</Btn>
+        <Btn variant="ghost" onClick={()=>{setShowNewTeam(false);setNewTeamName('')}}>Cancelar</Btn>
+      </div>
+    </GlassCard>}
+
+    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:16}}>
+
+      {/* Team list */}
+      <div style={{display:'flex',flexDirection:'column',gap:6}}>
+        {teams.map(t=><button key={t.id} onClick={()=>setSelTeam(t.id)}
+          style={{padding:'10px 14px',borderRadius:8,textAlign:'left',cursor:'pointer',
+            background:selTeam===t.id?P.purpleDim:'rgba(255,255,255,0.03)',
+            border:`1px solid ${selTeam===t.id?P.purpleBorder:P.border}`,
+            color:selTeam===t.id?P.purple:P.text,fontSize:13,fontWeight:selTeam===t.id?600:400}}>
+          <div>{t.name}</div>
+          <div style={{fontSize:11,color:P.muted,marginTop:2}}>{staff.filter(s=>s.team_id===t.id).length} asesores</div>
+        </button>)}
+        {teams.length===0&&<p style={{fontSize:13,color:P.muted}}>Sin equipos aún</p>}
+      </div>
+
+      {/* Team detail */}
+      {selTeamData?<div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+        {/* Herramientas */}
+        <GlassCard>
+          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>🔧 Herramientas habilitadas</p>
+          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
+            {modules.map(m=>{
+              const on=enabledMods.has(m.id)
+              return <button key={m.id} onClick={()=>toggleTool(selTeam,m.id,on)}
+                style={{padding:'8px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                  background:on?P.purpleDim:'rgba(255,255,255,0.03)',
+                  border:`1px solid ${on?P.purpleBorder:P.border}`,
+                  color:on?P.purple:P.muted,fontSize:12,fontWeight:on?600:400,
+                  display:'flex',alignItems:'center',gap:6}}>
+                <span>{on?'✓':'○'}</span>
+                <span>{m.icon} {m.label}</span>
+              </button>
+            })}
+          </div>
+        </GlassCard>
+
+        {/* Asesores del equipo */}
+        <GlassCard>
+          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>👥 Asesores del equipo ({selTeamStaff.length})</p>
+          {selTeamStaff.length===0?<p style={{fontSize:13,color:P.muted}}>Sin asesores asignados</p>:
+          selTeamStaff.map(s=><div key={s.user_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${P.border}`}}>
+            <div>
+              <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
+              <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
+            </div>
+            <button onClick={()=>assignAdvisor(s.user_id,null)}
+              style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.redDim,border:`1px solid ${P.red}30`,color:P.red}}>
+              Quitar
+            </button>
+          </div>)}
+        </GlassCard>
+
+        {/* Sin equipo */}
+        {unassigned.length>0&&<GlassCard>
+          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>⚠ Sin equipo asignado ({unassigned.length})</p>
+          {unassigned.map(s=><div key={s.user_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${P.border}`}}>
+            <div>
+              <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
+              <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
+            </div>
+            <button onClick={()=>assignAdvisor(s.user_id,selTeam)}
+              style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple}}>
+              + Asignar aquí
+            </button>
+          </div>)}
+        </GlassCard>}
+
+      </div>:<p style={{color:P.muted,fontSize:13}}>Selecciona un equipo</p>}
+    </div>}
+  </div>
+}
+
+
 // ─── BROKER VIEW ─────────────────────────────────────────────────────────────
 function BrokerView({user,campaigns,leads,isSuperAdmin}){
   const[assignments,setAssignments]=useState([])
@@ -1885,46 +2063,57 @@ function BrokerView({user,campaigns,leads,isSuperAdmin}){
 }
 
 export default function App(){
-  const[user,setUser]         =useState(null)
-  const[checking,setChecking] =useState(true)
-  const[isSuperAdmin,setSA]   =useState(false)
-  const[isBroker,setIsBroker] =useState(false)
-  const[module,setModule]     =useState('dashboard')
-  const[contacts,setContacts] =useState([])
-  const[leads,setLeads]       =useState([])
-  const[staffProfile,setSP]   =useState(null)
+  const[user,setUser]          =useState(null)
+  const[checking,setChecking]  =useState(true)
+  const[isSuperAdmin,setSA]    =useState(false)
+  const[isBroker,setIsBroker]  =useState(false)
+  const[teamId,setTeamId]      =useState(null)
+  const[tools,setTools]        =useState([])   // módulos habilitados para este usuario
+  const[module,setModule]      =useState('dashboard')
+  const[contacts,setContacts]  =useState([])
+  const[leads,setLeads]        =useState([])
+  const[staffProfile,setSP]    =useState(null)
   const[campaigns,setCampaigns]=useState([])
-  const[loading,setLoading]   =useState(true)
+  const[loading,setLoading]    =useState(true)
 
-  // ── Auth ─────────────────────────────────────────────────────────────────
+  // ── Helpers de rol ────────────────────────────────────────────────────────
+  // canAccess: true si el módulo está en tools[] o el usuario es super_admin
+  const canAccess=(mod)=>isSuperAdmin||tools.includes(mod)
+
+  // ── Auth + perfil RBAC ────────────────────────────────────────────────────
   useEffect(()=>{
-    const checkRole=async(u)=>{
-      if(!u){setSA(false);return}
+    const loadProfile=async(u)=>{
+      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return}
       try{
-        const{data}=await supabase.rpc('get_my_role')
-        setSA(data==='super_admin')
-        setIsBroker(data==='broker')
+        const{data}=await supabase.rpc('get_my_profile')
+        const role=data?.role||'asesor'
+        const tid=data?.team_id||null
+        const t=data?.tools||[]
+        setSA(role==='super_admin')
+        setIsBroker(role==='broker')
+        setTeamId(tid)
+        setTools(t)
       }catch(e){
-        console.warn('get_my_role fallback:',e)
-        // Fallback: check user_metadata directly
-        setSA(u?.user_metadata?.role==='super_admin'||u?.app_metadata?.role==='super_admin')
-        setIsBroker(u?.user_metadata?.role==='broker'||u?.app_metadata?.role==='broker')
+        console.warn('get_my_profile fallback:',e)
+        const role=u?.user_metadata?.role||'asesor'
+        setSA(role==='super_admin')
+        setIsBroker(role==='broker')
+        setTools(['dashboard','contacts','pipeline','emails','tasks'])
       }
     }
     supabase.auth.getSession().then(async({data:{session}})=>{
       const u=session?.user??null
       setUser(u)
-      await checkRole(u)
+      await loadProfile(u)
       setChecking(false)
     }).catch(()=>setChecking(false))
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
       const u=session?.user??null
-      // Only update user state if ID changed (prevents loop on token refresh)
       setUser(prev=>{
         if(prev?.id===u?.id) return prev
         return u
       })
-      await checkRole(u)
+      await loadProfile(u)
     })
     return()=>subscription.unsubscribe()
   },[])
@@ -1962,26 +2151,35 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
 
-  const logout=async()=>{await supabase.auth.signOut();setUser(null);setSA(false)}
+  const logout=async()=>{await supabase.auth.signOut();setUser(null);setSA(false);setIsBroker(false);setTeamId(null);setTools([])}
 
   // ── Modules ───────────────────────────────────────────────────────────────
   // campMods removed — lazy rendering via renderModule()
 
-  const validMods=isBroker?['broker']:['dashboard','contacts','pipeline','tasks','emails','reports','equipo',
-    ...(isSuperAdmin?['admin_campaigns']:[]),
-    ...campaigns.map(c=>'camp_'+c.id)]
+  const validMods=isBroker?['broker']:[
+    'dashboard',
+    ...(canAccess('contacts') ?['contacts']:[]),
+    ...(canAccess('pipeline') ?['pipeline']:[]),
+    ...(canAccess('tasks')    ?['tasks']:[]),
+    ...(canAccess('emails')   ?['emails']:[]),
+    ...(canAccess('reports')  ?['reports']:[]),
+    ...(canAccess('equipo')   ?['equipo']:[]),
+    ...(isSuperAdmin          ?['admin_campaigns','team_admin']:[]),
+    ...(canAccess('campaigns')?campaigns.map(c=>'camp_'+c.id):[]),
+  ]
 
+  // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
   const NAV=isBroker?[]:[
     {id:'dashboard',label:'Dashboard',icon:'⊞'},
-    {id:'contacts', label:'Contactos', icon:'📋'},
-    {id:'pipeline', label:'Pipeline',  icon:'◈'},
-    ...campaigns.map(c=>({id:'camp_'+c.id,label:c.name,icon:'🚀',color:P.green})),
-    {id:'tasks',    label:'Tareas',    icon:'✓'},
-    {id:'emails',   label:'Emails',    icon:'✉'},
-    {id:'reports',  label:'Reportes',  icon:'▦'},
-    {id:'equipo',label:'Equipo',icon:'👥'},
-    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas',icon:'⚙',color:P.orange}]:[]),
-  ]
+    canAccess('contacts') ?{id:'contacts', label:'Contactos', icon:'📋'}:null,
+    canAccess('pipeline') ?{id:'pipeline', label:'Pipeline',  icon:'◈'}:null,
+    ...(canAccess('campaigns')?campaigns.map(c=>({id:'camp_'+c.id,label:c.name,icon:'🚀',color:P.green})):[]),
+    canAccess('tasks')    ?{id:'tasks',    label:'Tareas',    icon:'✓'}:null,
+    canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
+    canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
+    canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
+    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange},{id:'team_admin',label:'Equipos',icon:'⬡',color:P.blue}]:[]),
+  ].filter(Boolean)
 
   const currentMod=validMods.includes(module)?module:'dashboard'
 
@@ -2038,6 +2236,7 @@ export default function App(){
         if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+        if(currentMod==='team_admin'&&isSuperAdmin) return <TeamAdmin user={user}/>
         const camp=campaigns.find(c=>'camp_'+c.id===currentMod)
         if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
