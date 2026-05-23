@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, Component, useMemo } from 'react'
+import { useState, useEffect, useCallback, Component, useMemo, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
 
@@ -212,6 +212,8 @@ function Dashboard({contacts,leads,onNav}){
 
 // ─── CONTACTS (SUPER ADMIN = todos, asesor = propios) ─────────────────────────
 function Contacts({user,isSuperAdmin}){
+  const isSARef=useRef(isSuperAdmin)
+  useEffect(()=>{isSARef.current=isSuperAdmin},[isSuperAdmin])
   const[contacts,setContacts]=useState([])
   const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
@@ -233,9 +235,8 @@ function Contacts({user,isSuperAdmin}){
 
   const load=useCallback(async()=>{
     setLoading(true)
-    const timeout=setTimeout(()=>setLoading(false),10000) // safety timeout
     try{
-      if(isSuperAdmin){
+      if(isSARef.current){
         // Super admin: crm_contacts + contact_submissions fusionados
         const[{data:crm},{data:subs},{data:sp}]=await Promise.all([
           supabase.from('crm_contacts').select('*').order('created_at',{ascending:false}),
@@ -256,14 +257,10 @@ function Contacts({user,isSuperAdmin}){
         setContacts(data||[])
       }
     }catch(e){console.error('contacts load:',e)}
-    finally{clearTimeout(timeout);setLoading(false)}
-  },[user.id,isSuperAdmin])
+    finally{setLoading(false)}
+  },[user.id])
 
-  useEffect(()=>{
-    // Small delay to let isSuperAdmin resolve before first load
-    const t=setTimeout(()=>load(),50)
-    return()=>clearTimeout(t)
-  },[load])
+  useEffect(()=>{load()},[load])
 
   const filtered=contacts.filter(c=>{
     const ms=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
@@ -681,7 +678,6 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
 
   const load=useCallback(async()=>{
     setLoading(true)
-    const timeout=setTimeout(()=>setLoading(false),8000) // safety timeout
     try{
       const[{data:myC},{data:t}]=await Promise.all([
         supabase.from('crm_contacts').select('id,full_name,email,phone').eq('user_id',user.id),
@@ -690,7 +686,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
       setMyContacts(myC||[])
       setTiers(t||[])
     }catch(e){console.error('campaign load:',e)}
-    finally{clearTimeout(timeout);setLoading(false)}
+    finally{setLoading(false)}
   },[user.id])
 
   useEffect(()=>{load()},[load])
@@ -2006,7 +2002,7 @@ export default function App(){
   const currentMod=validMods.includes(module)?module:'dashboard'
 
   // Memoize active module to prevent remounting on every App render
-  const activeModule=useMemo(()=>renderModule(currentMod),[currentMod,contacts,leads,staffProfile,campaigns,isSuperAdmin,isBroker,user])
+  const activeModule=useMemo(()=>renderModule(currentMod),[currentMod,isSuperAdmin,isBroker,campaigns,user?.id])
 
   return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     {/* Sidebar */}
