@@ -1153,7 +1153,7 @@ function Tasks({contacts,leads}){
 }
 
 // ─── EMAILS ───────────────────────────────────────────────────────────────────
-function Emails({contacts,leads,staffProfile,user}){
+function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
   const[emails,setEmails]=useState([])
   const[loading,setLoading]=useState(true)
   const[tab,setTab]=useState('historial')
@@ -1748,7 +1748,7 @@ function Equipo({user,isSuperAdmin}){
 // ─── APP ──────────────────────────────────────────────────────────────────────
 
 // ─── BROKER VIEW ─────────────────────────────────────────────────────────────
-function BrokerView({user,campaigns,leads}){
+function BrokerView({user,campaigns,leads,isSuperAdmin}){
   const[assignments,setAssignments]=useState([])
   const[loading,setLoading]=useState(true)
   const[tab,setTab]=useState('campanas')
@@ -2029,12 +2029,12 @@ export default function App(){
     <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
       <ErrorBoundary key={currentMod}>{(()=>{
         if(loading&&currentMod==='dashboard') return <Spinner/>
-        if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads}/>
+        if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
         if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
-        if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>
+        if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
