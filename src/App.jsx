@@ -1668,20 +1668,27 @@ function Reports({contacts,leads}){
 
 
 // ─── EQUIPO ───────────────────────────────────────────────────────────────────
+// ─── EQUIPO UNIFICADO (Equipo + TeamAdmin fusionados) ────────────────────────
 function Equipo({user,isSuperAdmin,teamId}){
   // ── State ────────────────────────────────────────────────────────────────
-  const[staff,setStaff]       =useState([])
-  const[teams,setTeams]       =useState([])
-  const[loading,setLoading]   =useState(true)
+  const[staff,setStaff]         =useState([])
+  const[teams,setTeams]         =useState([])
+  const[modules,setModules]     =useState([])
+  const[teamTools,setTeamTools] =useState({})
+  const[loading,setLoading]     =useState(true)
+  const[tab,setTab]             =useState('miembros') // 'miembros' | 'equipos'
   const[showInvite,setShowInvite]=useState(false)
-  const[editMember,setEditMember]=useState(null)  // miembro en edición
-  const[sending,setSending]   =useState(false)
-  const[saving,setSaving]     =useState(false)
-  const[flash,setFlash]       =useState(null)
-  const[search,setSearch]     =useState('')
+  const[editMember,setEditMember]=useState(null)
+  const[selTeam,setSelTeam]     =useState(null)
+  const[showNewTeam,setShowNewTeam]=useState(false)
+  const[newTeamName,setNewTeamName]=useState('')
+  const[sending,setSending]     =useState(false)
+  const[saving,setSaving]       =useState(false)
+  const[flash,setFlash]         =useState(null)
+  const[search,setSearch]       =useState('')
   const[filterRole,setFilterRole]=useState('todos')
   const[form,setForm]=useState({email:'',display_name:'',title:'Asesor · Pessaro Capital',pessaro_email:'',phone:'',role:'asesor',team_id:''})
-  const[editForm,setEditForm] =useState({})
+  const[editForm,setEditForm]   =useState({})
 
   const showMsg=(msg,ok=true)=>{setFlash({msg,ok});setTimeout(()=>setFlash(null),3500)}
 
@@ -1692,21 +1699,30 @@ function Equipo({user,isSuperAdmin,teamId}){
       const queries=[
         supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').order('display_name'),
         supabase.from('crm_teams').select('*').order('name'),
+        supabase.from('crm_modules').select('*').order('sort_order'),
+        supabase.from('team_tools').select('*'),
       ]
-      // Super admin ve todos; broker/asesor ve solo su equipo
       if(!isSuperAdmin && teamId){
         queries[0]=supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').eq('team_id',teamId).order('display_name')
       }
-      const[{data:s},{data:t}]=await Promise.all(queries)
+      const[{data:s},{data:t},{data:m},{data:tt}]=await Promise.all(queries)
       setStaff(s||[])
       setTeams(t||[])
+      setModules(m||[])
+      const map={}
+      ;(tt||[]).forEach(r=>{
+        if(!map[r.team_id]) map[r.team_id]=new Set()
+        if(r.enabled) map[r.team_id].add(r.module_id)
+      })
+      setTeamTools(map)
+      if(!selTeam && t?.length>0) setSelTeam(t[0].id)
     }catch(e){console.error('equipo load:',e)}
     finally{setLoading(false)}
   },[isSuperAdmin,teamId])
 
   useEffect(()=>{load()},[load])
 
-  // ── Invite new member ────────────────────────────────────────────────────
+  // ── Invite ────────────────────────────────────────────────────────────────
   const invite=async()=>{
     if(!form.email||!form.display_name)return
     setSending(true)
@@ -1724,7 +1740,7 @@ function Equipo({user,isSuperAdmin,teamId}){
     setSending(false)
   }
 
-  // ── Edit member ──────────────────────────────────────────────────────────
+  // ── Edit member ───────────────────────────────────────────────────────────
   const openEdit=(s)=>{
     setEditMember(s)
     setEditForm({display_name:s.display_name,title:s.title||'',pessaro_email:s.pessaro_email||'',phone:s.phone||'',role:s.role||'asesor',team_id:s.team_id||''})
@@ -1742,15 +1758,53 @@ function Equipo({user,isSuperAdmin,teamId}){
         role:editForm.role,
         team_id:editForm.team_id||null,
       }).eq('user_id',editMember.user_id)
-      // Si es super_admin, también actualizar user_metadata del rol
-      if(isSuperAdmin&&editForm.role!==editMember.role){
-        await supabase.auth.admin?.updateUserById?.(editMember.user_id,{user_metadata:{role:editForm.role}})
-      }
       showMsg('Miembro actualizado ✓')
       setEditMember(null)
       await load()
     }catch(e){showMsg('Error: '+e.message,false)}
     setSaving(false)
+  }
+
+  // ── Team tools ────────────────────────────────────────────────────────────
+  const toggleTool=async(teamId,moduleId,current)=>{
+    const enabled=!current
+    try{
+      await supabase.from('team_tools').upsert(
+        {team_id:teamId,module_id:moduleId,enabled,updated_by:user.id},
+        {onConflict:'team_id,module_id'}
+      )
+      setTeamTools(prev=>{
+        const m=new Set(prev[teamId]||[])
+        enabled?m.add(moduleId):m.delete(moduleId)
+        return{...prev,[teamId]:m}
+      })
+    }catch(e){showMsg('Error al guardar',false)}
+  }
+
+  // ── Create team ───────────────────────────────────────────────────────────
+  const createTeam=async()=>{
+    if(!newTeamName.trim())return
+    setSaving(true)
+    try{
+      const{data,error}=await supabase.from('crm_teams').insert({name:newTeamName.trim(),created_by:user.id}).select().single()
+      if(error) throw error
+      const rows=modules.map(m=>({team_id:data.id,module_id:m.id,enabled:true,updated_by:user.id}))
+      if(rows.length) await supabase.from('team_tools').insert(rows)
+      setNewTeamName('');setShowNewTeam(false)
+      await load()
+      setSelTeam(data.id)
+      showMsg('Equipo creado ✓')
+    }catch(e){showMsg('Error: '+e.message,false)}
+    setSaving(false)
+  }
+
+  // ── Assign advisor to team ────────────────────────────────────────────────
+  const assignAdvisor=async(userId,newTeamId)=>{
+    try{
+      await supabase.from('crm_staff_profiles').update({team_id:newTeamId||null}).eq('user_id',userId)
+      setStaff(prev=>prev.map(s=>s.user_id===userId?{...s,team_id:newTeamId||null,crm_teams:teams.find(t=>t.id===newTeamId)||null}:s))
+      showMsg('Asignación actualizada ✓')
+    }catch(e){showMsg('Error al asignar',false)}
   }
 
   // ── Filtered list ─────────────────────────────────────────────────────────
@@ -1761,10 +1815,10 @@ function Equipo({user,isSuperAdmin,teamId}){
     return matchQ&&matchR
   })
 
-  // ── Role helpers ──────────────────────────────────────────────────────────
+  // ── Helpers ───────────────────────────────────────────────────────────────
   const roleLabel={super_admin:'Super Admin',broker:'Administrador',asesor:'Asesor'}
   const roleColor={super_admin:P.orange,broker:P.blue,asesor:P.purple}
-  const roleBg={super_admin:P.orangeDim,broker:P.blueDim,asesor:P.purpleDim}
+  const roleBg   ={super_admin:P.orangeDim,broker:P.blueDim,asesor:P.purpleDim}
   const RoleBadge=({role})=>{
     const r=role||'asesor'
     return <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:4,
@@ -1772,15 +1826,24 @@ function Equipo({user,isSuperAdmin,teamId}){
       border:`1px solid ${(roleColor[r]||P.purple)}30`}}>{roleLabel[r]||r}</span>
   }
 
-  const teamName=tid=>teams.find(t=>t.id===tid)?.name||'—'
+  const selTeamData =teams.find(t=>t.id===selTeam)
+  const selTeamStaff=staff.filter(s=>s.team_id===selTeam)
+  const unassigned  =staff.filter(s=>!s.team_id)
+  const enabledMods =teamTools[selTeam]||new Set()
+
+  // ── Tabs (solo super admin ve ambos tabs) ─────────────────────────────────
+  const TABS=isSuperAdmin
+    ?[{id:'miembros',label:'👥 Miembros'},{id:'equipos',label:'⬡ Equipos'}]
+    :[{id:'miembros',label:'👥 Mi Equipo'}]
 
   return <div>
     {/* Header */}
-    <SHdr title={isSuperAdmin?'Gestión de Equipo':'Mi Equipo'}
+    <SHdr
+      title={isSuperAdmin?'Gestión de Equipo':'Mi Equipo'}
       sub={`${staff.length} miembro${staff.length!==1?'s':''} · ${teams.length} equipo${teams.length!==1?'s':''}`}
       action={<div style={{display:'flex',gap:8}}>
-        {isSuperAdmin&&<Btn variant="ghost" onClick={()=>setFlash(null)} style={{fontSize:11}}>⟳ Actualizar</Btn>}
-        <Btn onClick={()=>setShowInvite(true)}>✉ Invitar miembro</Btn>
+        {tab==='equipos'&&isSuperAdmin&&<Btn onClick={()=>setShowNewTeam(true)}>+ Nuevo equipo</Btn>}
+        {tab==='miembros'&&<Btn onClick={()=>setShowInvite(true)}>✉ Invitar miembro</Btn>}
       </div>}/>
 
     {/* Flash */}
@@ -1789,96 +1852,225 @@ function Equipo({user,isSuperAdmin,teamId}){
       border:`1px solid ${flash.ok?P.green:P.red}30`,
       color:flash.ok?P.green:P.red}}>{flash.msg}</div>}
 
-    {/* KPIs — solo Super Admin */}
-    {isSuperAdmin&&!loading&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:12,marginBottom:20}}>
-      {[
-        ['Total miembros',staff.length,P.purple],
-        ['Administradores',staff.filter(s=>s.role==='broker').length,P.blue],
-        ['Asesores',staff.filter(s=>s.role==='asesor').length,P.green],
-        ['Equipos',teams.length,P.orange],
-      ].map(([l,v,c])=><div key={l} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'14px 16px'}}>
-        <div style={{fontSize:22,fontWeight:800,color:c}}>{v}</div>
-        <div style={{fontSize:11,color:P.muted,marginTop:3}}>{l}</div>
-      </div>)}
+    {/* Tabs */}
+    {isSuperAdmin&&<div style={{display:'flex',gap:4,marginBottom:20,borderBottom:`1px solid ${P.border}`,paddingBottom:0}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)}
+        style={{padding:'9px 18px',fontSize:13,fontWeight:tab===t.id?700:400,cursor:'pointer',
+          background:'none',border:'none',borderBottom:tab===t.id?`2px solid ${P.purple}`:'2px solid transparent',
+          color:tab===t.id?P.purple:P.muted,marginBottom:-1,transition:'all 0.1s'}}>
+        {t.label}
+      </button>)}
     </div>}
 
-    {/* Filters */}
-    <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre o email..."
-        style={{flex:1,minWidth:200,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
-      {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
-        {['todos','asesor','broker'].map(r=><button key={r} onClick={()=>setFilterRole(r)}
-          style={{padding:'7px 12px',borderRadius:8,fontSize:12,cursor:'pointer',fontWeight:filterRole===r?600:400,
-            background:filterRole===r?P.purpleDim:'rgba(255,255,255,0.04)',
-            color:filterRole===r?P.purple:P.muted,
-            border:`1px solid ${filterRole===r?P.purpleBorder:P.border}`}}>
-          {r==='todos'?'Todos':r==='broker'?'Administradores':'Asesores'}
-        </button>)}
+    {loading?<Spinner/>:<>
+
+    {/* ══ TAB: MIEMBROS ══ */}
+    {tab==='miembros'&&<>
+
+      {/* KPIs super admin */}
+      {isSuperAdmin&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:12,marginBottom:20}}>
+        {[
+          ['Total miembros',staff.length,P.purple],
+          ['Super Admins',staff.filter(s=>s.role==='super_admin').length,P.orange],
+          ['Administradores',staff.filter(s=>s.role==='broker').length,P.blue],
+          ['Asesores',staff.filter(s=>s.role==='asesor').length,P.green],
+          ['Equipos',teams.length,P.muted],
+        ].map(([l,v,c])=><div key={l} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'14px 16px'}}>
+          <div style={{fontSize:22,fontWeight:800,color:c}}>{v}</div>
+          <div style={{fontSize:11,color:P.muted,marginTop:3}}>{l}</div>
+        </div>)}
       </div>}
-    </div>
 
-    {loading?<Spinner/>:(
-    filtered.length===0?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin miembros encontrados</div>:
+      {/* Filtros */}
+      <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre o email..."
+          style={{flex:1,minWidth:200,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
+        {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
+          {['todos','asesor','broker','super_admin'].map(r=><button key={r} onClick={()=>setFilterRole(r)}
+            style={{padding:'7px 12px',borderRadius:8,fontSize:12,cursor:'pointer',fontWeight:filterRole===r?600:400,
+              background:filterRole===r?P.purpleDim:'rgba(255,255,255,0.04)',
+              color:filterRole===r?P.purple:P.muted,
+              border:`1px solid ${filterRole===r?P.purpleBorder:P.border}`}}>
+            {r==='todos'?'Todos':r==='broker'?'Admins':r==='super_admin'?'Super Admin':'Asesores'}
+          </button>)}
+        </div>}
+      </div>
 
-    /* ── Table ── */
-    <div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,overflow:'hidden'}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
-        <thead>
-          <tr style={{borderBottom:`1px solid ${P.border}`}}>
-            {['Miembro','Cargo','Rol','Equipo',isSuperAdmin?'Acciones':''].filter(Boolean).map(h=>
-              <th key={h} style={{padding:'11px 16px',textAlign:'left',fontSize:10,color:P.muted,
-                textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {filtered.map((s,i)=><tr key={s.user_id}
-            style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none',
-              transition:'background 0.1s'}}
-            onMouseEnter={e=>e.currentTarget.style.background='rgba(108,92,231,0.04)'}
-            onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+      {/* Tabla miembros */}
+      {filtered.length===0
+        ?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin miembros encontrados</div>
+        :<div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,overflow:'hidden'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${P.border}`}}>
+                {['Miembro','Cargo','Rol','Equipo',isSuperAdmin?'Acciones':''].filter(Boolean).map(h=>
+                  <th key={h} style={{padding:'11px 16px',textAlign:'left',fontSize:10,color:P.muted,
+                    textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((s,i)=><tr key={s.user_id}
+                style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none'}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(108,92,231,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
 
-            {/* Avatar + nombre */}
-            <td style={{padding:'12px 16px'}}>
-              <div style={{display:'flex',alignItems:'center',gap:10}}>
-                <div style={{width:36,height:36,borderRadius:9,background:roleBg[s.role]||P.purpleDim,
-                  display:'flex',alignItems:'center',justifyContent:'center',
-                  fontSize:14,fontWeight:700,color:roleColor[s.role]||P.purple,flexShrink:0}}>
-                  {(s.display_name||'?')[0].toUpperCase()}
+                {/* Avatar + nombre */}
+                <td style={{padding:'12px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:36,height:36,borderRadius:9,background:roleBg[s.role]||P.purpleDim,
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      fontSize:14,fontWeight:700,color:roleColor[s.role]||P.purple,flexShrink:0}}>
+                      {(s.display_name||'?')[0].toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name||'Sin nombre'}</div>
+                      <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{s.pessaro_email||'—'}</div>
+                    </div>
+                  </div>
+                </td>
+
+                <td style={{padding:'12px 16px',fontSize:12,color:P.textSub}}>{s.title||'—'}</td>
+                <td style={{padding:'12px 16px'}}><RoleBadge role={s.role}/></td>
+
+                {/* Equipo — con selector inline si es super admin */}
+                <td style={{padding:'12px 16px'}}>
+                  {isSuperAdmin
+                    ?<select
+                        value={s.team_id||''}
+                        onChange={e=>assignAdvisor(s.user_id,e.target.value||null)}
+                        style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:6,
+                          padding:'4px 8px',color:s.team_id?P.blue:P.muted,fontSize:12,outline:'none',cursor:'pointer'}}>
+                        <option value="">Sin equipo</option>
+                        {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    :s.crm_teams?.name
+                      ?<span style={{fontSize:12,padding:'3px 8px',borderRadius:5,background:P.blueDim,color:P.blue,border:`1px solid ${P.blue}30`}}>{s.crm_teams.name}</span>
+                      :<span style={{fontSize:12,color:P.muted}}>Sin equipo</span>
+                  }
+                </td>
+
+                {/* Editar — solo super admin */}
+                {isSuperAdmin&&<td style={{padding:'12px 16px'}}>
+                  <button onClick={()=>openEdit(s)}
+                    style={{padding:'5px 12px',borderRadius:6,fontSize:12,cursor:'pointer',
+                      background:P.purpleDim,color:P.purple,border:`1px solid ${P.purpleBorder}`,fontWeight:600}}>
+                    ✎ Editar
+                  </button>
+                </td>}
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+      }
+    </>}
+
+    {/* ══ TAB: EQUIPOS ══ */}
+    {tab==='equipos'&&isSuperAdmin&&<>
+
+      {/* Nuevo equipo form */}
+      {showNewTeam&&<GlassCard style={{marginBottom:16,padding:16}}>
+        <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 12px'}}>Nuevo equipo</p>
+        <div style={{display:'flex',gap:8}}>
+          <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}
+            placeholder="Nombre del equipo..."
+            style={{flex:1,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
+          <Btn onClick={createTeam} disabled={saving}>{saving?'Creando...':'Crear'}</Btn>
+          <Btn variant="ghost" onClick={()=>{setShowNewTeam(false);setNewTeamName('')}}>Cancelar</Btn>
+        </div>
+      </GlassCard>}
+
+      {teams.length===0
+        ?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin equipos aún</div>
+        :<div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:16}}>
+
+          {/* Lista de equipos */}
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {teams.map(t=><button key={t.id} onClick={()=>setSelTeam(t.id)}
+              style={{padding:'10px 14px',borderRadius:8,textAlign:'left',cursor:'pointer',
+                background:selTeam===t.id?P.purpleDim:'rgba(255,255,255,0.03)',
+                border:`1px solid ${selTeam===t.id?P.purpleBorder:P.border}`,
+                color:selTeam===t.id?P.purple:P.text,fontSize:13,fontWeight:selTeam===t.id?600:400}}>
+              <div>{t.name}</div>
+              <div style={{fontSize:11,color:P.muted,marginTop:2}}>{staff.filter(s=>s.team_id===t.id).length} miembro{staff.filter(s=>s.team_id===t.id).length!==1?'s':''}</div>
+            </button>)}
+          </div>
+
+          {/* Detalle del equipo seleccionado */}
+          {selTeamData?<div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+            {/* Herramientas habilitadas */}
+            <GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>🔧 Herramientas habilitadas</p>
+              {modules.length===0
+                ?<p style={{fontSize:12,color:P.muted}}>Sin módulos configurados</p>
+                :<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
+                  {modules.map(m=>{
+                    const on=enabledMods.has(m.id)
+                    return <button key={m.id} onClick={()=>toggleTool(selTeam,m.id,on)}
+                      style={{padding:'8px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                        background:on?P.purpleDim:'rgba(255,255,255,0.03)',
+                        border:`1px solid ${on?P.purpleBorder:P.border}`,
+                        color:on?P.purple:P.muted,fontSize:12,fontWeight:on?600:400,
+                        display:'flex',alignItems:'center',gap:6}}>
+                      <span>{on?'✓':'○'}</span>
+                      <span>{m.icon} {m.label}</span>
+                    </button>
+                  })}
                 </div>
+              }
+            </GlassCard>
+
+            {/* Miembros del equipo */}
+            <GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>👥 Miembros del equipo ({selTeamStaff.length})</p>
+              {selTeamStaff.length===0
+                ?<p style={{fontSize:13,color:P.muted}}>Sin miembros asignados</p>
+                :selTeamStaff.map(s=><div key={s.user_id}
+                  style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${P.border}`}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:30,height:30,borderRadius:7,background:roleBg[s.role]||P.purpleDim,
+                      display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:roleColor[s.role]||P.purple}}>
+                      {(s.display_name||'?')[0].toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</div>
+                      <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{s.pessaro_email}</div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <RoleBadge role={s.role}/>
+                    <button onClick={()=>assignAdvisor(s.user_id,null)}
+                      style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.redDim,border:`1px solid ${P.red}30`,color:P.red}}>
+                      Quitar
+                    </button>
+                  </div>
+                </div>)
+              }
+            </GlassCard>
+
+            {/* Sin equipo — para asignar al equipo seleccionado */}
+            {unassigned.length>0&&<GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>⚠ Sin equipo asignado ({unassigned.length})</p>
+              {unassigned.map(s=><div key={s.user_id}
+                style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${P.border}`}}>
                 <div>
-                  <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name||'Sin nombre'}</div>
-                  <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{s.pessaro_email||'—'}</div>
+                  <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
+                  <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
                 </div>
-              </div>
-            </td>
+                <button onClick={()=>assignAdvisor(s.user_id,selTeam)}
+                  style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple}}>
+                  + Asignar a {selTeamData.name}
+                </button>
+              </div>)}
+            </GlassCard>}
 
-            {/* Cargo */}
-            <td style={{padding:'12px 16px',fontSize:12,color:P.textSub}}>{s.title||'—'}</td>
+          </div>:<p style={{color:P.muted,fontSize:13}}>Selecciona un equipo</p>}
+        </div>
+      }
+    </>}
 
-            {/* Rol badge */}
-            <td style={{padding:'12px 16px'}}><RoleBadge role={s.role}/></td>
-
-            {/* Equipo */}
-            <td style={{padding:'12px 16px'}}>
-              {s.crm_teams?.name
-                ?<span style={{fontSize:12,padding:'3px 8px',borderRadius:5,background:P.blueDim,color:P.blue,border:`1px solid ${P.blue}30`}}>{s.crm_teams.name}</span>
-                :<span style={{fontSize:12,color:P.muted}}>Sin equipo</span>}
-            </td>
-
-            {/* Acciones — solo Super Admin */}
-            {isSuperAdmin&&<td style={{padding:'12px 16px'}}>
-              <button onClick={()=>openEdit(s)}
-                style={{padding:'5px 12px',borderRadius:6,fontSize:12,cursor:'pointer',
-                  background:P.purpleDim,color:P.purple,border:`1px solid ${P.purpleBorder}`,fontWeight:600}}>
-                ✎ Editar
-              </button>
-            </td>}
-          </tr>)}
-        </tbody>
-      </table>
-    </div>
-    )}
+    </>}
 
     {/* ── Modal: Invitar nuevo miembro ── */}
     {showInvite&&<Modal title="Invitar nuevo miembro" onClose={()=>setShowInvite(false)} accent={P.green}>
@@ -1916,7 +2108,7 @@ function Equipo({user,isSuperAdmin,teamId}){
       </div>
     </Modal>}
 
-    {/* ── Modal: Editar miembro (Super Admin) ── */}
+    {/* ── Modal: Editar miembro ── */}
     {editMember&&<Modal title={`Editar · ${editMember.display_name}`} onClose={()=>setEditMember(null)} accent={P.purple}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
@@ -1943,7 +2135,7 @@ function Equipo({user,isSuperAdmin,teamId}){
           </div>
         </div>
         <div style={{padding:'10px 14px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
-          <p style={{fontSize:11,color:P.orange,margin:0}}>⚠ Cambiar el rol actualiza los permisos de acceso en el sistema inmediatamente.</p>
+          <p style={{fontSize:11,color:P.orange,margin:0}}>⚠ Cambiar el rol actualiza los permisos de acceso inmediatamente.</p>
         </div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:4}}>
           <Btn variant="ghost" onClick={()=>setEditMember(null)}>Cancelar</Btn>
@@ -1953,186 +2145,6 @@ function Equipo({user,isSuperAdmin,teamId}){
     </Modal>}
   </div>
 }
-
-// ─── APP ──────────────────────────────────────────────────────────────────────
-
-// ─── TEAM ADMIN (Super Admin only) ───────────────────────────────────────────
-// Gestiona equipos, asesores asignados y herramientas habilitadas por equipo
-function TeamAdmin({user}){
-  const[teams,setTeams]       =useState([])
-  const[modules,setModules]   =useState([])
-  const[teamTools,setTeamTools]=useState({}) // {team_id: [module_id,...]}
-  const[staff,setStaff]       =useState([])
-  const[loading,setLoading]   =useState(true)
-  const[selTeam,setSelTeam]   =useState(null)
-  const[showNewTeam,setShowNewTeam]=useState(false)
-  const[newTeamName,setNewTeamName]=useState('')
-  const[saving,setSaving]     =useState(false)
-  const[msg,setMsg]           =useState(null)
-
-  const load=useCallback(async()=>{
-    setLoading(true)
-    try{
-      const[{data:t},{data:m},{data:tt},{data:s}]=await Promise.all([
-        supabase.from('crm_teams').select('*').order('created_at'),
-        supabase.from('crm_modules').select('*').order('sort_order'),
-        supabase.from('team_tools').select('*'),
-        supabase.from('crm_staff_profiles').select('user_id,display_name,pessaro_email,role,team_id').order('display_name'),
-      ])
-      setTeams(t||[])
-      setModules(m||[])
-      setStaff(s||[])
-      // Build map: {team_id: Set<module_id>}
-      const map={}
-      ;(tt||[]).forEach(r=>{
-        if(!map[r.team_id]) map[r.team_id]=new Set()
-        if(r.enabled) map[r.team_id].add(r.module_id)
-      })
-      setTeamTools(map)
-      if(!selTeam&&t?.length>0) setSelTeam(t[0].id)
-    }catch(e){console.error('TeamAdmin load:',e)}
-    finally{setLoading(false)}
-  },[])
-
-  useEffect(()=>{load()},[load])
-
-  const flash=(m,ok=true)=>{setMsg({text:m,ok});setTimeout(()=>setMsg(null),3000)}
-
-  const createTeam=async()=>{
-    if(!newTeamName.trim()) return
-    setSaving(true)
-    try{
-      const{data,error}=await supabase.from('crm_teams').insert({name:newTeamName.trim(),created_by:user.id}).select().single()
-      if(error) throw error
-      // Enable all modules by default for new team
-      const rows=modules.map(m=>({team_id:data.id,module_id:m.id,enabled:true,updated_by:user.id}))
-      await supabase.from('team_tools').insert(rows)
-      setNewTeamName('');setShowNewTeam(false)
-      await load()
-      setSelTeam(data.id)
-      flash('Equipo creado')
-    }catch(e){flash('Error: '+e.message,false)}
-    finally{setSaving(false)}
-  }
-
-  const toggleTool=async(teamId,moduleId,current)=>{
-    const enabled=!current
-    try{
-      await supabase.from('team_tools').upsert(
-        {team_id:teamId,module_id:moduleId,enabled,updated_by:user.id},
-        {onConflict:'team_id,module_id'}
-      )
-      setTeamTools(prev=>{
-        const m=new Set(prev[teamId]||[])
-        enabled?m.add(moduleId):m.delete(moduleId)
-        return{...prev,[teamId]:m}
-      })
-    }catch(e){flash('Error al guardar',false)}
-  }
-
-  const assignAdvisor=async(userId,newTeamId)=>{
-    try{
-      await supabase.from('crm_staff_profiles').update({team_id:newTeamId||null}).eq('user_id',userId)
-      setStaff(prev=>prev.map(s=>s.user_id===userId?{...s,team_id:newTeamId||null}:s))
-      flash('Asesor actualizado')
-    }catch(e){flash('Error al asignar',false)}
-  }
-
-  const selTeamData=teams.find(t=>t.id===selTeam)
-  const selTeamStaff=staff.filter(s=>s.team_id===selTeam)
-  const unassigned=staff.filter(s=>!s.team_id)
-  const enabledMods=teamTools[selTeam]||new Set()
-
-  return <div>
-    <SHdr title="Gestión de Equipos" sub="Configura equipos, asesores y herramientas por equipo"
-      action={<Btn onClick={()=>setShowNewTeam(true)}>+ Nuevo equipo</Btn>}/>
-
-    {msg&&<div style={{margin:'0 0 16px',padding:'10px 16px',borderRadius:8,background:msg.ok?P.greenDim:P.redDim,border:`1px solid ${msg.ok?P.green:P.red}30`,color:msg.ok?P.green:P.red,fontSize:13}}>{msg.text}</div>}
-
-    {showNewTeam&&<GlassCard style={{marginBottom:16,padding:16}}>
-      <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 12px'}}>Nuevo equipo</p>
-      <div style={{display:'flex',gap:8}}>
-        <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}
-          placeholder="Nombre del equipo..."
-          style={{flex:1,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
-        <Btn onClick={createTeam} disabled={saving}>{saving?'Creando...':'Crear'}</Btn>
-        <Btn variant="ghost" onClick={()=>{setShowNewTeam(false);setNewTeamName('')}}>Cancelar</Btn>
-      </div>
-    </GlassCard>}
-
-    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:16}}>
-
-      {/* Team list */}
-      <div style={{display:'flex',flexDirection:'column',gap:6}}>
-        {teams.map(t=><button key={t.id} onClick={()=>setSelTeam(t.id)}
-          style={{padding:'10px 14px',borderRadius:8,textAlign:'left',cursor:'pointer',
-            background:selTeam===t.id?P.purpleDim:'rgba(255,255,255,0.03)',
-            border:`1px solid ${selTeam===t.id?P.purpleBorder:P.border}`,
-            color:selTeam===t.id?P.purple:P.text,fontSize:13,fontWeight:selTeam===t.id?600:400}}>
-          <div>{t.name}</div>
-          <div style={{fontSize:11,color:P.muted,marginTop:2}}>{staff.filter(s=>s.team_id===t.id).length} asesores</div>
-        </button>)}
-        {teams.length===0&&<p style={{fontSize:13,color:P.muted}}>Sin equipos aún</p>}
-      </div>
-
-      {/* Team detail */}
-      {selTeamData?<div style={{display:'flex',flexDirection:'column',gap:14}}>
-
-        {/* Herramientas */}
-        <GlassCard>
-          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>🔧 Herramientas habilitadas</p>
-          <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
-            {modules.map(m=>{
-              const on=enabledMods.has(m.id)
-              return <button key={m.id} onClick={()=>toggleTool(selTeam,m.id,on)}
-                style={{padding:'8px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
-                  background:on?P.purpleDim:'rgba(255,255,255,0.03)',
-                  border:`1px solid ${on?P.purpleBorder:P.border}`,
-                  color:on?P.purple:P.muted,fontSize:12,fontWeight:on?600:400,
-                  display:'flex',alignItems:'center',gap:6}}>
-                <span>{on?'✓':'○'}</span>
-                <span>{m.icon} {m.label}</span>
-              </button>
-            })}
-          </div>
-        </GlassCard>
-
-        {/* Asesores del equipo */}
-        <GlassCard>
-          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>👥 Asesores del equipo ({selTeamStaff.length})</p>
-          {selTeamStaff.length===0?<p style={{fontSize:13,color:P.muted}}>Sin asesores asignados</p>:
-          selTeamStaff.map(s=><div key={s.user_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${P.border}`}}>
-            <div>
-              <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
-              <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
-            </div>
-            <button onClick={()=>assignAdvisor(s.user_id,null)}
-              style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.redDim,border:`1px solid ${P.red}30`,color:P.red}}>
-              Quitar
-            </button>
-          </div>)}
-        </GlassCard>
-
-        {/* Sin equipo */}
-        {unassigned.length>0&&<GlassCard>
-          <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>⚠ Sin equipo asignado ({unassigned.length})</p>
-          {unassigned.map(s=><div key={s.user_id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'8px 0',borderBottom:`1px solid ${P.border}`}}>
-            <div>
-              <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
-              <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
-            </div>
-            <button onClick={()=>assignAdvisor(s.user_id,selTeam)}
-              style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple}}>
-              + Asignar aquí
-            </button>
-          </div>)}
-        </GlassCard>}
-
-      </div>:<p style={{color:P.muted,fontSize:13}}>Selecciona un equipo</p>}
-    </div>}
-  </div>
-}
-
 
 // ─── BROKER VIEW ─────────────────────────────────────────────────────────────
 function BrokerView({user,campaigns,leads,isSuperAdmin}){
@@ -2373,7 +2385,7 @@ export default function App(){
     ...(canAccess('emails')   ?['emails']:[]),
     ...(canAccess('reports')  ?['reports']:[]),
     ...(canAccess('equipo')   ?['equipo']:[]),
-    ...(isSuperAdmin          ?['admin_campaigns','team_admin']:[]),
+    ...(isSuperAdmin          ?['admin_campaigns']:[]),
     ...(canAccess('campaigns')?campaigns.map(c=>'camp_'+c.id):[]),
   ]
 
@@ -2387,7 +2399,7 @@ export default function App(){
     canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
-    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange},{id:'team_admin',label:'Equipos',icon:'⬡',color:P.blue}]:[]),
+    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
   ].filter(Boolean)
 
   const currentMod=validMods.includes(module)?module:'dashboard'
@@ -2486,7 +2498,6 @@ export default function App(){
         if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-        if(currentMod==='team_admin'&&isSuperAdmin) return <TeamAdmin user={user}/>
         const camp=campaigns.find(c=>'camp_'+c.id===currentMod)
         if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
