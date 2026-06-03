@@ -644,20 +644,20 @@ function Pipeline({leads,setLeads,isSuperAdmin}){
 }
 
 // ─── CAMPAÑA MODULE ───────────────────────────────────────────────────────────
-function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
+function CampanaModule({campaign,campaignVariants=[],myReferralCode='',isMyVariant=()=>true,onBack,onManageVariant,onToggleVariantStatus,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   const[myContacts,setMyContacts]=useState([])
   const[tiers,setTiers]=useState([])
   const[loading,setLoading]=useState(true)
   const[campTab,setCampTab]=useState('general')
   const[showAdd,setShowAdd]=useState(false)
-  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:'navy'})
+  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:(campaignVariants[0]?.variant_key)||'navy'})
   const[addSaving,setAddSaving]=useState(false)
   const[selPart,setSelPart]=useState(null)
   const[filterVariant,setFilterVariant]=useState('all')
   const[filterPerfil,setFilterPerfil]=useState('all')
 
-  // campaign_leads es la fuente única — globalLeads viene del fetch principal
-  const leads=globalLeads||[]
+  // Filtra leads de esta campaña — campaign_leads ya tiene campaign_id desde la migración
+  const leads=(globalLeads||[]).filter(l=>l.campaign_id===campaign.id)
   const deposited=leads.filter(l=>l.deposit_confirmed)
   const capital=deposited.reduce((s,l)=>s+(Number(l.deposit_amount_usd)||0),0)
   const myLeads=isSuperAdmin?leads:leads.filter(l=>l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes((user?.email||'').split('@')[0].toLowerCase()))
@@ -703,11 +703,12 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
       full_name:addForm.full_name,email:addForm.email,phone:addForm.phone||null,
       investment_range:addForm.investment_range||null,team:addForm.team||null,
       perfil:addForm.perfil||null,variant:addForm.variant||'navy',
+      campaign_id:campaign.id,
       referral_code:code,position_in_queue:cnt+1,
       source:'crm_manual',advisor_assigned:user?.email?.split('@')[0]||null,etapa:1,
     }
     const{data,error}=await supabase.from('campaign_leads').insert(payload).select(
-      'id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,deposit_amount_usd'
+      'id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,deposit_amount_usd,campaign_id'
     ).single()
     if(data&&!error){
       setGlobalLeads(p=>[data,...p])
@@ -733,6 +734,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   )
 
   return <div>
+    {onBack&&<button onClick={onBack} style={{marginBottom:12,padding:'6px 12px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:6,fontSize:11,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6}}>← Volver a campañas</button>}
     <SHdr title={campaign.name} sub={`${leads.length} leads · ${deposited.length} depósitos · ${campaign.status}`}/>
 
     <div style={{display:'flex',gap:8,marginBottom:20}}>
@@ -816,20 +818,17 @@ return <div key={r} style={{marginBottom:12}}>
     {campTab==='landings'&&<div>
       <p style={{fontSize:12,color:P.muted,marginBottom:20}}>Variantes de landing page activas para esta campaña. Haz clic para abrir en nueva pestaña.</p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16,marginBottom:28}}>
-        {[
-          {id:'navy',     label:'Navy',     desc:'Fondo azul marino · tipografía Syne · estilo profesional', color:'#4a7cdc', url:'/campana/navy'},
-          {id:'editorial',label:'Editorial',desc:'Fondo crema · Instrument Serif · estilo editorial', color:'#a8451f', url:'/campana/editorial'},
-          {id:'bold',     label:'Bold',     desc:'Fondo negro · Space Grotesk · estilo tecnológico', color:'#c8e000', url:'/campana/bold'},
-          {id:'minimalist',label:'Minimalist',desc:'Fondo negro elegante · Cormorant · ticker LATAM · OTP WA+email · enfoque LATAM', color:'#C9A84C', url:'/campana/minimalist'},
-        ].map(v=>{
-          const cnt=leads.filter(l=>l.variant===v.id).length
-          const dep=leads.filter(l=>l.variant===v.id&&l.deposit_confirmed).length
-          const top=leads.filter(l=>l.variant===v.id).sort((a,b)=>b.score-a.score).slice(0,1)[0]
-          return <GlassCard key={v.id} style={{borderLeft:`3px solid ${v.color}`,padding:20}}>
+        {campaignVariants.map(v=>{
+          const cnt=leads.filter(l=>l.variant===v.variant_key).length
+          const dep=leads.filter(l=>l.variant===v.variant_key&&l.deposit_confirmed).length
+          const top=leads.filter(l=>l.variant===v.variant_key).sort((a,b)=>b.score-a.score).slice(0,1)[0]
+          const canUse=isMyVariant(v.id)
+          const linkRef=myReferralCode?`?ref=${myReferralCode}`:''
+          return <GlassCard key={v.id} style={{borderLeft:`3px solid ${v.color}`,padding:20,opacity:v.status==='activa'?1:0.55}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
               <div>
-                <div style={{fontSize:11,fontWeight:700,color:v.color,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:4}}>{v.label}</div>
-                <div style={{fontSize:12,color:P.muted,lineHeight:1.5}}>{v.desc}</div>
+                <div style={{fontSize:11,fontWeight:700,color:v.color,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:4}}>{v.label}{v.status!=='activa'&&' · pausada'}</div>
+                <div style={{fontSize:12,color:P.muted,lineHeight:1.5}}>{v.description||'—'}</div>
               </div>
               <div style={{background:v.color+'18',border:`1px solid ${v.color}40`,borderRadius:8,padding:'4px 10px',textAlign:'center',flexShrink:0,marginLeft:10}}>
                 <div style={{fontSize:18,fontWeight:800,color:v.color}}>{cnt}</div>
@@ -849,38 +848,54 @@ return <div key={r} style={{marginBottom:12}}>
             {top&&<div style={{fontSize:11,color:P.muted,marginBottom:12,padding:'6px 10px',background:'rgba(255,255,255,0.03)',borderRadius:6}}>
               🏆 Top: <span style={{color:P.text,fontWeight:600}}>{top.full_name}</span> · {top.score} pts
             </div>}
-            <div style={{display:'flex',gap:8}}>
-              <a href={`https://pessaro.cl${v.url}`} target="_blank" rel="noopener noreferrer"
-                style={{flex:1,padding:'9px 0',background:v.color,color:'#000',border:'none',borderRadius:8,
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <a href={`https://pessaro.cl${v.landing_url}`} target="_blank" rel="noopener noreferrer"
+                style={{flex:1,minWidth:100,padding:'9px 0',background:v.color,color:'#000',border:'none',borderRadius:8,
                   fontSize:12,fontWeight:700,cursor:'pointer',textAlign:'center',textDecoration:'none',display:'block'}}>
                 Ver landing →
               </a>
-              <a href={`https://pessaro.cl${v.url}?ref=DEMO`} target="_blank" rel="noopener noreferrer"
+              {canUse&&myReferralCode&&<button onClick={()=>{navigator.clipboard.writeText(`https://pessaro.cl${v.landing_url}${linkRef}`)}}
                 style={{padding:'9px 12px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,
-                  borderRadius:8,fontSize:12,cursor:'pointer',textDecoration:'none',display:'block'}}>
-                + Ref
-              </a>
+                  borderRadius:8,fontSize:11,cursor:'pointer'}}>
+                Copiar mi link
+              </button>}
+              {isSuperAdmin&&onManageVariant&&<button onClick={()=>onManageVariant(v)}
+                style={{padding:'9px 12px',background:P.orange+'15',color:P.orange,border:`1px solid ${P.orange}40`,
+                  borderRadius:8,fontSize:11,cursor:'pointer',fontWeight:600}}>
+                ⚙ Asesores
+              </button>}
+              {isSuperAdmin&&onToggleVariantStatus&&<button onClick={()=>onToggleVariantStatus(v)}
+                style={{padding:'9px 12px',background:'rgba(255,255,255,0.05)',color:v.status==='activa'?P.orange:P.green,border:`1px solid ${P.border}`,
+                  borderRadius:8,fontSize:11,cursor:'pointer'}}>
+                {v.status==='activa'?'⏸ Pausar':'▶ Activar'}
+              </button>}
             </div>
           </GlassCard>
         })}
       </div>
 
-      {/* Links de referido por variante */}
-      <GlassCard>
-        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Links de referido por variante</p>
-        {['navy','editorial','bold','minimalist'].map(v=>(
-          <div key={v} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
-            <span style={{fontSize:12,fontWeight:600,color:P.text,minWidth:70,textTransform:'capitalize'}}>{v}</span>
+      {/* Mis links de referido por variante (solo variantes habilitadas) */}
+      {myReferralCode&&<GlassCard>
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Mis links de referido</p>
+        {campaignVariants.filter(v=>isMyVariant(v.id)&&v.status==='activa').map(v=>(
+          <div key={v.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
+            <span style={{fontSize:12,fontWeight:600,color:v.color,minWidth:90}}>{v.label}</span>
             <code style={{flex:1,fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'5px 10px',borderRadius:6,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-              {`https://pessaro.cl/campana/${v}?ref=CODIGO`}
+              {`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`}
             </code>
-            <button onClick={()=>navigator.clipboard.writeText(`https://pessaro.cl/campana/${v}?ref=CODIGO`)}
+            <button onClick={()=>navigator.clipboard.writeText(`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`)}
               style={{padding:'5px 10px',background:'rgba(255,255,255,0.06)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:6,fontSize:11,cursor:'pointer'}}>
               Copiar
             </button>
           </div>
         ))}
-      </GlassCard>
+        {campaignVariants.filter(v=>isMyVariant(v.id)&&v.status==='activa').length===0&&
+          <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'10px 0',margin:0}}>No tienes variantes habilitadas. Solicita acceso al super admin.</p>
+        }
+      </GlassCard>}
+      {!myReferralCode&&<GlassCard style={{padding:14,background:P.orange+'10',border:`1px solid ${P.orange}30`}}>
+        <p style={{fontSize:12,color:P.orange,margin:0}}>⚠ No tienes un código de referido asignado. Pide al super admin que te genere uno en "Campañas admin → Links Asesores".</p>
+      </GlassCard>}
     </div>}
 
     {campTab==='mis_leads'&&(loading?<Spinner/>:<div>
@@ -936,7 +951,7 @@ return <div key={r} style={{marginBottom:12}}>
           <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="+56 9..."/></div>
           <div><Lbl>Capital</Lbl><Sel value={addForm.investment_range} onChange={v=>setAddForm(p=>({...p,investment_range:v}))} options={[{value:'',label:'Seleccionar'},{value:'1k-5k',label:'1k-5k'},{value:'5k-20k',label:'5k-20k'},{value:'20k-50k',label:'20k-50k'},{value:'50k+',label:'50k+'}]}/></div>
           <div><Lbl>Equipo</Lbl><Sel value={addForm.team} onChange={v=>setAddForm(p=>({...p,team:v}))} options={[{value:'',label:'Sin equipo'},{value:'radex',label:'Radex'},{value:'tradeview',label:'Tradeview'}]}/></div>
-          <div><Lbl>Landing</Lbl><Sel value={addForm.variant} onChange={v=>setAddForm(p=>({...p,variant:v}))} options={[{value:'navy',label:'Navy'},{value:'editorial',label:'Editorial'},{value:'bold',label:'Bold'},{value:'minimalist',label:'Minimalist'}]}/></div>
+          <div><Lbl>Landing</Lbl><Sel value={addForm.variant} onChange={v=>setAddForm(p=>({...p,variant:v}))} options={campaignVariants.length>0?campaignVariants.map(v=>({value:v.variant_key,label:v.label})):[{value:'navy',label:'Navy'},{value:'editorial',label:'Editorial'},{value:'bold',label:'Bold'},{value:'minimalist',label:'Minimalist'}]}/></div>
         </div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
           <Btn variant="ghost" onClick={()=>setShowAdd(false)}>Cancelar</Btn>
@@ -972,6 +987,167 @@ return <div key={r} style={{marginBottom:12}}>
   </div>
 }
 
+
+// ─── CAMPAIGNS HUB — vista unificada para todos los roles ──────────────────
+function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setGlobalLeads}){
+  const[variants,setVariants]=useState([])
+  const[advisors,setAdvisors]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[selectedCamp,setSelectedCamp]=useState(null)
+  const[manageVariant,setManageVariant]=useState(null) // for super admin variant-advisors modal
+  const[staffList,setStaffList]=useState([])
+
+  // Load variants and advisor assignments
+  useEffect(()=>{(async()=>{
+    setLoading(true)
+    try{
+      const[{data:v},{data:va},{data:sp}]=await Promise.all([
+        supabase.from('campaign_variants').select('*').order('variant_key'),
+        supabase.from('variant_advisors').select('*'),
+        isSuperAdmin?supabase.from('crm_staff_profiles').select('id,display_name,pessaro_email,role').order('display_name'):Promise.resolve({data:[]}),
+      ])
+      setVariants(v||[])
+      setAdvisors(va||[])
+      setStaffList(sp||[])
+    }catch(e){console.error('CampaignsHub load:',e)}
+    setLoading(false)
+  })()},[isSuperAdmin])
+
+  // Filter campaigns a este asesor le sirven (super admin ve todas)
+  const myStaffId=staffProfile?.id
+  const visibleCampaigns=campaigns.filter(c=>{
+    if(c.status!=='activa'&&!isSuperAdmin)return false
+    if(isSuperAdmin)return true
+    if(!myStaffId)return false
+    // El asesor ve campañas donde tiene al menos 1 variante habilitada
+    const campVariantIds=variants.filter(v=>v.campaign_id===c.id).map(v=>v.id)
+    return advisors.some(a=>a.staff_id===myStaffId&&a.enabled&&campVariantIds.includes(a.variant_id))
+  })
+
+  const getVariantsFor=campId=>variants.filter(v=>v.campaign_id===campId)
+  const isMyVariant=variantId=>isSuperAdmin?true:advisors.some(a=>a.staff_id===myStaffId&&a.enabled&&a.variant_id===variantId)
+  const enabledAdvisorsFor=variantId=>advisors.filter(a=>a.variant_id===variantId&&a.enabled).length
+  const myReferralCode=staffProfile?.referral_code||''
+
+  // Toggle de asesor en variante (super admin only)
+  const toggleAdvisorOnVariant=async(variantId,staffId)=>{
+    const existing=advisors.find(a=>a.variant_id===variantId&&a.staff_id===staffId)
+    if(existing){
+      const{error}=await supabase.from('variant_advisors').update({enabled:!existing.enabled}).eq('id',existing.id)
+      if(!error)setAdvisors(p=>p.map(a=>a.id===existing.id?{...a,enabled:!a.enabled}:a))
+    }else{
+      const{data,error}=await supabase.from('variant_advisors').insert({variant_id:variantId,staff_id:staffId,enabled:true,granted_by:user?.id}).select().single()
+      if(!error&&data)setAdvisors(p=>[...p,data])
+    }
+  }
+
+  // Toggle status de la variante (activa/pausada) — solo super admin
+  const toggleVariantStatus=async(v)=>{
+    const newStatus=v.status==='activa'?'pausada':'activa'
+    const{error}=await supabase.from('campaign_variants').update({status:newStatus}).eq('id',v.id)
+    if(!error)setVariants(p=>p.map(x=>x.id===v.id?{...x,status:newStatus}:x))
+  }
+
+  if(loading)return <Spinner/>
+
+  // Vista detalle de una campaña seleccionada
+  if(selectedCamp){
+    const camp=selectedCamp
+    const campVariants=getVariantsFor(camp.id)
+    const campLeads=globalLeads.filter(l=>l.campaign_id===camp.id)
+    return <CampanaModule
+      key={camp.id}
+      campaign={camp}
+      campaignVariants={campVariants}
+      myReferralCode={myReferralCode}
+      isMyVariant={isMyVariant}
+      onBack={()=>setSelectedCamp(null)}
+      onManageVariant={isSuperAdmin?setManageVariant:null}
+      onToggleVariantStatus={isSuperAdmin?toggleVariantStatus:null}
+      user={user}
+      isSuperAdmin={isSuperAdmin}
+      globalLeads={globalLeads}
+      setGlobalLeads={setGlobalLeads}
+    />
+  }
+
+  return <div>
+    <SHdr title="Campañas" sub={`${visibleCampaigns.length} ${visibleCampaigns.length===1?'campaña activa':'campañas activas'}${isSuperAdmin?' · super admin':' · variantes asignadas a ti'}`}/>
+
+    {visibleCampaigns.length===0?(
+      <GlassCard style={{padding:40,textAlign:'center'}}>
+        <p style={{fontSize:13,color:P.muted,margin:0}}>
+          {isSuperAdmin?'No hay campañas creadas. Ve a "Campañas admin" para crear una.':'No tienes variantes habilitadas en ninguna campaña. Solicita acceso al super admin.'}
+        </p>
+      </GlassCard>
+    ):(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
+        {visibleCampaigns.map(c=>{
+          const campVariants=getVariantsFor(c.id)
+          const myVariants=campVariants.filter(v=>isMyVariant(v.id))
+          const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
+          const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
+          const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
+          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18,cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+              <div style={{flex:1}}>
+                <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,marginBottom:4,margin:'0 0 4px'}}>{c.status}</p>
+                <p style={{fontSize:15,fontWeight:700,color:P.text,margin:'0 0 4px'}}>{c.name}</p>
+                <p style={{fontSize:11,color:P.muted,fontFamily:'monospace',margin:0}}>{c.slug}</p>
+              </div>
+              <div style={{textAlign:'right',marginLeft:10}}>
+                <p style={{fontSize:18,fontWeight:800,color:P.text,margin:0,lineHeight:1}}>{totalLeads}</p>
+                <p style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',margin:'4px 0 0'}}>leads</p>
+              </div>
+            </div>
+            {c.description&&<p style={{fontSize:11,color:P.muted,margin:'8px 0',lineHeight:1.5}}>{c.description}</p>}
+            <div style={{display:'flex',gap:8,marginTop:12,fontSize:11}}>
+              <span style={{color:P.green}}>● {deposits} depósitos</span>
+              <span style={{color:P.muted}}>· {totalLeads?Math.round(deposits/totalLeads*100):0}% conv.</span>
+            </div>
+            <div style={{display:'flex',gap:5,marginTop:12,flexWrap:'wrap'}}>
+              {(isSuperAdmin?campVariants:myVariants).map(v=>(
+                <span key={v.id} style={{
+                  fontSize:10,padding:'3px 8px',borderRadius:4,fontWeight:600,letterSpacing:'0.05em',
+                  background:v.color+'22',color:v.color,border:`1px solid ${v.color}40`,
+                  opacity:v.status==='activa'?1:0.5,
+                }}>{v.label}{v.status!=='activa'&&' · pausada'}</span>
+              ))}
+              {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
+            </div>
+          </GlassCard>
+        })}
+      </div>
+    )}
+
+    {/* Modal: gestión de asesores por variante (super admin only) */}
+    {manageVariant&&isSuperAdmin&&<Modal title={`Asesores · ${manageVariant.label}`} onClose={()=>setManageVariant(null)} accent={manageVariant.color}>
+      <div>
+        <p style={{fontSize:12,color:P.muted,marginBottom:14}}>Habilita qué asesores pueden compartir esta variante con sus contactos.</p>
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {staffList.map(sp=>{
+            const a=advisors.find(x=>x.variant_id===manageVariant.id&&x.staff_id===sp.id)
+            const on=a?.enabled||false
+            return <div key={sp.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',borderRadius:8,background:'rgba(255,255,255,0.03)',border:`1px solid ${on?manageVariant.color+'40':P.border}`}}>
+              <div style={{flex:1}}>
+                <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 2px'}}>{sp.display_name}</p>
+                <p style={{fontSize:11,color:P.muted,margin:0}}>{sp.pessaro_email} · {sp.role}</p>
+              </div>
+              <button onClick={()=>toggleAdvisorOnVariant(manageVariant.id,sp.id)}
+                style={{padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:600,letterSpacing:'0.05em',cursor:'pointer',
+                  background:on?manageVariant.color+'22':'rgba(255,255,255,0.04)',
+                  color:on?manageVariant.color:P.muted,
+                  border:`1px solid ${on?manageVariant.color+'60':P.border}`,
+                  textTransform:'uppercase'}}>
+                {on?'✓ Habilitado':'Deshabilitado'}
+              </button>
+            </div>
+          })}
+        </div>
+      </div>
+    </Modal>}
+  </div>
+}
 
 // ─── ADMIN CAMPAÑAS ───────────────────────────────────────────────────────────
 function AdminCampaigns({campaigns,setCampaigns,user}){
@@ -2349,7 +2525,7 @@ export default function App(){
       try{
         const[r1,r2,r3,r4]=await Promise.all([
           supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200),
-          supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil').order('created_at',{ascending:false}),
+          supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,campaign_id,advisor_referral_code').order('created_at',{ascending:false}),
           supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
@@ -2387,8 +2563,8 @@ export default function App(){
     ...(canAccess('emails')   ?['emails']:[]),
     ...(canAccess('reports')  ?['reports']:[]),
     ...(canAccess('equipo')   ?['equipo']:[]),
+    ...(canAccess('campaigns')?['campaigns']:[]),
     ...(isSuperAdmin          ?['admin_campaigns']:[]),
-    ...(canAccess('campaigns')?campaigns.map(c=>'camp_'+c.id):[]),
   ]
 
   // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
@@ -2396,7 +2572,7 @@ export default function App(){
     {id:'dashboard',label:'Dashboard',icon:'⊞'},
     canAccess('contacts') ?{id:'contacts', label:'Contactos', icon:'📋'}:null,
     canAccess('pipeline') ?{id:'pipeline', label:'Pipeline',  icon:'◈'}:null,
-    ...(canAccess('campaigns')?campaigns.map(c=>({id:'camp_'+c.id,label:c.name,icon:'🚀',color:P.green})):[]),
+    canAccess('campaigns')?{id:'campaigns',label:'Campañas',  icon:'🚀', color:P.green}:null,
     canAccess('tasks')    ?{id:'tasks',    label:'Tareas',    icon:'✓'}:null,
     canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
@@ -2499,9 +2675,8 @@ export default function App(){
         if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
         if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
+        if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-        const camp=campaigns.find(c=>'camp_'+c.id===currentMod)
-        if(camp) return <CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
       })()}</ErrorBoundary>
     </div>
