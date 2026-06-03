@@ -534,7 +534,7 @@ function Pipeline({leads,setLeads,isSuperAdmin}){
   const[filterVariant,setFilterVariant]=useState('all')
   const[filterPerfil,setFilterPerfil]=useState('all')
 
-  const VARIANT_COLORS={'navy':'#4a7cdc','bold':'#c8e000','editorial':'#a8451f','default':P.muted}
+  const VARIANT_COLORS={'navy':'#4a7cdc','bold':'#c8e000','editorial':'#a8451f','minimalist':'#C9A84C','default':P.muted}
   const PERFIL_COLORS={'retail':P.green,'mam':P.purple,'institucional':P.orange}
 
   // Obtener valores únicos presentes en los leads
@@ -673,7 +673,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
   const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
   const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
-  const variantColor={navy:'#4a7cdc',bold:'#c8e000',editorial:'#a8451f'}
+  const variantColor={navy:'#4a7cdc',bold:'#c8e000',editorial:'#a8451f',minimalist:'#C9A84C'}
   const perfilColor={retail:P.green,mam:P.purple,asesor:P.orange}
 
   const load=useCallback(async()=>{
@@ -820,6 +820,7 @@ return <div key={r} style={{marginBottom:12}}>
           {id:'navy',     label:'Navy',     desc:'Fondo azul marino · tipografía Syne · estilo profesional', color:'#4a7cdc', url:'/campana/navy'},
           {id:'editorial',label:'Editorial',desc:'Fondo crema · Instrument Serif · estilo editorial', color:'#a8451f', url:'/campana/editorial'},
           {id:'bold',     label:'Bold',     desc:'Fondo negro · Space Grotesk · estilo tecnológico', color:'#c8e000', url:'/campana/bold'},
+          {id:'minimalist',label:'Minimalist',desc:'Fondo negro elegante · Cormorant · ticker LATAM · OTP WA+email · enfoque LATAM', color:'#C9A84C', url:'/campana/minimalist'},
         ].map(v=>{
           const cnt=leads.filter(l=>l.variant===v.id).length
           const dep=leads.filter(l=>l.variant===v.id&&l.deposit_confirmed).length
@@ -867,7 +868,7 @@ return <div key={r} style={{marginBottom:12}}>
       {/* Links de referido por variante */}
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Links de referido por variante</p>
-        {['navy','editorial','bold'].map(v=>(
+        {['navy','editorial','bold','minimalist'].map(v=>(
           <div key={v} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
             <span style={{fontSize:12,fontWeight:600,color:P.text,minWidth:70,textTransform:'capitalize'}}>{v}</span>
             <code style={{flex:1,fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'5px 10px',borderRadius:6,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
@@ -935,6 +936,7 @@ return <div key={r} style={{marginBottom:12}}>
           <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="+56 9..."/></div>
           <div><Lbl>Capital</Lbl><Sel value={addForm.investment_range} onChange={v=>setAddForm(p=>({...p,investment_range:v}))} options={[{value:'',label:'Seleccionar'},{value:'1k-5k',label:'1k-5k'},{value:'5k-20k',label:'5k-20k'},{value:'20k-50k',label:'20k-50k'},{value:'50k+',label:'50k+'}]}/></div>
           <div><Lbl>Equipo</Lbl><Sel value={addForm.team} onChange={v=>setAddForm(p=>({...p,team:v}))} options={[{value:'',label:'Sin equipo'},{value:'radex',label:'Radex'},{value:'tradeview',label:'Tradeview'}]}/></div>
+          <div><Lbl>Landing</Lbl><Sel value={addForm.variant} onChange={v=>setAddForm(p=>({...p,variant:v}))} options={[{value:'navy',label:'Navy'},{value:'editorial',label:'Editorial'},{value:'bold',label:'Bold'},{value:'minimalist',label:'Minimalist'}]}/></div>
         </div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
           <Btn variant="ghost" onClick={()=>setShowAdd(false)}>Cancelar</Btn>
