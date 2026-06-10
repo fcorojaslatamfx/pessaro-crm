@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback, Component, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
+import WhatsAppInbox from './components/whatsapp/WhatsAppInbox.jsx'
+import ChatWindow from './components/whatsapp/ChatWindow.jsx'
+import CampaignSender from './components/whatsapp/CampaignSender.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -237,7 +240,6 @@ function Contacts({user,isSuperAdmin}){
     setLoading(true)
     try{
       if(isSARef.current){
-        // Super admin: crm_contacts + contact_submissions fusionados
         const[{data:crm},{data:subs},{data:sp}]=await Promise.all([
           supabase.from('crm_contacts').select('*').order('created_at',{ascending:false}),
           supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,status,submitted_at').order('submitted_at',{ascending:false}),
@@ -258,7 +260,8 @@ function Contacts({user,isSuperAdmin}){
       }
     }catch(e){console.error('contacts load:',e)}
     finally{setLoading(false)}
-  },[user.id])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   useEffect(()=>{load()},[load])
 
@@ -1011,7 +1014,8 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
       setStaffList(sp||[])
     }catch(e){console.error('CampaignsHub load:',e)}
     setLoading(false)
-  })()},[isSuperAdmin])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  })()},[]) // run once — isSuperAdmin is stable after auth resolves
 
   // Filter campaigns a este asesor le sirven (super admin ve todas)
   const myStaffId=staffProfile?.id
@@ -1896,7 +1900,8 @@ function Equipo({user,isSuperAdmin,teamId}){
       if(!selTeam && t?.length>0) setSelTeam(t[0].id)
     }catch(e){console.error('equipo load:',e)}
     finally{setLoading(false)}
-  },[isSuperAdmin,teamId])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   useEffect(()=>{load()},[load])
 
@@ -2461,6 +2466,61 @@ function BrokerView({user,campaigns,leads,isSuperAdmin}){
   </div>
 }
 
+// ─── WHATSAPP MESSAGES MODULE ────────────────────────────────────────────────
+function WhatsAppMessages({ user, staffProfile }) {
+  const [selectedPhone, setSelectedPhone] = useState(null)
+  const [selectedName, setSelectedName]   = useState(null)
+  const [subTab, setSubTab]               = useState('chat')
+
+  function handleSelect(phone, name) {
+    setSelectedPhone(phone)
+    setSelectedName(name)
+    setSubTab('chat')
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:P.text, margin:'0 0 4px' }}>WhatsApp</h2>
+          <p style={{ fontSize:13, color:P.muted, margin:0 }}>Bandeja de mensajes y campañas masivas</p>
+        </div>
+        <div style={{ display:'flex', gap:4 }}>
+          {[['chat','💬 Mensajes'],['campaigns','🚀 Campañas']].map(([id, label]) => (
+            <button key={id} onClick={() => setSubTab(id)}
+              style={{
+                padding:'7px 14px', borderRadius:8, fontSize:12, cursor:'pointer',
+                fontWeight: subTab === id ? 700 : 400,
+                background: subTab === id ? P.greenDim : 'rgba(255,255,255,0.03)',
+                color: subTab === id ? P.green : P.muted,
+                border: subTab === id ? `1px solid ${P.green}40` : `1px solid ${P.border}`,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {subTab === 'chat' && (
+        <div style={{ display:'flex', height:'calc(100vh - 180px)', borderRadius:14, overflow:'hidden', border:`1px solid ${P.border}` }}>
+          <div style={{ width:280, flexShrink:0 }}>
+            <WhatsAppInbox selectedPhone={selectedPhone} onSelect={handleSelect} />
+          </div>
+          <ChatWindow
+            clientPhone={selectedPhone}
+            clientName={selectedName}
+            staffId={staffProfile?.id}
+          />
+        </div>
+      )}
+
+      {subTab === 'campaigns' && (
+        <CampaignSender user={user} />
+      )}
+    </div>
+  )
+}
+
 export default function App(){
   const[user,setUser]          =useState(null)
   const[checking,setChecking]  =useState(true)
@@ -2565,6 +2625,7 @@ export default function App(){
     ...(canAccess('equipo')   ?['equipo']:[]),
     ...(canAccess('campaigns')?['campaigns']:[]),
     ...(isSuperAdmin          ?['admin_campaigns']:[]),
+    ...(canAccess('mensajes') ?['mensajes']:[]),
   ]
 
   // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
@@ -2578,6 +2639,7 @@ export default function App(){
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
+    canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
   ].filter(Boolean)
 
   const currentMod=validMods.includes(module)?module:'dashboard'
@@ -2677,6 +2739,7 @@ export default function App(){
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
         if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
       })()}</ErrorBoundary>
     </div>
