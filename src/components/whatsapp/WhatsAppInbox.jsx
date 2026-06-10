@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../../lib/supabase.js'
 
 const C = {
@@ -35,46 +35,60 @@ function previewText(msg) {
   return msg.message_type
 }
 
+// Build conversations map from a flat list of messages
+function buildConversations(messages) {
+  const map = new Map()
+  for (const msg of messages) {
+    if (!map.has(msg.client_phone)) {
+      map.set(msg.client_phone, {
+        phone: msg.client_phone,
+        name: msg.client_name || msg.client_phone,
+        lastMsg: msg,
+        unread: 0,
+      })
+    }
+    const conv = map.get(msg.client_phone)
+    if (msg.direction === 'inbound' && msg.status !== 'read') conv.unread++
+  }
+  return [...map.values()]
+}
+
 export default function WhatsAppInbox({ selectedPhone, onSelect }) {
-  const [conversations, setConversations] = useState([])
+  const [allMessages, setAllMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
+  // Carga inicial — UNA sola vez
   useEffect(() => {
-    load()
+    let mounted = true
+    ;(async () => {
+      const { data } = await supabase
+        .from('whatsapp_messages')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (mounted) {
+        setAllMessages(data || [])
+        setLoading(false)
+      }
+    })()
+    return () => { mounted = false }
+  }, [])
+
+  // Realtime: NO recarga todo, solo actualiza en memoria
+  useEffect(() => {
     const ch = supabase
       .channel('wa-inbox-watch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'whatsapp_messages' }, load)
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' }, (payload) => {
+        setAllMessages(prev => [payload.new, ...prev])
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'whatsapp_messages' }, (payload) => {
+        setAllMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new : m))
+      })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [])
 
-  async function load() {
-    setLoading(true)
-    const { data } = await supabase
-      .from('whatsapp_messages')
-      .select('*')
-      .order('created_at', { ascending: false })
-
-    if (!data) { setLoading(false); return }
-
-    const map = new Map()
-    for (const msg of data) {
-      if (!map.has(msg.client_phone)) {
-        map.set(msg.client_phone, {
-          phone: msg.client_phone,
-          name: msg.client_name || msg.client_phone,
-          lastMsg: msg,
-          unread: 0,
-        })
-      }
-      const conv = map.get(msg.client_phone)
-      if (msg.direction === 'inbound' && msg.status !== 'read') conv.unread++
-    }
-    setConversations([...map.values()])
-    setLoading(false)
-  }
-
+  const conversations = buildConversations(allMessages)
   const totalUnread = conversations.reduce((s, c) => s + c.unread, 0)
   const filtered = conversations.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
@@ -130,7 +144,6 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
             >
-              {/* Avatar */}
               <div style={{
                 width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
                 background: active ? C.greenDim : C.purpleDim,
@@ -140,7 +153,6 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
               }}>
                 {(conv.name || '?')[0].toUpperCase()}
               </div>
-              {/* Text */}
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
                   <span style={{ fontSize: 13, fontWeight: conv.unread ? 700 : 500, color: C.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
