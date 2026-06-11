@@ -2610,7 +2610,7 @@ export default function App(){
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
 
-  const logout=async()=>{await supabase.auth.signOut();setUser(null);setSA(false);setIsBroker(false);setTeamId(null);setTools([]);window.location.reload()}
+  const logout=async()=>{await supabase.auth.signOut();localStorage.clear();window.location.href='/'}
 
   // ── Modules ───────────────────────────────────────────────────────────────
   // campMods removed — lazy rendering via renderModule()
