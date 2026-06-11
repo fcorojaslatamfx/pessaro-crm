@@ -2823,10 +2823,19 @@ function BrokerView({user,campaigns,leads,isSuperAdmin}){
 }
 
 // ─── WHATSAPP MESSAGES MODULE ────────────────────────────────────────────────
-function WhatsAppMessages({ user, staffProfile, navPhone, onNavConsumed, onPhoneChange }) {
+function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, setWaAssignments, navPhone, onNavConsumed, onPhoneChange }) {
   const [selectedPhone, setSelectedPhone] = useState(null)
   const [selectedName, setSelectedName]   = useState(null)
   const [subTab, setSubTab]               = useState('chat')
+  const [staffList, setStaffList]         = useState([])
+
+  // Load all staff profiles for assignment UI
+  useEffect(()=>{
+    ;(async()=>{
+      const{data}=await supabase.from('crm_staff_profiles').select('id,display_name,role').order('display_name')
+      setStaffList(data||[])
+    })()
+  },[])
 
   useEffect(()=>{
     if(navPhone?.phone){
@@ -2843,6 +2852,15 @@ function WhatsAppMessages({ user, staffProfile, navPhone, onNavConsumed, onPhone
     setSelectedName(name)
     setSubTab('chat')
     onPhoneChange?.(phone)
+  }
+
+  async function handleAssign(phone, assignedToId) {
+    // Optimistic update
+    setWaAssignments(prev=>[...prev.filter(a=>a.client_phone!==phone),{client_phone:phone,assigned_to:assignedToId}])
+    await supabase.from('whatsapp_assignments').upsert(
+      {client_phone:phone,assigned_to:assignedToId,assigned_by:staffProfile?.id},
+      {onConflict:'client_phone'}
+    )
   }
 
   return (
@@ -2871,12 +2889,23 @@ function WhatsAppMessages({ user, staffProfile, navPhone, onNavConsumed, onPhone
       {subTab === 'chat' && (
         <div style={{ display:'flex', height:'calc(100vh - 180px)', borderRadius:14, overflow:'hidden', border:`1px solid ${P.border}` }}>
           <div style={{ width:280, flexShrink:0 }}>
-            <WhatsAppInbox selectedPhone={selectedPhone} onSelect={handleSelect} />
+            <WhatsAppInbox
+              selectedPhone={selectedPhone}
+              onSelect={handleSelect}
+              isSuperAdmin={isSuperAdmin}
+              staffProfile={staffProfile}
+              assignments={waAssignments}
+              staffList={staffList}
+            />
           </div>
           <ChatWindow
             clientPhone={selectedPhone}
             clientName={selectedName}
             staffId={staffProfile?.id}
+            isSuperAdmin={isSuperAdmin}
+            assignments={waAssignments}
+            staffList={staffList}
+            onAssign={handleAssign}
           />
         </div>
       )}
@@ -2906,6 +2935,7 @@ export default function App(){
   const[waToasts,setWaToasts]  =useState([])
   const[waNavPhone,setWaNavPhone]=useState(null)
   const[waViewingPhone,setWaViewingPhone]=useState(null)
+  const[waAssignments,setWaAssignments]=useState([])
 
   // ── Helpers de rol ────────────────────────────────────────────────────────
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
@@ -2983,8 +3013,14 @@ export default function App(){
   // ── WA Notification refs (stale-closure-safe for subscription) ─────────────
   const _moduleRef=useRef(module)
   const _waPhoneRef=useRef(waViewingPhone)
+  const _staffProfileRef=useRef(staffProfile)
+  const _isSuperAdminRef=useRef(isSuperAdmin)
+  const _waAssignmentsRef=useRef(waAssignments)
   useEffect(()=>{_moduleRef.current=module},[module])
   useEffect(()=>{_waPhoneRef.current=waViewingPhone},[waViewingPhone])
+  useEffect(()=>{_staffProfileRef.current=staffProfile},[staffProfile])
+  useEffect(()=>{_isSuperAdminRef.current=isSuperAdmin},[isSuperAdmin])
+  useEffect(()=>{_waAssignmentsRef.current=waAssignments},[waAssignments])
 
   // ── WA Global Realtime Notifications ──────────────────────────────────────
   useEffect(()=>{
@@ -3006,6 +3042,12 @@ export default function App(){
         if(msg.direction!=='inbound')return
         const phone=msg.client_phone
         if(_moduleRef.current==='mensajes'&&_waPhoneRef.current===phone)return
+        // Assignment-based filtering: assigned → only notify assignee; unassigned → only notify super_admin
+        const _asgn=_waAssignmentsRef.current.find(a=>a.client_phone===phone)
+        const _myId=_staffProfileRef.current?.id
+        const _amSA=_isSuperAdminRef.current
+        if(_asgn){if(_asgn.assigned_to!==_myId)return}
+        else{if(!_amSA)return}
         setWaUnread(n=>n+1)
         playBeep()
         const id=uid()
@@ -3019,6 +3061,26 @@ export default function App(){
         })()
         setWaToasts(prev=>[...prev,{id,phone,name:msg.client_name||phone,preview}])
         setTimeout(()=>setWaToasts(prev=>prev.filter(t=>t.id!==id)),8000)
+      })
+      .subscribe()
+    return()=>{supabase.removeChannel(ch)}
+  },[user?.id])
+
+  // ── WA Assignments: load + realtime for notification filtering ────────────
+  useEffect(()=>{
+    if(!user)return
+    ;(async()=>{
+      const{data}=await supabase.from('whatsapp_assignments').select('client_phone,assigned_to')
+      setWaAssignments(data||[])
+    })()
+    const ch=supabase.channel('wa-assign-sync')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'whatsapp_assignments'},payload=>{
+        const{client_phone,assigned_to}=payload.new
+        setWaAssignments(prev=>[...prev.filter(a=>a.client_phone!==client_phone),{client_phone,assigned_to}])
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'whatsapp_assignments'},payload=>{
+        const{client_phone,assigned_to}=payload.new
+        setWaAssignments(prev=>prev.map(a=>a.client_phone===client_phone?{client_phone,assigned_to}:a))
       })
       .subscribe()
     return()=>{supabase.removeChannel(ch)}
@@ -3159,7 +3221,7 @@ export default function App(){
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
         if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
+        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
       })()}</ErrorBoundary>
     </div>

@@ -53,11 +53,12 @@ function MessageBubble({ msg }) {
   )
 }
 
-export default function ChatWindow({ clientPhone, clientName, staffId }) {
+export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAdmin, assignments, staffList, onAssign }) {
   const { messages, loading, sendText, sendTemplate } = useWhatsAppChat(clientPhone || '')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [showPicker, setShowPicker] = useState(false)
+  const [showAssign, setShowAssign] = useState(false)
   const [error, setError] = useState('')
   const bottomRef = useRef(null)
 
@@ -108,13 +109,39 @@ export default function ChatWindow({ clientPhone, clientName, staffId }) {
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: C.bg, height: '100%' }}>
       {/* Chat header */}
       <div style={{ padding: '12px 20px', borderBottom: `1px solid ${C.border}`, background: C.surface, display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.greenDim, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: C.green }}>
+        <div style={{ width: 36, height: 36, borderRadius: '50%', background: C.greenDim, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 700, color: C.green, flexShrink: 0 }}>
           {(clientName || clientPhone)[0].toUpperCase()}
         </div>
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.text }}>{clientName || clientPhone}</div>
           <div style={{ fontSize: 11, color: C.muted }}>{clientPhone}</div>
         </div>
+        {/* Assignment badge + button */}
+        {clientPhone && (() => {
+          const assignment = (assignments || []).find(a => a.client_phone === clientPhone)
+          const assignedStaff = assignment ? (staffList || []).find(s => s.id === assignment.assigned_to) : null
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+              {assignedStaff ? (
+                <span style={{ fontSize: 11, color: '#00d084', background: 'rgba(0,208,132,0.1)', border: '1px solid rgba(0,208,132,0.3)', borderRadius: 6, padding: '3px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  {assignedStaff.display_name}
+                </span>
+              ) : (
+                <span style={{ fontSize: 11, color: '#fd9644', background: 'rgba(253,150,68,0.1)', border: '1px solid rgba(253,150,68,0.3)', borderRadius: 6, padding: '3px 8px', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                  Sin asignar
+                </span>
+              )}
+              {isSuperAdmin && (
+                <button
+                  onClick={() => setShowAssign(true)}
+                  style={{ padding: '5px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: C.textSub, border: `1px solid ${C.border}`, fontWeight: 500, whiteSpace: 'nowrap' }}
+                >
+                  Asignar asesor
+                </button>
+              )}
+            </div>
+          )
+        })()}
       </div>
 
       {/* Messages area */}
@@ -179,6 +206,46 @@ export default function ChatWindow({ clientPhone, clientName, staffId }) {
           onSend={handleSendTemplate}
           onClose={() => setShowPicker(false)}
         />
+      )}
+
+      {/* Assignment modal */}
+      {showAssign && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.72)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}
+          onClick={() => setShowAssign(false)}>
+          <div style={{ background: '#1a1c2e', border: '1px solid rgba(255,255,255,0.10)', borderRadius: 14, padding: 24, width: 320, maxHeight: '70vh', display: 'flex', flexDirection: 'column', gap: 14 }}
+            onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>Asignar asesor</span>
+              <button onClick={() => setShowAssign(false)} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', lineHeight: 1, padding: 0 }}>✕</button>
+            </div>
+            <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>{clientName || clientPhone}</p>
+            <div style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 320 }}>
+              {(staffList || []).map(staff => {
+                const isAssigned = (assignments || []).some(a => a.client_phone === clientPhone && a.assigned_to === staff.id)
+                return (
+                  <button
+                    key={staff.id}
+                    onClick={async () => { await onAssign?.(clientPhone, staff.id); setShowAssign(false) }}
+                    style={{
+                      padding: '10px 14px', borderRadius: 8, fontSize: 13, cursor: 'pointer', textAlign: 'left',
+                      background: isAssigned ? 'rgba(0,208,132,0.10)' : 'rgba(255,255,255,0.03)',
+                      color: isAssigned ? C.green : C.text,
+                      border: `1px solid ${isAssigned ? 'rgba(0,208,132,0.3)' : C.border}`,
+                      fontWeight: isAssigned ? 700 : 400,
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    }}
+                  >
+                    <span>{staff.display_name}</span>
+                    <span style={{ fontSize: 10, color: C.muted, textTransform: 'capitalize' }}>{staff.role}</span>
+                  </button>
+                )
+              })}
+              {!(staffList || []).length && (
+                <p style={{ color: C.muted, fontSize: 12, textAlign: 'center', margin: '12px 0' }}>Sin asesores disponibles</p>
+              )}
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

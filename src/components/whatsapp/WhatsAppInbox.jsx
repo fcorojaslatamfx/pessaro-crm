@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase.js'
 
 const C = {
@@ -12,6 +12,7 @@ const C = {
   purple: '#6c5ce7',
   purpleDim: 'rgba(108,92,231,0.15)',
   blue: '#0984e3',
+  orange: '#fd9644',
 }
 
 function fmtTime(ts) {
@@ -35,7 +36,6 @@ function previewText(msg) {
   return msg.message_type
 }
 
-// Build conversations map from a flat list of messages
 function buildConversations(messages) {
   const map = new Map()
   for (const msg of messages) {
@@ -53,12 +53,17 @@ function buildConversations(messages) {
   return [...map.values()]
 }
 
-export default function WhatsAppInbox({ selectedPhone, onSelect }) {
+function initials(name) {
+  if (!name) return '?'
+  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
+}
+
+export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, staffProfile, assignments, staffList }) {
   const [allMessages, setAllMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('todas') // super_admin only: 'todas' | 'sin_asignar' | 'mis'
 
-  // Carga inicial — UNA sola vez
   useEffect(() => {
     let mounted = true
     ;(async () => {
@@ -74,25 +79,52 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
     return () => { mounted = false }
   }, [])
 
-  // Realtime: NO recarga todo, solo actualiza en memoria
   useEffect(() => {
     const ch = supabase
       .channel('wa-inbox-watch')
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' }, (payload) => {
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'whatsapp_messages' }, payload => {
         setAllMessages(prev => [payload.new, ...prev])
       })
-      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'whatsapp_messages' }, (payload) => {
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'whatsapp_messages' }, payload => {
         setAllMessages(prev => prev.map(m => m.id === payload.new.id ? payload.new : m))
       })
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [])
 
-  const conversations = buildConversations(allMessages)
-  const totalUnread = conversations.reduce((s, c) => s + c.unread, 0)
-  const filtered = conversations.filter(c =>
+  const allConversations = buildConversations(allMessages)
+
+  // Role-based visibility: advisors only see their assigned conversations
+  let visibleConvs = isSuperAdmin
+    ? allConversations
+    : allConversations.filter(c =>
+        (assignments || []).some(a => a.client_phone === c.phone && a.assigned_to === staffProfile?.id)
+      )
+
+  // Super admin filter toggle
+  if (isSuperAdmin) {
+    if (filter === 'sin_asignar') {
+      visibleConvs = visibleConvs.filter(c =>
+        !(assignments || []).some(a => a.client_phone === c.phone)
+      )
+    } else if (filter === 'mis') {
+      visibleConvs = visibleConvs.filter(c =>
+        (assignments || []).some(a => a.client_phone === c.phone && a.assigned_to === staffProfile?.id)
+      )
+    }
+  }
+
+  const totalUnread = visibleConvs.reduce((s, c) => s + c.unread, 0)
+  const filtered = visibleConvs.filter(c =>
     c.name.toLowerCase().includes(search.toLowerCase()) || c.phone.includes(search)
   )
+
+  function getAssignment(phone) {
+    return (assignments || []).find(a => a.client_phone === phone)
+  }
+  function getStaff(id) {
+    return (staffList || []).find(s => s.id === id)
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.surface, borderRight: `1px solid ${C.border}` }}>
@@ -111,8 +143,33 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
           value={search}
           onChange={e => setSearch(e.target.value)}
           placeholder="Buscar conversación..."
-          style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}`, borderRadius: 8, padding: '7px 10px', color: C.text, fontSize: 12, outline: 'none', boxSizing: 'border-box' }}
+          style={{
+            width: '100%', background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}`,
+            borderRadius: 8, padding: '7px 10px', color: C.text, fontSize: 12, outline: 'none',
+            boxSizing: 'border-box', marginBottom: isSuperAdmin ? 8 : 0,
+          }}
         />
+        {/* Filter tabs — super_admin only */}
+        {isSuperAdmin && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[['todas', 'Todas'], ['sin_asignar', 'Sin asignar'], ['mis', 'Mis']].map(([id, label]) => (
+              <button key={id} onClick={() => setFilter(id)}
+                style={{
+                  flex: 1, padding: '4px 0', borderRadius: 6, fontSize: 10, cursor: 'pointer',
+                  fontWeight: filter === id ? 700 : 400,
+                  background: filter === id
+                    ? (id === 'sin_asignar' ? 'rgba(253,150,68,0.15)' : C.greenDim)
+                    : 'rgba(255,255,255,0.03)',
+                  color: filter === id
+                    ? (id === 'sin_asignar' ? C.orange : C.green)
+                    : C.muted,
+                  border: `1px solid ${filter === id ? (id === 'sin_asignar' ? C.orange + '40' : C.green + '40') : C.border}`,
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* List */}
@@ -128,6 +185,8 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
         )}
         {filtered.map(conv => {
           const active = conv.phone === selectedPhone
+          const assignment = getAssignment(conv.phone)
+          const assignedStaff = assignment ? getStaff(assignment.assigned_to) : null
           return (
             <button
               key={conv.phone}
@@ -144,14 +203,37 @@ export default function WhatsAppInbox({ selectedPhone, onSelect }) {
               onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
               onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
             >
-              <div style={{
-                width: 38, height: 38, borderRadius: '50%', flexShrink: 0,
-                background: active ? C.greenDim : C.purpleDim,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 14, fontWeight: 700,
-                color: active ? C.green : C.purple,
-              }}>
-                {(conv.name || '?')[0].toUpperCase()}
+              {/* Avatar with assignment indicator */}
+              <div style={{ position: 'relative', flexShrink: 0 }}>
+                <div style={{
+                  width: 38, height: 38, borderRadius: '50%',
+                  background: active ? C.greenDim : C.purpleDim,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  fontSize: 14, fontWeight: 700,
+                  color: active ? C.green : C.purple,
+                }}>
+                  {(conv.name || '?')[0].toUpperCase()}
+                </div>
+                {/* Orange dot = unassigned (super_admin only) */}
+                {isSuperAdmin && !assignment && (
+                  <div style={{
+                    position: 'absolute', bottom: 0, right: 0,
+                    width: 10, height: 10, borderRadius: '50%',
+                    background: C.orange, border: '2px solid #13151f',
+                  }} title="Sin asignar" />
+                )}
+                {/* Advisor initials badge = assigned */}
+                {isSuperAdmin && assignedStaff && (
+                  <div style={{
+                    position: 'absolute', bottom: -2, right: -5,
+                    background: C.purple, color: '#fff',
+                    fontSize: 7, fontWeight: 800, borderRadius: 4,
+                    padding: '1px 3px', border: '1.5px solid #13151f',
+                    lineHeight: 1.3,
+                  }} title={assignedStaff.display_name}>
+                    {initials(assignedStaff.display_name)}
+                  </div>
+                )}
               </div>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
