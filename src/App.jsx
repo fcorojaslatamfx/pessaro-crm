@@ -2936,6 +2936,8 @@ export default function App(){
   const[waNavPhone,setWaNavPhone]=useState(null)
   const[waViewingPhone,setWaViewingPhone]=useState(null)
   const[waAssignments,setWaAssignments]=useState([])
+  const[installPrompt,setInstallPrompt]=useState(null)
+  const[pwaDismissed,setPwaDismissed]=useState(()=>localStorage.getItem('pwa-dismissed')==='1')
 
   // ── Helpers de rol ────────────────────────────────────────────────────────
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
@@ -3086,6 +3088,13 @@ export default function App(){
     return()=>{supabase.removeChannel(ch)}
   },[user?.id])
 
+  // ── PWA install prompt ────────────────────────────────────────────────────
+  useEffect(()=>{
+    const handler=e=>{e.preventDefault();setInstallPrompt(e)}
+    window.addEventListener('beforeinstallprompt',handler)
+    return()=>window.removeEventListener('beforeinstallprompt',handler)
+  },[])
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(!user)return<Login onLogin={setUser}/>
@@ -3124,7 +3133,19 @@ export default function App(){
 
   const currentMod=validMods.includes(module)?module:'dashboard'
 
-  return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
+  const dismissPWA=()=>{localStorage.setItem('pwa-dismissed','1');setPwaDismissed(true)}
+  const triggerInstall=()=>{if(!installPrompt)return;installPrompt.prompt();installPrompt.userChoice.then(()=>{setInstallPrompt(null)});dismissPWA()}
+
+  return <>{installPrompt&&!pwaDismissed&&(
+    <div style={{display:'flex',alignItems:'center',gap:12,padding:'10px 18px',background:'#0d1117',borderBottom:'1px solid rgba(62,207,199,0.2)',color:'#e0e0e0',fontSize:13,flexWrap:'wrap'}}>
+      <span style={{flex:1,minWidth:200}}>📱 Instala Pessaro CRM en tu dispositivo para acceso rápido</span>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <button onClick={triggerInstall} style={{padding:'6px 16px',borderRadius:8,background:'rgba(62,207,199,0.15)',border:'1px solid rgba(62,207,199,0.4)',color:'#3ECFC7',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>Instalar</button>
+        <button onClick={dismissPWA} style={{padding:'4px 8px',borderRadius:6,background:'transparent',border:'1px solid rgba(255,255,255,0.1)',color:'#a4b0be',cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>✕</button>
+      </div>
+    </div>
+  )}
+  <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
     {/* Sidebar */}
     <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
       <div style={{padding:'22px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',gap:12}}>
@@ -3232,4 +3253,5 @@ export default function App(){
       />)}
     </div>}
   </div>
+  </>
 }

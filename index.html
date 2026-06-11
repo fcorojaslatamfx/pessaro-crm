@@ -6,9 +6,19 @@
     <title>Pessaro Capital · CRM</title>
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" href="https://pessaro.cl/images/logo-256.webp" type="image/webp" />
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#06070d" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+    </script>
   </body>
 </html>
