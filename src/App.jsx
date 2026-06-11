@@ -125,6 +125,25 @@ function SHdr({title,sub,action}){
 }
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
 
+// ─── WA TOAST ─────────────────────────────────────────────────────────────────
+function WaToast({toast,onClose,onView}){
+  return <div style={{background:'#1a1c2e',border:'1px solid rgba(0,208,132,0.3)',borderRadius:12,padding:'14px 16px',width:300,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',gap:10}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div style={{display:'flex',alignItems:'center',gap:7}}>
+        <div style={{width:7,height:7,borderRadius:'50%',background:P.green,flexShrink:0}}/>
+        <span style={{fontSize:11,fontWeight:700,color:P.green,textTransform:'uppercase',letterSpacing:'0.08em'}}>Nuevo WhatsApp</span>
+      </div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:16,lineHeight:1,padding:0}}>✕</button>
+    </div>
+    <div>
+      <div style={{fontSize:14,fontWeight:700,color:P.text,marginBottom:2}}>{toast.name}</div>
+      <div style={{fontSize:11,color:P.muted,fontFamily:"'JetBrains Mono',monospace"}}>{toast.phone}</div>
+    </div>
+    {toast.preview&&<div style={{fontSize:12,color:P.textSub,background:'rgba(255,255,255,0.04)',borderRadius:6,padding:'7px 10px',fontStyle:'italic',lineHeight:1.5}}>"{toast.preview.length>60?toast.preview.slice(0,60)+'…':toast.preview}"</div>}
+    <button onClick={onView} style={{padding:'8px 12px',borderRadius:8,fontSize:12,fontWeight:600,background:P.greenDim,color:P.green,border:`1px solid ${P.green}40`,cursor:'pointer',textAlign:'center'}}>Ver conversación →</button>
+  </div>
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function Login({onLogin}){
   const[email,setEmail]=useState('')
@@ -1159,14 +1178,67 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
   const[saving,setSaving]=useState(false)
   const[form,setForm]=useState({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
   const[err,setErr]=useState({})
+  const[variants,setVariants]=useState({})
+  const[staff,setStaff]=useState([])
+  const[leadCounts,setLeadCounts]=useState({})
+  const[advLeadCounts,setAdvLeadCounts]=useState({})
+  const[varAdvisors,setVarAdvisors]=useState({})
+  const[managingVar,setManagingVar]=useState(null)
+  const[generatingCode,setGeneratingCode]=useState(null)
+  const[copiedLink,setCopiedLink]=useState(null)
+  const[showReferrals,setShowReferrals]=useState({})
   const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted}
+  const VAR_COLORS={navy:'#4a7cdc',editorial:'#a8451f',bold:'#c8e000',minimalist:'#C9A84C'}
+  const FALLBACK_VARIANTS=[
+    {variant_key:'navy',label:'Navy',color:'#4a7cdc',status:'activa'},
+    {variant_key:'editorial',label:'Editorial',color:'#a8451f',status:'activa'},
+    {variant_key:'bold',label:'Bold',color:'#c8e000',status:'activa'},
+    {variant_key:'minimalist',label:'Minimalist',color:'#C9A84C',status:'activa'},
+  ]
+  const ROLE_LABEL={super_admin:'Super Admin',admin:'Admin',asesor:'Asesor'}
+  const ROLE_COLOR={super_admin:P.orange,admin:P.blue,asesor:P.purple}
+
+  const loadAdminData=useCallback(async()=>{
+    try{
+      const{data:v}=await supabase.from('campaign_variants').select('*').order('variant_key')
+      if(v&&v.length>0){
+        const m={}
+        v.forEach(x=>{if(!m[x.campaign_id])m[x.campaign_id]=[];m[x.campaign_id].push(x)})
+        setVariants(m)
+      }
+    }catch(e){console.warn('campaign_variants:',e)}
+    try{
+      const{data:s}=await supabase.from('crm_staff_profiles').select('id,display_name,title,role,referral_code,user_id').order('display_name')
+      setStaff(s||[])
+    }catch(e){console.warn('staff:',e)}
+    try{
+      const{data:l}=await supabase.from('campaign_leads').select('variant,advisor_referral_code')
+      if(l){
+        const vc={},ac={}
+        l.forEach(x=>{
+          if(x.variant)vc[x.variant]=(vc[x.variant]||0)+1
+          if(x.advisor_referral_code)ac[x.advisor_referral_code]=(ac[x.advisor_referral_code]||0)+1
+        })
+        setLeadCounts(vc)
+        setAdvLeadCounts(ac)
+      }
+    }catch(e){console.warn('leads:',e)}
+  },[])
+
+  useEffect(()=>{loadAdminData()},[loadAdminData])
+
+  const getCampVariants=cid=>{
+    const v=variants[cid]
+    if(v&&v.length>0)return v
+    return FALLBACK_VARIANTS.map(f=>({...f,campaign_id:cid,landing_url:`https://pessaro.cl/campana/${f.variant_key}`}))
+  }
 
   const validate=()=>{
     const e={}
     if(!form.name.trim())e.name='Obligatorio'
     if(!form.slug.trim())e.slug='Obligatorio'
     else if(!/^[a-z0-9-]+$/.test(form.slug))e.slug='Solo minúsculas, números y guiones'
-    setErr(e); return !Object.keys(e).length
+    setErr(e);return!Object.keys(e).length
   }
 
   const create=async()=>{
@@ -1186,13 +1258,67 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
     setCampaigns(p=>p.map(c=>c.id===id?{...c,status}:c))
   }
 
+  const updateVariantStatus=async(variant,newStatus)=>{
+    if(!variant.id)return
+    try{
+      await supabase.from('campaign_variants').update({status:newStatus}).eq('id',variant.id)
+      setVariants(prev=>{
+        const cid=variant.campaign_id
+        return{...prev,[cid]:(prev[cid]||[]).map(v=>v.id===variant.id?{...v,status:newStatus}:v)}
+      })
+    }catch(e){console.error(e)}
+  }
+
+  const generateCode=async s=>{
+    setGeneratingCode(s.id)
+    const name=s.display_name||'USR'
+    const prefix=name.replace(/\s+/g,'').slice(0,3).toUpperCase().padEnd(3,'X')
+    const suffix=Math.random().toString(36).slice(2,7).toUpperCase()
+    const code=prefix+suffix
+    try{
+      await supabase.from('crm_staff_profiles').update({referral_code:code}).eq('id',s.id)
+      setStaff(prev=>prev.map(x=>x.id===s.id?{...x,referral_code:code}:x))
+    }catch(e){console.error(e)}
+    setGeneratingCode(null)
+  }
+
+  const copyLink=async text=>{
+    try{await navigator.clipboard.writeText(text);setCopiedLink(text);setTimeout(()=>setCopiedLink(null),2000)}catch(e){}
+  }
+
+  const openManageAdvisors=async v=>{
+    setManagingVar(v)
+    if(!v.id)return
+    try{
+      const{data}=await supabase.from('variant_advisors').select('*').eq('variant_id',v.id)
+      setVarAdvisors(prev=>({...prev,[v.id]:data||[]}))
+    }catch(e){console.warn('var_advisors:',e)}
+  }
+
+  const toggleAdvisor=async(variantId,staffId)=>{
+    const advisors=varAdvisors[variantId]||[]
+    const existing=advisors.find(a=>a.staff_id===staffId)
+    try{
+      if(existing){
+        await supabase.from('variant_advisors').update({enabled:!existing.enabled}).eq('id',existing.id)
+        setVarAdvisors(prev=>({...prev,[variantId]:prev[variantId].map(a=>a.staff_id===staffId?{...a,enabled:!a.enabled}:a)}))
+      }else{
+        const{data}=await supabase.from('variant_advisors').insert({variant_id:variantId,staff_id:staffId,enabled:true,granted_by:user.id,granted_at:new Date().toISOString()}).select().single()
+        if(data)setVarAdvisors(prev=>({...prev,[variantId]:[...(prev[variantId]||[]),data]}))
+      }
+    }catch(e){console.error(e)}
+  }
+
   return <div>
     <SHdr title="Gestionar Campañas" sub="Crea y administra campañas · solo super admin"
       action={<Btn onClick={()=>setShowNew(true)}>+ Nueva campaña</Btn>}/>
-    <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {campaigns.map(c=>(
-        <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
+    <div style={{display:'flex',flexDirection:'column',gap:18}}>
+      {campaigns.map(c=>{
+        const campVariants=getCampVariants(c.id)
+        const activeVariants=campVariants.filter(v=>v.status==='activa')
+        return <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
+          {/* Campaign header */}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12,marginBottom:14}}>
             <div>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                 <Badge label={c.status} color={STATUS_C[c.status]}/>
@@ -1218,13 +1344,106 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
               ))}
             </div>
           </div>
-          <div style={{marginTop:12,padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
+
+          {/* Variants */}
+          <div style={{marginBottom:16}}>
+            <p style={{fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Variantes de landing</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:10}}>
+              {campVariants.map(v=>{
+                const vc=v.color||VAR_COLORS[v.variant_key]||P.purple
+                const leads=leadCounts[v.variant_key]||0
+                const url=v.landing_url||`https://pessaro.cl/campana/${v.variant_key}`
+                const isHardcoded=!v.id
+                return <div key={v.variant_key} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${vc}30`,borderRadius:10,padding:'12px 14px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:10,height:10,borderRadius:2,background:vc,flexShrink:0}}/>
+                      <span style={{fontSize:13,fontWeight:700,color:P.text}}>{v.label||v.variant_key}</span>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:600,color:P.muted,background:'rgba(255,255,255,0.05)',padding:'2px 7px',borderRadius:4}}>{leads} leads</span>
+                  </div>
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    style={{fontSize:10,color:vc,fontFamily:'monospace',display:'block',marginBottom:10,wordBreak:'break-all',textDecoration:'none',lineHeight:1.4}}
+                    onMouseEnter={e=>e.currentTarget.style.textDecoration='underline'}
+                    onMouseLeave={e=>e.currentTarget.style.textDecoration='none'}>
+                    {url}
+                  </a>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6}}>
+                    {!isHardcoded&&<div style={{display:'flex',gap:4}}>
+                      {['activa','pausada'].map(s=>(
+                        <button key={s} onClick={()=>updateVariantStatus(v,s)} disabled={v.status===s}
+                          style={{padding:'3px 8px',borderRadius:5,fontSize:10,cursor:v.status===s?'default':'pointer',
+                            background:v.status===s?(s==='activa'?P.greenDim:P.orangeDim):'rgba(255,255,255,0.04)',
+                            color:v.status===s?(s==='activa'?P.green:P.orange):P.muted,
+                            border:`1px solid ${v.status===s?(s==='activa'?P.green+'40':P.orange+'40'):P.border}`,fontWeight:600}}>
+                          {s==='activa'?'Activa':'Pausada'}
+                        </button>
+                      ))}
+                    </div>}
+                    {isHardcoded&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>Fallback local</span>}
+                    <Btn variant="ghost" onClick={()=>openManageAdvisors(v)} style={{padding:'3px 8px',fontSize:10}}>Asesores</Btn>
+                  </div>
+                </div>
+              })}
+            </div>
+          </div>
+
+          {/* Referral codes */}
+          <div style={{marginBottom:14}}>
+            <button onClick={()=>setShowReferrals(p=>({...p,[c.id]:!p[c.id]}))}
+              style={{display:'flex',alignItems:'center',gap:7,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 14px',cursor:'pointer',width:'100%',textAlign:'left',marginBottom:showReferrals[c.id]?10:0}}>
+              <span style={{fontSize:12,fontWeight:600,color:P.textSub}}>🔗 Códigos de referido</span>
+              <span style={{fontSize:11,color:P.muted,marginLeft:'auto'}}>{staff.length} asesores · {staff.filter(s=>s.referral_code).length} con código</span>
+              <span style={{fontSize:12,color:P.muted,marginLeft:6}}>{showReferrals[c.id]?'▲':'▼'}</span>
+            </button>
+            {showReferrals[c.id]&&<div style={{background:'rgba(255,255,255,0.02)',borderRadius:10,border:`1px solid ${P.border}`,overflow:'auto'}}>
+              <div style={{padding:'9px 14px',borderBottom:`1px solid ${P.border}`,display:'grid',gridTemplateColumns:'1.6fr 0.8fr 1.1fr 3fr 0.5fr',gap:8,minWidth:700}}>
+                {['Nombre','Rol','Código','Links por variante','Leads'].map(h=>(
+                  <span key={h} style={{fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.07em'}}>{h}</span>
+                ))}
+              </div>
+              {staff.length===0&&<p style={{padding:'14px',fontSize:13,color:P.muted,margin:0}}>No hay staff registrado.</p>}
+              {staff.map(s=>(
+                <div key={s.id} style={{padding:'10px 14px',borderBottom:`1px solid ${P.border}`,display:'grid',gridTemplateColumns:'1.6fr 0.8fr 1.1fr 3fr 0.5fr',gap:8,alignItems:'center',minWidth:700}}>
+                  <div style={{fontSize:13,fontWeight:600,color:P.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.display_name||'—'}</div>
+                  <div>{s.role&&<Badge label={ROLE_LABEL[s.role]||s.role} color={ROLE_COLOR[s.role]||P.muted}/>}</div>
+                  <div>
+                    {s.referral_code
+                      ?<span style={{fontSize:11,fontFamily:'monospace',color:P.green,background:P.greenDim,padding:'2px 7px',borderRadius:4}}>{s.referral_code}</span>
+                      :<Btn variant="ghost" onClick={()=>generateCode(s)} disabled={generatingCode===s.id} style={{padding:'3px 8px',fontSize:11}}>{generatingCode===s.id?'…':'Generar código'}</Btn>
+                    }
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    {s.referral_code
+                      ?activeVariants.map(v=>{
+                          const link=`https://pessaro.cl/campana/${v.variant_key}?ref=${s.referral_code}`
+                          const vc=v.color||VAR_COLORS[v.variant_key]||P.purple
+                          return <div key={v.variant_key} style={{display:'flex',alignItems:'center',gap:5}}>
+                            <div style={{width:7,height:7,borderRadius:1,background:vc,flexShrink:0}}/>
+                            <span style={{fontSize:10,color:P.muted,fontFamily:'monospace',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</span>
+                            <button onClick={()=>copyLink(link)} style={{background:'none',border:`1px solid ${copiedLink===link?P.green:P.border}`,borderRadius:4,padding:'2px 6px',color:copiedLink===link?P.green:P.muted,fontSize:10,cursor:'pointer',flexShrink:0,transition:'all 0.1s'}}>
+                              {copiedLink===link?'✓':'Copiar'}
+                            </button>
+                          </div>
+                        })
+                      :<span style={{fontSize:11,color:P.muted,fontStyle:'italic'}}>Asigna un código primero</span>
+                    }
+                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:s.referral_code?P.text:P.muted,textAlign:'center'}}>
+                    {s.referral_code?(advLeadCounts[s.referral_code]||0):'—'}
+                  </div>
+                </div>
+              ))}
+            </div>}
+          </div>
+
+          <div style={{padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
             <p style={{fontSize:11,color:P.muted,margin:0}}>
               Los asesores ven <strong style={{color:P.text}}>🚀 {c.name}</strong> en su sidebar {c.status==='activa'?'✓':'· pausada/cerrada = oculta para asesores'}.
             </p>
           </div>
         </GlassCard>
-      ))}
+      })}
       {campaigns.length===0&&<GlassCard><p style={{color:P.muted,fontSize:14,textAlign:'center',padding:'20px 0',margin:0}}>No hay campañas. Crea la primera.</p></GlassCard>}
     </div>
 
@@ -1256,6 +1475,41 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
         <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
           <Btn variant="ghost" onClick={()=>setShowNew(false)}>Cancelar</Btn>
           <Btn onClick={create} disabled={saving}>{saving?'Creando...':'Crear campaña'}</Btn>
+        </div>
+      </div>
+    </Modal>}
+
+    {managingVar&&<Modal title={`Asesores — ${managingVar.label||managingVar.variant_key}`} onClose={()=>setManagingVar(null)} accent={managingVar.color||P.purple}>
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        <p style={{fontSize:13,color:P.muted,margin:0}}>Habilita o deshabilita el acceso de cada asesor a esta variante y su link de referido.</p>
+        {!managingVar.id&&<div style={{padding:'10px 12px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
+          <p style={{fontSize:12,color:P.orange,margin:0}}>Esta es una variante de fallback sin registro en DB. Guárdala en la tabla campaign_variants para gestionar permisos.</p>
+        </div>}
+        {managingVar.id&&<div>
+          {staff.length===0&&<p style={{fontSize:13,color:P.muted}}>No hay staff registrado.</p>}
+          {staff.map(s=>{
+            const advisors=varAdvisors[managingVar.id]||[]
+            const adv=advisors.find(a=>a.staff_id===s.id)
+            const enabled=adv?.enabled??false
+            return <div key={s.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name||'—'}</div>
+                <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3}}>
+                  {s.role&&<Badge label={ROLE_LABEL[s.role]||s.role} color={ROLE_COLOR[s.role]||P.muted}/>}
+                  {s.referral_code&&<span style={{fontSize:10,color:P.muted,fontFamily:'monospace'}}>{s.referral_code}</span>}
+                </div>
+              </div>
+              <button onClick={()=>toggleAdvisor(managingVar.id,s.id)}
+                style={{padding:'6px 14px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',
+                  background:enabled?P.greenDim:P.redDim,color:enabled?P.green:P.red,
+                  border:`1px solid ${enabled?P.green+'40':P.red+'40'}`}}>
+                {enabled?'✓ Habilitado':'✗ Desactivado'}
+              </button>
+            </div>
+          })}
+        </div>}
+        <div style={{display:'flex',justifyContent:'flex-end',paddingTop:8}}>
+          <Btn variant="ghost" onClick={()=>setManagingVar(null)}>Cerrar</Btn>
         </div>
       </div>
     </Modal>}
@@ -2467,15 +2721,26 @@ function BrokerView({user,campaigns,leads,isSuperAdmin}){
 }
 
 // ─── WHATSAPP MESSAGES MODULE ────────────────────────────────────────────────
-function WhatsAppMessages({ user, staffProfile }) {
+function WhatsAppMessages({ user, staffProfile, navPhone, onNavConsumed, onPhoneChange }) {
   const [selectedPhone, setSelectedPhone] = useState(null)
   const [selectedName, setSelectedName]   = useState(null)
   const [subTab, setSubTab]               = useState('chat')
+
+  useEffect(()=>{
+    if(navPhone?.phone){
+      setSelectedPhone(navPhone.phone)
+      setSelectedName(navPhone.name||navPhone.phone)
+      setSubTab('chat')
+      onPhoneChange?.(navPhone.phone)
+      onNavConsumed?.()
+    }
+  },[navPhone])
 
   function handleSelect(phone, name) {
     setSelectedPhone(phone)
     setSelectedName(name)
     setSubTab('chat')
+    onPhoneChange?.(phone)
   }
 
   return (
@@ -2534,6 +2799,10 @@ export default function App(){
   const[staffProfile,setSP]    =useState(null)
   const[campaigns,setCampaigns]=useState([])
   const[loading,setLoading]    =useState(true)
+  const[waUnread,setWaUnread]  =useState(0)
+  const[waToasts,setWaToasts]  =useState([])
+  const[waNavPhone,setWaNavPhone]=useState(null)
+  const[waViewingPhone,setWaViewingPhone]=useState(null)
 
   // ── Helpers de rol ────────────────────────────────────────────────────────
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
@@ -2607,6 +2876,50 @@ export default function App(){
     return()=>document.head.removeChild(s)
   },[])
 
+  // ── WA Notification refs (stale-closure-safe for subscription) ─────────────
+  const _moduleRef=useRef(module)
+  const _waPhoneRef=useRef(waViewingPhone)
+  useEffect(()=>{_moduleRef.current=module},[module])
+  useEffect(()=>{_waPhoneRef.current=waViewingPhone},[waViewingPhone])
+
+  // ── WA Global Realtime Notifications ──────────────────────────────────────
+  useEffect(()=>{
+    if(!user)return
+    const playBeep=()=>{
+      try{
+        const ctx=new(window.AudioContext||window.webkitAudioContext)()
+        const osc=ctx.createOscillator(),gain=ctx.createGain()
+        osc.connect(gain);gain.connect(ctx.destination)
+        osc.frequency.value=880;osc.type='sine'
+        gain.gain.setValueAtTime(0.25,ctx.currentTime)
+        gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.35)
+        osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.35)
+      }catch(e){}
+    }
+    const ch=supabase.channel('wa-global-notifs')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'whatsapp_messages'},payload=>{
+        const msg=payload.new
+        if(msg.direction!=='inbound')return
+        const phone=msg.client_phone
+        if(_moduleRef.current==='mensajes'&&_waPhoneRef.current===phone)return
+        setWaUnread(n=>n+1)
+        playBeep()
+        const id=uid()
+        const preview=(()=>{
+          const c=msg.content
+          if(c?.text)return c.text.slice(0,60)
+          if(msg.message_type==='image')return'🖼 Imagen'
+          if(msg.message_type==='document')return'📄 Documento'
+          if(msg.message_type==='audio')return'🎵 Audio'
+          return''
+        })()
+        setWaToasts(prev=>[...prev,{id,phone,name:msg.client_name||phone,preview}])
+        setTimeout(()=>setWaToasts(prev=>prev.filter(t=>t.id!==id)),8000)
+      })
+      .subscribe()
+    return()=>{supabase.removeChannel(ch)}
+  },[user?.id])
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(!user)return<Login onLogin={setUser}/>
 
@@ -2655,14 +2968,16 @@ export default function App(){
         {NAV.map(item=>{
           const active=currentMod===item.id
           const ic=item.color||P.purple
-          return <button key={item.id} onClick={()=>setModule(item.id)}
+          const showBadge=item.id==='mensajes'&&waUnread>0
+          return <button key={item.id} onClick={()=>{setModule(item.id);if(item.id==='mensajes')setWaUnread(0)}}
             style={{width:'100%',display:'flex',alignItems:'center',gap:9,padding:'9px 12px',borderRadius:8,marginBottom:2,cursor:'pointer',textAlign:'left',
               background:active?ic+'22':'transparent',color:active?ic:P.muted,
               border:active?`1px solid ${ic}35`:'1px solid transparent',
               fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
             <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7}}>{item.icon}</span>
             <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>
-            {active&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
+            {showBadge&&<span style={{background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 6px',minWidth:16,textAlign:'center',lineHeight:'14px',flexShrink:0}}>{waUnread>99?'99+':waUnread}</span>}
+            {active&&!showBadge&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
           </button>
         })}
       </nav>
@@ -2739,9 +3054,15 @@ export default function App(){
         if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
         if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
         if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile}/>
+        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
         return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
       })()}</ErrorBoundary>
     </div>
+    {waToasts.length>0&&<div style={{position:'fixed',bottom:20,right:20,display:'flex',flexDirection:'column',gap:10,zIndex:9999}}>
+      {waToasts.map(t=><WaToast key={t.id} toast={t}
+        onClose={()=>setWaToasts(p=>p.filter(x=>x.id!==t.id))}
+        onView={()=>{setModule('mensajes');setWaUnread(0);setWaNavPhone({phone:t.phone,name:t.name});setWaToasts(p=>p.filter(x=>x.id!==t.id))}}
+      />)}
+    </div>}
   </div>
 }
