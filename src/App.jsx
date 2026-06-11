@@ -22,6 +22,17 @@ class ErrorBoundary extends Component {
   }
 }
 
+// ─── RESPONSIVE HOOK ──────────────────────────────────────────────────────────
+function useWindowSize(){
+  const[w,setW]=useState(typeof window!=='undefined'?window.innerWidth:1280)
+  useEffect(()=>{
+    const h=()=>setW(window.innerWidth)
+    window.addEventListener('resize',h)
+    return()=>window.removeEventListener('resize',h)
+  },[])
+  return w
+}
+
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 const P = {
   bg:'#0d0f17', surface:'#13151f', sidebar:'#0a0c16',
@@ -105,8 +116,9 @@ function Btn({children,onClick,variant='primary',style={},disabled=false}){
     style={{padding:'9px 16px',borderRadius:8,fontSize:13,cursor:disabled?'not-allowed':'pointer',opacity:disabled?0.5:1,display:'inline-flex',alignItems:'center',gap:6,...vs[variant],...style}}>{children}</button>
 }
 function Modal({title,onClose,children,accent=P.purple}){
-  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:20}}>
-    <div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:16,width:'100%',maxWidth:540,maxHeight:'90vh',overflow:'auto',boxShadow:'0 25px 60px rgba(0,0,0,0.6)'}}>
+  const mW=useWindowSize()<768
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1001,padding:mW?10:20}}>
+    <div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:16,width:'100%',maxWidth:mW?'95vw':540,maxHeight:'90vh',overflow:'auto',boxShadow:'0 25px 60px rgba(0,0,0,0.6)'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${P.border}`}}>
         <div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:8,height:8,borderRadius:'50%',background:accent}}/><h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>{title}</h3></div>
         <button onClick={onClose} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
@@ -289,15 +301,16 @@ function Dashboard({contacts,leads,onNav}){
   const newC=contacts.filter(c=>c.status==='new').length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
+  const isMob=useWindowSize()<768
   return <div>
     <SHdr title="Dashboard" sub="Datos en tiempo real desde Supabase"/>
-    <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
+    <div style={{display:'grid',gridTemplateColumns:isMob?'1fr 1fr':'repeat(4,1fr)',gap:14,marginBottom:22}}>
       <StatCard label="Formularios" value={contacts.length} sub={newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'} accent={newC>0?P.orange:P.purple} Icon="📋"/>
       <StatCard label="Leads pipeline" value={leads.length} sub={`${closed} cerrados`} accent={P.blue} Icon="◈"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18,marginBottom:18}}>
+    <div style={{display:'grid',gridTemplateColumns:isMob?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Pipeline por etapa</p>
         <ErrorBoundary><ResponsiveContainer width="100%" height={180}>
@@ -576,7 +589,8 @@ function Contacts({user,isSuperAdmin}){
     </div>
 
     {loading?<Spinner/>:<GlassCard style={{padding:0}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
+      <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
         <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
           {[...(isSuperAdmin?['Asesor']:[]),(isSuperAdmin?'Capital':''),'Nombre','Email','Teléfono','Estado','Origen',''].filter(Boolean).map(h=>(
             <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
@@ -605,6 +619,7 @@ function Contacts({user,isSuperAdmin}){
           ))}
         </tbody>
       </table>
+      </div>
       {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>{contacts.length===0?'Aún no tienes contactos. Añade uno o importa un CSV.':'Sin resultados.'}</div>}
     </GlassCard>}
 
@@ -1647,9 +1662,10 @@ function Tasks({contacts,leads}){
     return''
   }
   const pending=tasks.filter(t=>!t.done), done=tasks.filter(t=>t.done)
+  const isMobT=useWindowSize()<768
   return <div>
     <SHdr title="Tareas" sub={`${pending.length} pendientes · ${done.length} completadas`} action={<Btn onClick={()=>setShowAdd(true)}>+ Nueva tarea</Btn>}/>
-    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:isMobT?'1fr':'1fr 1fr',gap:20}}>
       <div>
         <p style={{fontSize:10,fontWeight:700,color:P.orange,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>● Pendientes ({pending.length})</p>
         {pending.map(t=><GlassCard key={t.id} style={{marginBottom:10,display:'flex',gap:12,alignItems:'flex-start',borderLeft:`3px solid ${PRIO_COLOR[t.priority]}`}}>
@@ -2167,6 +2183,7 @@ function Reports({contacts,leads}){
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const capData=['1k-5k','5k-20k','20k-50k','50k+'].map(r=>({name:r,v:leads.filter(l=>l.investment_range===r).length}))
+  const isMobR=useWindowSize()<768
   return <div>
     <SHdr title="Reportes" sub="Analíticas en tiempo real"
       action={<div style={{display:'flex',gap:8}}>
@@ -2180,7 +2197,7 @@ function Reports({contacts,leads}){
       <StatCard label="Leads totales" value={leads.length} accent={P.blue} Icon="◈"/>
       <StatCard label="Cerrados" value={closed} accent={P.orange} Icon="✓"/>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18,marginBottom:18}}>
+    <div style={{display:'grid',gridTemplateColumns:isMobR?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Leads por etapa</p>
         <ErrorBoundary><ResponsiveContainer width="100%" height={190}><BarChart data={pipeData} barSize={24}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.purple} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></ErrorBoundary>
@@ -2828,6 +2845,8 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
   const [selectedName, setSelectedName]   = useState(null)
   const [subTab, setSubTab]               = useState('chat')
   const [staffList, setStaffList]         = useState([])
+  const [mobileView, setMobileView]       = useState('inbox') // 'inbox' | 'chat'
+  const isMob = useWindowSize() < 768
 
   // Load all staff profiles for assignment UI
   useEffect(()=>{
@@ -2842,6 +2861,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
       setSelectedPhone(navPhone.phone)
       setSelectedName(navPhone.name||navPhone.phone)
       setSubTab('chat')
+      setMobileView('chat')
       onPhoneChange?.(navPhone.phone)
       onNavConsumed?.()
     }
@@ -2851,6 +2871,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
     setSelectedPhone(phone)
     setSelectedName(name)
     setSubTab('chat')
+    setMobileView('chat')
     onPhoneChange?.(phone)
   }
 
@@ -2887,26 +2908,38 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
       </div>
 
       {subTab === 'chat' && (
-        <div style={{ display:'flex', height:'calc(100vh - 180px)', borderRadius:14, overflow:'hidden', border:`1px solid ${P.border}` }}>
-          <div style={{ width:280, flexShrink:0 }}>
-            <WhatsAppInbox
-              selectedPhone={selectedPhone}
-              onSelect={handleSelect}
-              isSuperAdmin={isSuperAdmin}
-              staffProfile={staffProfile}
-              assignments={waAssignments}
-              staffList={staffList}
-            />
-          </div>
-          <ChatWindow
-            clientPhone={selectedPhone}
-            clientName={selectedName}
-            staffId={staffProfile?.id}
-            isSuperAdmin={isSuperAdmin}
-            assignments={waAssignments}
-            staffList={staffList}
-            onAssign={handleAssign}
-          />
+        <div style={{ display:'flex', height: isMob ? 'calc(100vh - 160px)' : 'calc(100vh - 180px)', borderRadius:14, overflow:'hidden', border:`1px solid ${P.border}` }}>
+          {(!isMob || mobileView==='inbox') && (
+            <div style={{ width: isMob ? '100%' : 280, flexShrink:0 }}>
+              <WhatsAppInbox
+                selectedPhone={selectedPhone}
+                onSelect={handleSelect}
+                isSuperAdmin={isSuperAdmin}
+                staffProfile={staffProfile}
+                assignments={waAssignments}
+                staffList={staffList}
+              />
+            </div>
+          )}
+          {(!isMob || mobileView==='chat') && (
+            <div style={{ flex:1, display:'flex', flexDirection:'column', position:'relative' }}>
+              {isMob && (
+                <button onClick={()=>setMobileView('inbox')}
+                  style={{position:'absolute',top:10,left:10,zIndex:10,background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,cursor:'pointer',fontSize:13,padding:'6px 12px',display:'flex',alignItems:'center',gap:6,minHeight:44}}>
+                  ← Volver
+                </button>
+              )}
+              <ChatWindow
+                clientPhone={selectedPhone}
+                clientName={selectedName}
+                staffId={staffProfile?.id}
+                isSuperAdmin={isSuperAdmin}
+                assignments={waAssignments}
+                staffList={staffList}
+                onAssign={handleAssign}
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -2938,6 +2971,11 @@ export default function App(){
   const[waAssignments,setWaAssignments]=useState([])
   const[installPrompt,setInstallPrompt]=useState(null)
   const[pwaDismissed,setPwaDismissed]=useState(()=>localStorage.getItem('pwa-dismissed')==='1')
+  const[menuOpen,setMenuOpen]=useState(false)
+  const[tabletExpanded,setTabletExpanded]=useState(false)
+  const screenW=useWindowSize()
+  const isMobile=screenW<768
+  const isTablet=screenW>=768&&screenW<1024
 
   // ── Helpers de rol ────────────────────────────────────────────────────────
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
@@ -3136,6 +3174,10 @@ export default function App(){
   const dismissPWA=()=>{localStorage.setItem('pwa-dismissed','1');setPwaDismissed(true)}
   const triggerInstall=()=>{if(!installPrompt)return;installPrompt.prompt();installPrompt.userChoice.then(()=>{setInstallPrompt(null)});dismissPWA()}
 
+  // Sidebar effective width
+  const sidebarW=isMobile?260:isTablet?(tabletExpanded?218:60):218
+  const showLabels=isMobile||(!isTablet)||tabletExpanded
+
   return <>{installPrompt&&!pwaDismissed&&(
     <div style={{display:'flex',alignItems:'center',gap:12,padding:'10px 18px',background:'#0d1117',borderBottom:'1px solid rgba(62,207,199,0.2)',color:'#e0e0e0',fontSize:13,flexWrap:'wrap'}}>
       <span style={{flex:1,minWidth:200}}>📱 Instala Pessaro CRM en tu dispositivo para acceso rápido</span>
@@ -3145,106 +3187,137 @@ export default function App(){
       </div>
     </div>
   )}
-  <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
-    {/* Sidebar */}
-    <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
-      <div style={{padding:'22px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',gap:12}}>
-        <img src={LOGO_URI} width={32} height={32} style={{borderRadius:6,objectFit:'cover',display:'block'}} alt="Pessaro"/>
-        <div><div style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em'}}>Pessaro</div><div style={{fontSize:10,color:P.purple,letterSpacing:'0.10em',textTransform:'uppercase',fontWeight:600}}>Capital CRM</div></div>
-      </div>
-      <nav style={{padding:'10px 8px',flex:1,overflowY:'auto'}}>
-        {NAV.map(item=>{
-          const active=currentMod===item.id
-          const ic=item.color||P.purple
-          const showBadge=item.id==='mensajes'&&waUnread>0
-          return <button key={item.id} onClick={()=>{setModule(item.id);if(item.id==='mensajes')setWaUnread(0)}}
-            style={{width:'100%',display:'flex',alignItems:'center',gap:9,padding:'9px 12px',borderRadius:8,marginBottom:2,cursor:'pointer',textAlign:'left',
-              background:active?ic+'22':'transparent',color:active?ic:P.muted,
-              border:active?`1px solid ${ic}35`:'1px solid transparent',
-              fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
-            <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7}}>{item.icon}</span>
-            <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>
-            {showBadge&&<span style={{background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 6px',minWidth:16,textAlign:'center',lineHeight:'14px',flexShrink:0}}>{waUnread>99?'99+':waUnread}</span>}
-            {active&&!showBadge&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
-          </button>
-        })}
-      </nav>
-      {/* Supabase status */}
-      <div style={{padding:'8px 12px',borderBottom:`1px solid ${P.border}`}}>
-        <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:7}}>
-          <div style={{width:5,height:5,borderRadius:'50%',background:P.green,flexShrink:0}}/>
-          <span style={{fontSize:10,color:P.green,fontWeight:600,letterSpacing:'0.04em'}}>Supabase conectado</span>
+  <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:P.bg}}>
+    {/* Mobile top bar */}
+    {isMobile&&<div style={{height:48,background:P.sidebar,borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 8px',position:'sticky',top:0,zIndex:100,flexShrink:0}}>
+      <button onClick={()=>setMenuOpen(true)} style={{background:'none',border:'none',color:P.text,fontSize:20,cursor:'pointer',minWidth:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8}}>☰</button>
+      <span style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em'}}>Pessaro CRM</span>
+      <button onClick={()=>{setModule('mensajes');setWaUnread(0)}} style={{background:'none',border:'none',color:waUnread>0?P.red:P.muted,fontSize:18,cursor:'pointer',minWidth:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8,position:'relative'}}>
+        🔔{waUnread>0&&<span style={{position:'absolute',top:6,right:6,background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 5px',lineHeight:'14px'}}>{waUnread>99?'99+':waUnread}</span>}
+      </button>
+    </div>}
+    <div style={{display:'flex',flex:1,minHeight:0,overflow:'hidden'}}>
+      {/* Backdrop (mobile only) */}
+      {isMobile&&menuOpen&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:999}} onClick={()=>setMenuOpen(false)}/>}
+      {/* Sidebar */}
+      <div
+        style={{
+          width:sidebarW,
+          background:P.sidebar,
+          borderRight:`1px solid ${P.border}`,
+          display:'flex',
+          flexDirection:'column',
+          flexShrink:0,
+          position:isMobile?'fixed':'sticky',
+          top:0,
+          left:isMobile?(menuOpen?0:-260):0,
+          height:'100vh',
+          zIndex:isMobile?1000:'auto',
+          transition:'left 0.25s ease, width 0.2s ease',
+          overflow:'hidden',
+        }}
+        onMouseEnter={()=>isTablet&&setTabletExpanded(true)}
+        onMouseLeave={()=>isTablet&&setTabletExpanded(false)}
+      >
+        {/* Logo */}
+        <div style={{padding:isTablet&&!tabletExpanded?'22px 0':'22px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',justifyContent:isTablet&&!tabletExpanded?'center':'flex-start',gap:12,flexShrink:0}}>
+          <img src={LOGO_URI} width={32} height={32} style={{borderRadius:6,objectFit:'cover',display:'block',flexShrink:0}} alt="Pessaro"/>
+          {showLabels&&<div><div style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em',whiteSpace:'nowrap'}}>Pessaro</div><div style={{fontSize:10,color:P.purple,letterSpacing:'0.10em',textTransform:'uppercase',fontWeight:600,whiteSpace:'nowrap'}}>Capital CRM</div></div>}
         </div>
-      </div>
-      {/* User card */}
-      <div style={{padding:'12px 14px'}}>
-        {/* Avatar + nombre + cargo */}
-        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
-          <div style={{
-            width:38,height:38,borderRadius:10,flexShrink:0,
-            background:isSuperAdmin?P.orangeDim:isBroker?P.blueDim:P.purpleDim,
-            display:'flex',alignItems:'center',justifyContent:'center',
-            fontSize:15,fontWeight:800,
-            color:isSuperAdmin?P.orange:isBroker?P.blue:P.purple,
-            border:`1.5px solid ${isSuperAdmin?P.orange:isBroker?P.blue:P.purple}30`
-          }}>
-            {(staffProfile?.display_name||user?.email||'?')[0].toUpperCase()}
+        {/* Nav */}
+        <nav style={{padding:'10px 8px',flex:1,overflowY:'auto'}}>
+          {NAV.map(item=>{
+            const active=currentMod===item.id
+            const ic=item.color||P.purple
+            const showBadge=item.id==='mensajes'&&waUnread>0
+            return <button key={item.id} onClick={()=>{setModule(item.id);if(item.id==='mensajes')setWaUnread(0);if(isMobile)setMenuOpen(false)}}
+              style={{width:'100%',display:'flex',alignItems:'center',justifyContent:showLabels?'flex-start':'center',gap:showLabels?9:0,padding:showLabels?'9px 12px':'11px 0',borderRadius:8,marginBottom:2,cursor:'pointer',textAlign:'left',minHeight:44,position:'relative',
+                background:active?ic+'22':'transparent',color:active?ic:P.muted,
+                border:active?`1px solid ${ic}35`:'1px solid transparent',
+                fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
+              <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7,flexShrink:0}}>{item.icon}</span>
+              {showLabels&&<span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>}
+              {showBadge&&showLabels&&<span style={{background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 6px',minWidth:16,textAlign:'center',lineHeight:'14px',flexShrink:0}}>{waUnread>99?'99+':waUnread}</span>}
+              {showBadge&&!showLabels&&<span style={{position:'absolute',top:4,right:4,background:P.red,color:'#fff',borderRadius:'50%',width:8,height:8}}/>}
+              {active&&!showBadge&&showLabels&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
+            </button>
+          })}
+        </nav>
+        {/* Supabase status */}
+        {showLabels&&<div style={{padding:'8px 12px',borderBottom:`1px solid ${P.border}`,flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:7}}>
+            <div style={{width:5,height:5,borderRadius:'50%',background:P.green,flexShrink:0}}/>
+            <span style={{fontSize:10,color:P.green,fontWeight:600,letterSpacing:'0.04em'}}>Supabase conectado</span>
           </div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:12,fontWeight:700,color:P.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
-              {staffProfile?.display_name||user?.email?.split('@')[0]||'Usuario'}
-            </div>
-            <div style={{fontSize:10,color:P.muted,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:1}}>
-              {staffProfile?.title||'Pessaro Capital'}
-            </div>
-          </div>
-        </div>
-        {/* Email institucional */}
-        {staffProfile?.pessaro_email&&<div style={{
-          display:'flex',alignItems:'center',gap:6,padding:'5px 8px',marginBottom:8,
-          background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6}}>
-          <span style={{fontSize:10}}>✉</span>
-          <span style={{fontSize:10,color:P.blue,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-            {staffProfile.pessaro_email}
-          </span>
         </div>}
-        {/* Role badge */}
-        <div style={{marginBottom:10}}>
-          {isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:5}}>
-            <span style={{fontSize:9}}>⚙</span><span style={{fontSize:10,color:P.orange,fontWeight:700,letterSpacing:'0.04em'}}>Super Admin</span>
+        {!showLabels&&<div style={{padding:'8px 0',display:'flex',justifyContent:'center',borderBottom:`1px solid ${P.border}`,flexShrink:0}}><div style={{width:6,height:6,borderRadius:'50%',background:P.green}}/></div>}
+        {/* User card */}
+        <div style={{padding:showLabels?'12px 14px':'10px 0',flexShrink:0,display:'flex',flexDirection:'column',gap:showLabels?0:8,alignItems:showLabels?'stretch':'center'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:showLabels?10:0,justifyContent:showLabels?'flex-start':'center'}}>
+            <div style={{
+              width:38,height:38,borderRadius:10,flexShrink:0,
+              background:isSuperAdmin?P.orangeDim:isBroker?P.blueDim:P.purpleDim,
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:15,fontWeight:800,
+              color:isSuperAdmin?P.orange:isBroker?P.blue:P.purple,
+              border:`1.5px solid ${isSuperAdmin?P.orange:isBroker?P.blue:P.purple}30`
+            }}>
+              {(staffProfile?.display_name||user?.email||'?')[0].toUpperCase()}
+            </div>
+            {showLabels&&<div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:700,color:P.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {staffProfile?.display_name||user?.email?.split('@')[0]||'Usuario'}
+              </div>
+              <div style={{fontSize:10,color:P.muted,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:1}}>
+                {staffProfile?.title||'Pessaro Capital'}
+              </div>
+            </div>}
+          </div>
+          {showLabels&&staffProfile?.pessaro_email&&<div style={{
+            display:'flex',alignItems:'center',gap:6,padding:'5px 8px',marginBottom:8,
+            background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6}}>
+            <span style={{fontSize:10}}>✉</span>
+            <span style={{fontSize:10,color:P.blue,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              {staffProfile.pessaro_email}
+            </span>
           </div>}
-          {isBroker&&!isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:5}}>
-            <span style={{fontSize:9}}>⬡</span><span style={{fontSize:10,color:P.blue,fontWeight:700,letterSpacing:'0.04em'}}>Administrador</span>
+          {showLabels&&<div style={{marginBottom:10}}>
+            {isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:5}}>
+              <span style={{fontSize:9}}>⚙</span><span style={{fontSize:10,color:P.orange,fontWeight:700,letterSpacing:'0.04em'}}>Super Admin</span>
+            </div>}
+            {isBroker&&!isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:5}}>
+              <span style={{fontSize:9}}>⬡</span><span style={{fontSize:10,color:P.blue,fontWeight:700,letterSpacing:'0.04em'}}>Administrador</span>
+            </div>}
+            {!isSuperAdmin&&!isBroker&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:5}}>
+              <span style={{fontSize:9}}>◈</span><span style={{fontSize:10,color:P.purple,fontWeight:700,letterSpacing:'0.04em'}}>Asesor</span>
+            </div>}
           </div>}
-          {!isSuperAdmin&&!isBroker&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:5}}>
-            <span style={{fontSize:9}}>◈</span><span style={{fontSize:10,color:P.purple,fontWeight:700,letterSpacing:'0.04em'}}>Asesor</span>
-          </div>}
+          {showLabels&&<button onClick={logout} style={{width:'100%',padding:'6px 0',fontSize:11,color:P.muted,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6,cursor:'pointer',transition:'all 0.12s',minHeight:44}}
+            onMouseEnter={e=>{e.currentTarget.style.color=P.red;e.currentTarget.style.borderColor=P.red+'40'}}
+            onMouseLeave={e=>{e.currentTarget.style.color=P.muted;e.currentTarget.style.borderColor=P.border}}>
+            Cerrar sesión →
+          </button>}
+          {!showLabels&&<button onClick={logout} title="Cerrar sesión" style={{width:38,height:38,borderRadius:8,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,color:P.muted,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>⇒</button>}
         </div>
-        {/* Logout */}
-        <button onClick={logout} style={{width:'100%',padding:'6px 0',fontSize:11,color:P.muted,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6,cursor:'pointer',transition:'all 0.12s'}}
-          onMouseEnter={e=>{e.currentTarget.style.color=P.red;e.currentTarget.style.borderColor=P.red+'40'}}
-          onMouseLeave={e=>{e.currentTarget.style.color=P.muted;e.currentTarget.style.borderColor=P.border}}>
-          Cerrar sesión →
-        </button>
       </div>
-    </div>
-    {/* Main */}
-    <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      <ErrorBoundary key={currentMod}>{(()=>{
-        if(loading&&currentMod==='dashboard') return <Spinner/>
-        if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
-        if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
-        if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
-        if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
-        if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
-        if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
-        if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
-        if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
-        if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
-        if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
-        if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
-        return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
-      })()}</ErrorBoundary>
+      {/* Main content */}
+      <div style={{flex:1,padding:isMobile?'16px':isTablet?'20px 24px':'28px 32px',overflowY:'auto',minHeight:0}}>
+        <ErrorBoundary key={currentMod}>{(()=>{
+          if(loading&&currentMod==='dashboard') return <Spinner/>
+          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
+          if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+          if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
+          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
+          if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+          if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
+          return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+        })()}</ErrorBoundary>
+      </div>
     </div>
     {waToasts.length>0&&<div style={{position:'fixed',bottom:20,right:20,display:'flex',flexDirection:'column',gap:10,zIndex:9999}}>
       {waToasts.map(t=><WaToast key={t.id} toast={t}
