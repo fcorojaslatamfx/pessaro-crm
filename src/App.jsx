@@ -150,6 +150,11 @@ function Login({onLogin}){
   const[pass,setPass]=useState('')
   const[error,setError]=useState('')
   const[loading,setLoading]=useState(false)
+  const[view,setView]=useState('login') // 'login' | 'recovery' | 'recovery_sent'
+  const[recoveryEmail,setRecoveryEmail]=useState('')
+  const[recoveryError,setRecoveryError]=useState('')
+  const[recoveryLoading,setRecoveryLoading]=useState(false)
+
   const handle=async()=>{
     if(!email||!pass)return
     setLoading(true);setError('')
@@ -158,6 +163,98 @@ function Login({onLogin}){
     if(err){setError(err.message);return}
     onLogin(data.user)
   }
+
+  const handleRecovery=async()=>{
+    if(!recoveryEmail)return
+    setRecoveryLoading(true);setRecoveryError('')
+    const{error:err}=await supabase.auth.resetPasswordForEmail(recoveryEmail,{
+      redirectTo:'https://crm.pessaro.cl'
+    })
+    setRecoveryLoading(false)
+    if(err){setRecoveryError(err.message);return}
+    setView('recovery_sent')
+  }
+
+  const header=(
+    <div style={{textAlign:'center',marginBottom:36}}>
+      <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+        <img src={LOGO_URI} width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
+      </div>
+      <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
+      <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
+      <p style={{color:P.muted,fontSize:13,margin:0}}>Acceso exclusivo para el equipo</p>
+    </div>
+  )
+
+  if(view==='recovery_sent'){
+    return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        {header}
+        <GlassCard accent={P.purple}>
+          <div style={{display:'flex',flexDirection:'column',gap:16,textAlign:'center'}}>
+            <div style={{fontSize:32}}>📧</div>
+            <p style={{fontSize:14,color:P.text,lineHeight:1.6,margin:0}}>Si tu email está registrado, recibirás un enlace de recuperación en tu correo.</p>
+            <button onClick={()=>{setView('login');setRecoveryEmail('');setRecoveryError('')}} style={{background:'none',border:'none',color:P.purple,cursor:'pointer',fontSize:13,fontWeight:600,textDecoration:'underline',padding:0}}>← Volver al login</button>
+          </div>
+        </GlassCard>
+      </div>
+    </div>
+  }
+
+  if(view==='recovery'){
+    return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+      <div style={{width:'100%',maxWidth:380}}>
+        {header}
+        <GlassCard accent={P.purple}>
+          <div style={{display:'flex',flexDirection:'column',gap:16}}>
+            <p style={{fontSize:13,color:P.muted,margin:0}}>Ingresa tu email y te enviaremos un enlace para restablecer tu contraseña.</p>
+            <div><Lbl>Email</Lbl><Input value={recoveryEmail} onChange={setRecoveryEmail} placeholder="tu@pessaro.cl" type="email"/></div>
+            {recoveryError&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{recoveryError}</div>}
+            <Btn onClick={handleRecovery} disabled={recoveryLoading} style={{width:'100%',justifyContent:'center',padding:11}}>{recoveryLoading?'Enviando...':'Enviar enlace de recuperación'}</Btn>
+            <button onClick={()=>{setView('login');setRecoveryError('')}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:13,textDecoration:'underline',padding:0,textAlign:'center'}}>← Volver al login</button>
+          </div>
+        </GlassCard>
+      </div>
+    </div>
+  }
+
+  return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+    <div style={{width:'100%',maxWidth:380}}>
+      {header}
+      <GlassCard accent={P.purple}>
+        <div style={{display:'flex',flexDirection:'column',gap:16}}>
+          <div><Lbl>Email</Lbl><Input value={email} onChange={setEmail} placeholder="tu@pessaro.cl" type="email"/></div>
+          <div><Lbl>Contraseña</Lbl><Input value={pass} onChange={setPass} placeholder="••••••••" type="password"/></div>
+          {error&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{error}</div>}
+          <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Ingresando...':'Entrar al CRM'}</Btn>
+          <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:12,textDecoration:'underline',padding:0,textAlign:'center'}}>¿Olvidaste tu contraseña?</button>
+        </div>
+      </GlassCard>
+      <p style={{textAlign:'center',marginTop:14,fontSize:11,color:P.muted}}>Usa tu cuenta de Pessaro Capital</p>
+    </div>
+  </div>
+}
+
+// ─── PASSWORD RESET ───────────────────────────────────────────────────────────
+function PasswordReset({onDone}){
+  const[newPass,setNewPass]=useState('')
+  const[confirm,setConfirm]=useState('')
+  const[error,setError]=useState('')
+  const[loading,setLoading]=useState(false)
+  const[done,setDone]=useState(false)
+
+  const handle=async()=>{
+    if(!newPass||!confirm)return
+    if(newPass.length<8){setError('La contraseña debe tener al menos 8 caracteres.');return}
+    if(newPass!==confirm){setError('Las contraseñas no coinciden.');return}
+    setLoading(true);setError('')
+    const{error:err}=await supabase.auth.updateUser({password:newPass})
+    setLoading(false)
+    if(err){setError(err.message);return}
+    setDone(true)
+    setTimeout(()=>onDone(),2500)
+  }
+
   return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
     <div style={{width:'100%',maxWidth:380}}>
       <div style={{textAlign:'center',marginBottom:36}}>
@@ -166,17 +263,22 @@ function Login({onLogin}){
         </div>
         <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
         <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
-        <p style={{color:P.muted,fontSize:13,margin:0}}>Acceso exclusivo para el equipo</p>
       </div>
       <GlassCard accent={P.purple}>
-        <div style={{display:'flex',flexDirection:'column',gap:16}}>
-          <div><Lbl>Email</Lbl><Input value={email} onChange={setEmail} placeholder="tu@pessaro.cl" type="email"/></div>
-          <div><Lbl>Contraseña</Lbl><Input value={pass} onChange={setPass} placeholder="••••••••" type="password"/></div>
-          {error&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{error}</div>}
-          <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Ingresando...':'Entrar al CRM'}</Btn>
-        </div>
+        {done
+          ? <div style={{textAlign:'center',padding:'8px 0'}}>
+              <div style={{fontSize:32,marginBottom:12}}>✅</div>
+              <p style={{fontSize:14,color:P.text,margin:0}}>¡Contraseña actualizada! Redirigiendo al login…</p>
+            </div>
+          : <div style={{display:'flex',flexDirection:'column',gap:16}}>
+              <p style={{fontSize:13,color:P.muted,margin:0}}>Elige una nueva contraseña para tu cuenta.</p>
+              <div><Lbl>Nueva contraseña</Lbl><Input value={newPass} onChange={setNewPass} placeholder="Mínimo 8 caracteres" type="password"/></div>
+              <div><Lbl>Confirmar contraseña</Lbl><Input value={confirm} onChange={setConfirm} placeholder="Repite la contraseña" type="password"/></div>
+              {error&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{error}</div>}
+              <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Guardando...':'Cambiar contraseña'}</Btn>
+            </div>
+        }
       </GlassCard>
-      <p style={{textAlign:'center',marginTop:14,fontSize:11,color:P.muted}}>Usa tu cuenta de Pessaro Capital</p>
     </div>
   </div>
 }
@@ -2794,6 +2896,7 @@ export default function App(){
   const[teamId,setTeamId]      =useState(null)
   const[tools,setTools]        =useState([])   // módulos habilitados para este usuario
   const[module,setModule]      =useState('dashboard')
+  const[showPasswordReset,setShowPasswordReset]=useState(false)
   const[contacts,setContacts]  =useState([])
   const[leads,setLeads]        =useState([])
   const[staffProfile,setSP]    =useState(null)
@@ -2835,7 +2938,8 @@ export default function App(){
       await loadProfile(u)
       setChecking(false)
     }).catch(()=>setChecking(false))
-    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
+    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,session)=>{
+      if(event==='PASSWORD_RECOVERY'){setShowPasswordReset(true);return}
       const u=session?.user??null
       setUser(prev=>{
         if(prev?.id===u?.id) return prev
@@ -2921,6 +3025,7 @@ export default function App(){
   },[user?.id])
 
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
+  if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(!user)return<Login onLogin={setUser}/>
 
   const logout=async()=>{await supabase.auth.signOut();localStorage.clear();window.location.href='/'}
