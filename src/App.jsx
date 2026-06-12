@@ -159,6 +159,7 @@ function WaToast({toast,onClose,onView}){
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function Login({onLogin}){
   const BACKGROUND_IMAGE='https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=1200'
+  const LOGO_URL='https://pessaro.cl/images/logo-256.webp'
 
   const windowSize=useWindowSize()
   const isMobile=windowSize<768
@@ -212,41 +213,47 @@ function Login({onLogin}){
     @keyframes fadeInUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
     @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
     @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(20px,20px)}}
-    @keyframes pulse{0%,100%{box-shadow:0 8px 32px rgba(251,191,36,0.3)}50%{box-shadow:0 8px 32px rgba(251,191,36,0.6)}}
+    @keyframes pulse{0%,100%{box-shadow:0 8px 32px rgba(124,92,255,0.4)}50%{box-shadow:0 8px 32px rgba(124,92,255,0.7)}}
   `
-  const inputBase={padding:'10px 12px',border:'1px solid rgba(255,255,255,0.2)',borderRadius:8,backgroundColor:'rgba(255,255,255,0.08)',color:'#ffffff',boxSizing:'border-box',transition:'all 0.2s ease',outline:'none',fontFamily:'inherit',width:'100%'}
-  const onFocusIn=e=>{e.target.style.backgroundColor='rgba(255,255,255,0.12)';e.target.style.borderColor='rgba(255,255,255,0.4)'}
-  const onFocusOut=e=>{e.target.style.backgroundColor='rgba(255,255,255,0.08)';e.target.style.borderColor='rgba(255,255,255,0.2)'}
+
+  const inputStyle={
+    backgroundColor:'#f5f5f7',color:'#0a0a0f',border:'none',borderRadius:8,
+    padding:'12px 14px',fontSize:'0.9375rem',width:'100%',boxSizing:'border-box',
+    outline:'none',fontFamily:'inherit',transition:'all 0.2s ease',
+  }
+  const onFocusIn=e=>{e.target.style.backgroundColor='#ffffff';e.target.style.boxShadow='0 0 0 2px rgba(124,92,255,0.4)'}
+  const onFocusOut=e=>{e.target.style.backgroundColor='#f5f5f7';e.target.style.boxShadow='none'}
 
   const recovHeader=(
     <div style={{textAlign:'center',marginBottom:36}}>
       <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
-        <img src="https://pessaro.cl/images/logo-256.webp" width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
+        <img src={LOGO_URL} width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
       </div>
       <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
-      <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
+      <p style={{color:'#7c5cff',fontWeight:700,fontSize:13,letterSpacing:'2px',textTransform:'uppercase',margin:'0 0 6px'}}>CRM INTERNO</p>
       <p style={{color:P.muted,fontSize:13,margin:0}}>Acceso exclusivo para el equipo</p>
     </div>
   )
 
   if(showSplash&&!isDesktop){
     return(
-      <div style={{minHeight:'100vh',background:'linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#0f172a 100%)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+      <div style={{minHeight:'100vh',background:'linear-gradient(135deg,#0a0a0f 0%,#15151f 50%,#0a0a0f 100%)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
         <style>{cssAnim}</style>
-        <div style={{position:'absolute',top:'10%',left:'10%',width:300,height:300,background:'radial-gradient(circle,rgba(251,191,36,0.15),transparent 70%)',borderRadius:'50%',animation:'float 6s ease-in-out infinite',pointerEvents:'none'}}/>
-        <div style={{position:'absolute',bottom:'10%',right:'10%',width:250,height:250,background:'radial-gradient(circle,rgba(251,191,36,0.1),transparent 70%)',borderRadius:'50%',animation:'float 8s ease-in-out infinite reverse',pointerEvents:'none'}}/>
+        <div style={{position:'absolute',top:'10%',left:'10%',width:300,height:300,background:'radial-gradient(circle,rgba(124,92,255,0.15),transparent 70%)',borderRadius:'50%',animation:'float 6s ease-in-out infinite',pointerEvents:'none'}}/>
+        <div style={{position:'absolute',bottom:'10%',right:'10%',width:250,height:250,background:'radial-gradient(circle,rgba(124,92,255,0.08),transparent 70%)',borderRadius:'50%',animation:'float 8s ease-in-out infinite reverse',pointerEvents:'none'}}/>
         <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:20,zIndex:1,textAlign:'center',padding:'0 32px'}}>
-          <div style={{width:80,height:80,borderRadius:16,background:'linear-gradient(135deg,#fbbf24,#f59e0b)',display:'flex',alignItems:'center',justifyContent:'center',animation:'scaleIn 0.8s cubic-bezier(0.34,1.56,0.64,1) forwards, pulse 2s ease-in-out 1s infinite',overflow:'hidden'}}>
-            <img src="https://pessaro.cl/images/logo-256.webp" alt="Pessaro" style={{width:'100%',height:'100%',objectFit:'cover',borderRadius:16}} onError={e=>{e.target.style.display='none'}}/>
+          <div style={{width:80,height:80,borderRadius:16,overflow:'hidden',animation:'scaleIn 0.8s cubic-bezier(0.34,1.56,0.64,1) forwards, pulse 2s ease-in-out 1s infinite'}}>
+            <img src={LOGO_URL} alt="Pessaro Capital" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
           </div>
-          <div style={{animation:'slideDown 0.8s ease-out 0.2s both'}}>
-            <h1 style={{fontSize:32,fontWeight:800,color:'#ffffff',letterSpacing:'-1px',margin:'0 0 8px'}}>Pessaro Capital</h1>
-            <p style={{fontSize:16,color:'rgba(255,255,255,0.8)',margin:0}}>Gestión Inteligente de Inversiones</p>
+          <div>
+            <h1 style={{fontSize:28,fontWeight:800,color:'#ffffff',letterSpacing:'-1px',margin:'0 0 4px',animation:'slideDown 0.8s ease-out 0.2s both'}}>Pessaro Capital</h1>
+            <p style={{fontSize:13,fontWeight:700,color:'#7c5cff',letterSpacing:'2px',textTransform:'uppercase',margin:'0 0 12px',animation:'slideDown 0.8s ease-out 0.3s both'}}>CRM INTERNO</p>
+            <p style={{fontSize:14,color:'rgba(255,255,255,0.7)',margin:0,animation:'slideDown 0.8s ease-out 0.4s both'}}>Gestión Inteligente de Inversiones</p>
           </div>
           <div style={{display:'flex',gap:8,animation:'fadeIn 0.8s ease-out 0.6s both'}}>
-            <div style={{width:8,height:8,borderRadius:'50%',background:'#fbbf24',animation:'bounce 1s ease-in-out infinite'}}/>
-            <div style={{width:8,height:8,borderRadius:'50%',background:'#fbbf24',animation:'bounce 1s ease-in-out 0.2s infinite'}}/>
-            <div style={{width:8,height:8,borderRadius:'50%',background:'#fbbf24',animation:'bounce 1s ease-in-out 0.4s infinite'}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out infinite'}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out 0.2s infinite'}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out 0.4s infinite'}}/>
           </div>
           <p style={{fontSize:12,color:'rgba(255,255,255,0.5)',animation:'fadeIn 0.8s ease-out 0.6s both',margin:0}}>Cargando panel de control...</p>
         </div>
@@ -263,7 +270,7 @@ function Login({onLogin}){
             <div style={{display:'flex',flexDirection:'column',gap:16,textAlign:'center'}}>
               <div style={{fontSize:32}}>📧</div>
               <p style={{fontSize:14,color:P.text,lineHeight:1.6,margin:0}}>Si tu email está registrado, recibirás un enlace de recuperación en tu correo.</p>
-              <button onClick={()=>{setView('login');setRecoveryEmail('');setRecoveryError('')}} style={{background:'none',border:'none',color:P.purple,cursor:'pointer',fontSize:13,fontWeight:600,textDecoration:'underline',padding:0}}>← Volver al login</button>
+              <button onClick={()=>{setView('login');setRecoveryEmail('');setRecoveryError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:13,fontWeight:600,textDecoration:'underline',padding:0}}>← Volver al login</button>
             </div>
           </GlassCard>
         </div>
@@ -295,33 +302,38 @@ function Login({onLogin}){
       <div style={{minHeight:'100vh',display:'flex'}}>
         <style>{cssAnim}</style>
         <div style={{width:'55%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
-          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(6,7,13,0.4)'}}/>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.5)'}}/>
           <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 48px'}}>
-            <h1 style={{fontSize:'3.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 16px',lineHeight:1.1}}>Pessaro Capital</h1>
-            <p style={{fontSize:'1.25rem',color:'rgba(255,255,255,0.9)',fontWeight:600,textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 12px'}}>Gestión Inteligente de Inversiones</p>
-            <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.7)',letterSpacing:'0.5px',margin:0,textShadow:'0 2px 6px rgba(0,0,0,0.4)'}}>CRM Interno · Acceso exclusivo para el equipo</p>
+            <h1 style={{fontSize:'3.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
+            <p style={{fontSize:'1rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 24px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
+            <p style={{fontSize:'1.25rem',color:'rgba(255,255,255,0.9)',textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 16px'}}>Gestión Inteligente de Inversiones</p>
+            <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',letterSpacing:'0.5px',margin:0,textShadow:'0 2px 6px rgba(0,0,0,0.4)'}}>Acceso exclusivo para el equipo</p>
           </div>
         </div>
-        <div style={{width:'45%',backgroundColor:'#06070d',display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 32px',animation:'fadeIn 0.5s ease-in-out'}}>
-          <div style={{width:'100%',maxWidth:320}}>
-            <div style={{textAlign:'center',marginBottom:40}}>
-              <img src="https://pessaro.cl/images/logo-256.webp" height={60} style={{display:'block',margin:'0 auto 40px'}} alt="Pessaro Capital"/>
-              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 8px'}}>Iniciar Sesión</h2>
-              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:0}}>Ingresa tus credenciales para acceder al CRM</p>
+        <div style={{width:'45%',backgroundColor:'#0a0a0f',display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 32px',animation:'fadeIn 0.5s ease-in-out'}}>
+          <div style={{width:'100%',maxWidth:360}}>
+            <div style={{textAlign:'center',marginBottom:28}}>
+              <img src={LOGO_URL} height={64} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:24}} alt="Pessaro Capital"/>
+              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px'}}>Pessaro Capital</h2>
+              <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px'}}>CRM INTERNO</p>
+              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:'0 0 28px'}}>Acceso exclusivo para el equipo</p>
             </div>
-            <div style={{display:'flex',flexDirection:'column',gap:16}}>
-              <div>
-                <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Email</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@email.com" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputBase,fontSize:'1rem'}}/>
+            <div style={{backgroundColor:'#1a1a24',borderRadius:12,padding:24,border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle}}/>
+                </div>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+                </div>
+                {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
+                <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+                <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:14}}>¿Olvidaste tu contraseña?</button>
               </div>
-              <div>
-                <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Contraseña</label>
-                <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputBase,fontSize:'1rem'}}/>
-              </div>
-              {error&&<div style={{fontSize:12,color:'#ff4757',background:'rgba(255,71,87,0.12)',padding:'10px 12px',borderRadius:8,border:'1px solid rgba(255,71,87,0.3)'}}>{error}</div>}
-              <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.background='#f59e0b'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.background='#fbbf24'}} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'1rem',fontWeight:600,background:'#fbbf24',color:'#06070d',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,opacity:loading?0.7:1}}>{loading?'Ingresando...':'Entrar al CRM'}</button>
-              <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#fbbf24',cursor:'pointer',fontSize:13,padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit'}}>¿Olvidaste tu contraseña?</button>
             </div>
+            <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:24}}>Usa tu cuenta de Pessaro Capital</p>
           </div>
         </div>
       </div>
@@ -333,33 +345,38 @@ function Login({onLogin}){
       <div style={{minHeight:'100vh',display:'flex',animation:'fadeIn 0.5s ease-in-out'}}>
         <style>{cssAnim}</style>
         <div style={{width:'50%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
-          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(6,7,13,0.4)'}}/>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.5)'}}/>
           <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 32px'}}>
-            <h1 style={{fontSize:'2.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 12px',lineHeight:1.1}}>Pessaro Capital</h1>
-            <p style={{fontSize:'1rem',color:'rgba(255,255,255,0.9)',fontWeight:600,textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 10px'}}>Gestión Inteligente de Inversiones</p>
-            <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.7)',letterSpacing:'0.5px',margin:0}}>CRM Interno · Acceso exclusivo para el equipo</p>
+            <h1 style={{fontSize:'2.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
+            <p style={{fontSize:'0.875rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 12px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
+            <p style={{fontSize:'1rem',color:'rgba(255,255,255,0.9)',textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 10px'}}>Gestión Inteligente de Inversiones</p>
+            <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.7)',letterSpacing:'0.5px',margin:0}}>Acceso exclusivo para el equipo</p>
           </div>
         </div>
-        <div style={{width:'50%',backgroundColor:'#06070d',display:'flex',alignItems:'center',justifyContent:'center',padding:'32px 24px'}}>
-          <div style={{width:'100%',maxWidth:300}}>
-            <div style={{textAlign:'center',marginBottom:32}}>
-              <img src="https://pessaro.cl/images/logo-256.webp" height={50} style={{display:'block',margin:'0 auto 32px'}} alt="Pessaro Capital"/>
-              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 8px'}}>Iniciar Sesión</h2>
-              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:0}}>Ingresa tus credenciales para acceder al CRM</p>
+        <div style={{width:'50%',backgroundColor:'#0a0a0f',display:'flex',alignItems:'center',justifyContent:'center',padding:'32px 24px'}}>
+          <div style={{width:'100%',maxWidth:320}}>
+            <div style={{textAlign:'center',marginBottom:24}}>
+              <img src={LOGO_URL} height={56} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:20}} alt="Pessaro Capital"/>
+              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px'}}>Pessaro Capital</h2>
+              <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px'}}>CRM INTERNO</p>
+              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:'0 0 20px'}}>Acceso exclusivo para el equipo</p>
             </div>
-            <div style={{display:'flex',flexDirection:'column',gap:14}}>
-              <div>
-                <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Email</label>
-                <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@email.com" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputBase,fontSize:'0.875rem',padding:'9px 12px'}}/>
+            <div style={{backgroundColor:'#1a1a24',borderRadius:12,padding:24,border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle,padding:'11px 14px',fontSize:'0.875rem'}}/>
+                </div>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,padding:'11px 14px',fontSize:'0.875rem'}}/>
+                </div>
+                {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
+                <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'0.875rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+                <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:10}}>¿Olvidaste tu contraseña?</button>
               </div>
-              <div>
-                <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Contraseña</label>
-                <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputBase,fontSize:'0.875rem',padding:'9px 12px'}}/>
-              </div>
-              {error&&<div style={{fontSize:12,color:'#ff4757',background:'rgba(255,71,87,0.12)',padding:'10px 12px',borderRadius:8,border:'1px solid rgba(255,71,87,0.3)'}}>{error}</div>}
-              <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.background='#f59e0b'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.background='#fbbf24'}} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'0.875rem',fontWeight:600,background:'#fbbf24',color:'#06070d',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,opacity:loading?0.7:1}}>{loading?'Ingresando...':'Entrar al CRM'}</button>
-              <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#fbbf24',cursor:'pointer',fontSize:13,padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit'}}>¿Olvidaste tu contraseña?</button>
             </div>
+            <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:20}}>Usa tu cuenta de Pessaro Capital</p>
           </div>
         </div>
       </div>
@@ -367,28 +384,32 @@ function Login({onLogin}){
   }
 
   return(
-    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',position:'relative',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',padding:'24px 16px'}}>
+    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',padding:'24px 16px'}}>
       <style>{cssAnim}</style>
-      <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(6,7,13,0.4)',zIndex:0}}/>
-      <div style={{position:'relative',zIndex:2,maxWidth:340,width:'100%',backgroundColor:'rgba(6,7,13,0.85)',backdropFilter:'blur(12px)',WebkitBackdropFilter:'blur(12px)',borderRadius:16,border:'1px solid rgba(255,255,255,0.1)',padding:'32px 24px',animation:'fadeInUp 0.6s ease-out'}}>
-        <div style={{textAlign:'center',marginBottom:28}}>
-          <img src="https://pessaro.cl/images/logo-256.webp" height={50} style={{display:'block',margin:'0 auto 20px'}} alt="Pessaro Capital"/>
-          <h2 style={{fontSize:'1.25rem',fontWeight:700,color:'#ffffff',margin:'0 0 6px'}}>Iniciar Sesión</h2>
-          <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.6)',margin:0}}>CRM Pessaro Capital</p>
+      <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.65)',zIndex:0}}/>
+      <div style={{position:'relative',zIndex:2,width:'100%',maxWidth:360,display:'flex',flexDirection:'column',alignItems:'center'}}>
+        <div style={{textAlign:'center',marginBottom:20}}>
+          <img src={LOGO_URL} height={56} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:12}} alt="Pessaro Capital"/>
+          <h1 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px',textAlign:'center'}}>Pessaro Capital</h1>
+          <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px',textAlign:'center'}}>CRM INTERNO</p>
+          <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.7)',margin:0,textAlign:'center'}}>Acceso exclusivo para el equipo</p>
         </div>
-        <div style={{display:'flex',flexDirection:'column',gap:14}}>
-          <div>
-            <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Email</label>
-            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@email.com" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputBase,fontSize:'0.9375rem'}}/>
+        <div style={{width:'calc(100% - 32px)',maxWidth:360,backgroundColor:'rgba(26,26,36,0.85)',backdropFilter:'blur(20px)',WebkitBackdropFilter:'blur(20px)',borderRadius:16,border:'1px solid rgba(255,255,255,0.08)',padding:20,animation:'fadeInUp 0.6s ease-out'}}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle}}/>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+              <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+            </div>
+            {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center',marginTop:12}}>{error}</div>}
+            <button onClick={handle} disabled={loading} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,WebkitTapHighlightColor:'transparent'}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+            <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:14,WebkitTapHighlightColor:'transparent'}}>¿Olvidaste tu contraseña?</button>
           </div>
-          <div>
-            <label style={{display:'block',fontSize:12,color:'rgba(255,255,255,0.7)',marginBottom:6,fontWeight:500}}>Contraseña</label>
-            <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputBase,fontSize:'0.9375rem'}}/>
-          </div>
-          {error&&<div style={{fontSize:12,color:'#ff4757',background:'rgba(255,71,87,0.12)',padding:'10px 12px',borderRadius:8,border:'1px solid rgba(255,71,87,0.3)'}}>{error}</div>}
-          <button onClick={handle} disabled={loading} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,background:'#fbbf24',color:'#06070d',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,opacity:loading?0.7:1,WebkitTapHighlightColor:'transparent'}}>{loading?'Ingresando...':'Entrar al CRM'}</button>
-          <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#fbbf24',cursor:'pointer',fontSize:13,padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',WebkitTapHighlightColor:'transparent'}}>¿Olvidaste tu contraseña?</button>
         </div>
+        <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:20}}>Usa tu cuenta de Pessaro Capital</p>
       </div>
     </div>
   )
