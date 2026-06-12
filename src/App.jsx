@@ -237,11 +237,13 @@ function Login({onLogin}){
 
   if(showSplash&&!isDesktop){
     return(
-      <div style={{minHeight:'100vh',background:'linear-gradient(135deg,#0a0a0f 0%,#15151f 50%,#0a0a0f 100%)',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+      <div style={{minHeight:'100vh',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
         <style>{cssAnim}</style>
-        <div style={{position:'absolute',top:'10%',left:'10%',width:300,height:300,background:'radial-gradient(circle,rgba(124,92,255,0.15),transparent 70%)',borderRadius:'50%',animation:'float 6s ease-in-out infinite',pointerEvents:'none'}}/>
-        <div style={{position:'absolute',bottom:'10%',right:'10%',width:250,height:250,background:'radial-gradient(circle,rgba(124,92,255,0.08),transparent 70%)',borderRadius:'50%',animation:'float 8s ease-in-out infinite reverse',pointerEvents:'none'}}/>
-        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:20,zIndex:1,textAlign:'center',padding:'0 32px'}}>
+        {/* Overlay azul translúcido sobre la imagen */}
+        <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.85) 0%,rgba(30,58,138,0.65) 50%,rgba(10,15,50,0.85) 100%)',zIndex:0}}/>
+        <div style={{position:'absolute',top:'10%',left:'10%',width:300,height:300,background:'radial-gradient(circle,rgba(124,92,255,0.25),transparent 70%)',borderRadius:'50%',animation:'float 6s ease-in-out infinite',pointerEvents:'none',zIndex:1}}/>
+        <div style={{position:'absolute',bottom:'10%',right:'10%',width:250,height:250,background:'radial-gradient(circle,rgba(96,165,250,0.18),transparent 70%)',borderRadius:'50%',animation:'float 8s ease-in-out infinite reverse',pointerEvents:'none',zIndex:1}}/>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:20,zIndex:2,textAlign:'center',padding:'0 32px'}}>
           <div style={{width:80,height:80,borderRadius:16,overflow:'hidden',animation:'scaleIn 0.8s cubic-bezier(0.34,1.56,0.64,1) forwards, pulse 2s ease-in-out 1s infinite'}}>
             <img src={LOGO_URL} alt="Pessaro Capital" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
           </div>
@@ -302,7 +304,7 @@ function Login({onLogin}){
       <div style={{minHeight:'100vh',display:'flex'}}>
         <style>{cssAnim}</style>
         <div style={{width:'55%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
-          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.5)'}}/>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.75) 0%,rgba(30,58,138,0.55) 50%,rgba(10,15,50,0.75) 100%)'}}/>
           <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 48px'}}>
             <h1 style={{fontSize:'3.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
             <p style={{fontSize:'1rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 24px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
@@ -345,7 +347,7 @@ function Login({onLogin}){
       <div style={{minHeight:'100vh',display:'flex',animation:'fadeIn 0.5s ease-in-out'}}>
         <style>{cssAnim}</style>
         <div style={{width:'50%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
-          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.5)'}}/>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.75) 0%,rgba(30,58,138,0.55) 50%,rgba(10,15,50,0.75) 100%)'}}/>
           <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 32px'}}>
             <h1 style={{fontSize:'2.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
             <p style={{fontSize:'0.875rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 12px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
@@ -386,7 +388,7 @@ function Login({onLogin}){
   return(
     <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',padding:'24px 16px'}}>
       <style>{cssAnim}</style>
-      <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'rgba(10,10,15,0.65)',zIndex:0}}/>
+      <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.82) 0%,rgba(30,58,138,0.7) 50%,rgba(10,15,50,0.82) 100%)',zIndex:0}}/>
       <div style={{position:'relative',zIndex:2,width:'100%',maxWidth:360,display:'flex',flexDirection:'column',alignItems:'center'}}>
         <div style={{textAlign:'center',marginBottom:20}}>
           <img src={LOGO_URL} height={56} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:12}} alt="Pessaro Capital"/>
@@ -2429,7 +2431,9 @@ function Equipo({user,isSuperAdmin,teamId}){
         queries[0]=supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').eq('team_id',teamId).order('display_name')
       }
       const[{data:s},{data:t},{data:m},{data:tt}]=await Promise.all(queries)
-      setStaff(s||[])
+      // Dedup por user_id: si la query trae filas duplicadas (p.ej. múltiples joins), nos quedamos solo con una
+      const dedup=Array.from(new Map((s||[]).map(r=>[r.user_id,r])).values())
+      setStaff(dedup)
       setTeams(t||[])
       setModules(m||[])
       const map={}
@@ -2535,7 +2539,9 @@ function Equipo({user,isSuperAdmin,teamId}){
   const filtered=staff.filter(s=>{
     const q=search.toLowerCase()
     const matchQ=!q||(s.display_name||'').toLowerCase().includes(q)||(s.pessaro_email||'').toLowerCase().includes(q)
-    const matchR=filterRole==='todos'||s.role===filterRole
+    // Normalizar role: lowercase + trim para evitar mismatches por capitalización o espacios
+    const role=(s.role||'').toLowerCase().trim()
+    const matchR=filterRole==='todos'||role===filterRole
     return matchQ&&matchR
   })
 
@@ -2593,13 +2599,17 @@ function Equipo({user,isSuperAdmin,teamId}){
 
       {/* KPIs super admin */}
       {isSuperAdmin&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:12,marginBottom:20}}>
-        {[
-          ['Total miembros',staff.length,P.purple],
-          ['Super Admins',staff.filter(s=>s.role==='super_admin').length,P.orange],
-          ['Administradores',staff.filter(s=>s.role==='broker').length,P.blue],
-          ['Asesores',staff.filter(s=>s.role==='asesor').length,P.green],
-          ['Equipos',teams.length,P.muted],
-        ].map(([l,v,c])=><div key={l} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'14px 16px'}}>
+        {(()=>{
+          // Helper: normalizar role para conteo consistente
+          const r=s=>(s.role||'').toLowerCase().trim()
+          return[
+            ['Total miembros',staff.length,P.purple],
+            ['Super Admins',staff.filter(s=>r(s)==='super_admin').length,P.orange],
+            ['Administradores',staff.filter(s=>r(s)==='broker'||r(s)==='admin').length,P.blue],
+            ['Asesores',staff.filter(s=>r(s)==='asesor').length,P.green],
+            ['Equipos',teams.length,P.muted],
+          ]
+        })().map(([l,v,c])=><div key={l} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'14px 16px'}}>
           <div style={{fontSize:22,fontWeight:800,color:c}}>{v}</div>
           <div style={{fontSize:11,color:P.muted,marginTop:3}}>{l}</div>
         </div>)}
