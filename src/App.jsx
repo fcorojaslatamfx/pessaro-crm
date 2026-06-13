@@ -130,9 +130,13 @@ function Modal({title,onClose,children,accent=P.purple}){
 function Lbl({children}){return <label style={{fontSize:11,color:P.muted,display:'block',marginBottom:5,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>{children}</label>}
 function Spinner(){return <div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:60}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>}
 function SHdr({title,sub,action}){
-  return <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:24}}>
-    <div><h2 style={{fontSize:20,fontWeight:700,color:P.text,marginBottom:4,margin:'0 0 4px'}}>{title}</h2>{sub&&<p style={{fontSize:13,color:P.muted,margin:0}}>{sub}</p>}</div>
-    {action}
+  const isMob=useWindowSize()<768
+  return <div style={{display:'flex',flexDirection:isMob?'column':'row',justifyContent:'space-between',alignItems:isMob?'stretch':'flex-start',gap:isMob?14:12,marginBottom:24}}>
+    <div style={{minWidth:0}}>
+      <h2 style={{fontSize:isMob?17:20,fontWeight:700,color:P.text,marginBottom:4,margin:'0 0 4px',wordBreak:'break-word'}}>{title}</h2>
+      {sub&&<p style={{fontSize:13,color:P.muted,margin:0,wordBreak:'break-word'}}>{sub}</p>}
+    </div>
+    {action&&<div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>{action}</div>}
   </div>
 }
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
@@ -684,9 +688,9 @@ function Contacts({user,isSuperAdmin}){
   return <div>
     <SHdr title={isSuperAdmin?'Todos los Contactos':'Mis Contactos'}
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
-      action={<div style={{display:'flex',gap:8}}>
+      action={<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <Btn variant="ghost" onClick={()=>load()} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
-        {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
+        {isSuperAdmin&&<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           <Btn variant="ghost" onClick={()=>exportContactsCSV(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ CSV</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsExcel(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ Excel</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsHTML(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ HTML</Btn>
@@ -2395,6 +2399,7 @@ function Reports({contacts,leads}){
 // ─── EQUIPO ───────────────────────────────────────────────────────────────────
 // ─── EQUIPO UNIFICADO (Equipo + TeamAdmin fusionados) ────────────────────────
 function Equipo({user,isSuperAdmin,teamId}){
+  const isMobE=useWindowSize()<768
   // ── State ────────────────────────────────────────────────────────────────
   const[staff,setStaff]         =useState([])
   const[teams,setTeams]         =useState([])
@@ -2730,7 +2735,7 @@ function Equipo({user,isSuperAdmin,teamId}){
 
       {teams.length===0
         ?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin equipos aún</div>
-        :<div style={{display:'grid',gridTemplateColumns:'220px 1fr',gap:16}}>
+        :<div style={{display:'grid',gridTemplateColumns:isMobE?'1fr':'220px 1fr',gap:16}}>
 
           {/* Lista de equipos */}
           <div style={{display:'flex',flexDirection:'column',gap:6}}>
@@ -3114,11 +3119,11 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
             </div>
           )}
           {(!isMob || mobileView==='chat') && (
-            <div style={{ flex:1, display:'flex', flexDirection:'column', position:'relative' }}>
+            <div style={{ flex:1, display:'flex', flexDirection:'column', position:'relative', minWidth:0 }}>
               {isMob && (
                 <button onClick={()=>setMobileView('inbox')}
-                  style={{position:'absolute',top:10,left:10,zIndex:10,background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,cursor:'pointer',fontSize:13,padding:'6px 12px',display:'flex',alignItems:'center',gap:6,minHeight:44}}>
-                  ← Volver
+                  style={{background:P.surface,border:`1px solid ${P.border}`,borderBottom:'none',borderRadius:'8px 8px 0 0',color:P.text,cursor:'pointer',fontSize:13,padding:'10px 14px',display:'flex',alignItems:'center',gap:6,minHeight:44,width:'100%',justifyContent:'flex-start',fontWeight:600}}>
+                  ← Volver a la bandeja
                 </button>
               )}
               <ChatWindow
