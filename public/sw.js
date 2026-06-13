@@ -1,4 +1,4 @@
-const CACHE = 'pessaro-crm-v1';
+const CACHE = 'pessaro-crm-v2';
 const SHELL = ['/', '/index.html'];
 
 self.addEventListener('install', e => {
@@ -18,19 +18,34 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
-  // Always go to network for Supabase API calls
+  // ── Filtros críticos: NO interceptar requests que no podemos cachear ──
+  // Cache API solo soporta http(s). chrome-extension://, data:, blob:, ws://,
+  // wss:, chrome:, file:, etc. lanzan TypeError en cache.put().
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
+  // Solo GET es cacheable. POST/PUT/DELETE/PATCH no se cachean.
+  if (e.request.method !== 'GET') return;
+
+  // Bypass para Supabase: siempre red, nunca cache (datos en tiempo real).
   if (url.hostname.includes('supabase.co')) return;
 
-  // Stale-while-revalidate for everything else
+  // Bypass para Meta/WhatsApp Graph API (por si existieran).
+  if (url.hostname.includes('graph.facebook.com')) return;
+
+  // ── Stale-while-revalidate para el resto ──
   e.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(e.request).then(cached => {
         const network = fetch(e.request).then(res => {
-          if (res.ok && e.request.method === 'GET') cache.put(e.request, res.clone());
+          // Solo cachear respuestas básicas/exitosas (same-origin)
+          if (res && res.ok && res.type === 'basic') {
+            // Defensivo: si por cualquier motivo el put falla, no romper el SW
+            cache.put(e.request, res.clone()).catch(() => {});
+          }
           return res;
-        }).catch(() => cached);
+        }).catch(() => cached); // Offline: fallback al cache
         return cached || network;
       })
-    )
+    ).catch(() => fetch(e.request)) // Si el SW falla, ir directo a red
   );
 });
