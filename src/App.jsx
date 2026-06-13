@@ -1,6 +1,37 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, Component, useRef } from 'react'
 import { supabase } from './lib/supabase.js'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from 'recharts'
+import WhatsAppInbox from './components/whatsapp/WhatsAppInbox.jsx'
+import ChatWindow from './components/whatsapp/ChatWindow.jsx'
+import CampaignSender from './components/whatsapp/CampaignSender.jsx'
+
+// ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
+class ErrorBoundary extends Component {
+  constructor(p){super(p);this.state={err:null}}
+  static getDerivedStateFromError(e){return{err:e}}
+  componentDidCatch(e,info){console.error('ErrorBoundary caught:',e,info)}
+  render(){
+    if(this.state.err)return(
+      <div style={{padding:32,textAlign:'center',color:'#ff4757'}}>
+        <p style={{fontSize:16,fontWeight:700,marginBottom:8}}>⚠ Error al renderizar este módulo</p>
+        <p style={{fontSize:12,color:'#636e72',marginBottom:16}}>{this.state.err.message}</p>
+        <button onClick={()=>this.setState({err:null})} style={{padding:'8px 20px',borderRadius:8,background:'rgba(255,71,87,0.15)',border:'1px solid rgba(255,71,87,0.3)',color:'#ff4757',cursor:'pointer',fontSize:13}}>Reintentar</button>
+      </div>
+    )
+    return this.props.children
+  }
+}
+
+// ─── RESPONSIVE HOOK ──────────────────────────────────────────────────────────
+function useWindowSize(){
+  const[w,setW]=useState(typeof window!=='undefined'?window.innerWidth:1280)
+  useEffect(()=>{
+    const h=()=>setW(window.innerWidth)
+    window.addEventListener('resize',h)
+    return()=>window.removeEventListener('resize',h)
+  },[])
+  return w
+}
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 const P = {
@@ -85,8 +116,9 @@ function Btn({children,onClick,variant='primary',style={},disabled=false}){
     style={{padding:'9px 16px',borderRadius:8,fontSize:13,cursor:disabled?'not-allowed':'pointer',opacity:disabled?0.5:1,display:'inline-flex',alignItems:'center',gap:6,...vs[variant],...style}}>{children}</button>
 }
 function Modal({title,onClose,children,accent=P.purple}){
-  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:20}}>
-    <div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:16,width:'100%',maxWidth:540,maxHeight:'90vh',overflow:'auto',boxShadow:'0 25px 60px rgba(0,0,0,0.6)'}}>
+  const mW=useWindowSize()<768
+  return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1001,padding:mW?10:20}}>
+    <div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:16,width:'100%',maxWidth:mW?'95vw':540,maxHeight:'90vh',overflow:'auto',boxShadow:'0 25px 60px rgba(0,0,0,0.6)'}}>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'18px 24px',borderBottom:`1px solid ${P.border}`}}>
         <div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:8,height:8,borderRadius:'50%',background:accent}}/><h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>{title}</h3></div>
         <button onClick={onClose} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
@@ -98,19 +130,68 @@ function Modal({title,onClose,children,accent=P.purple}){
 function Lbl({children}){return <label style={{fontSize:11,color:P.muted,display:'block',marginBottom:5,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>{children}</label>}
 function Spinner(){return <div style={{display:'flex',alignItems:'center',justifyContent:'center',padding:60}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>}
 function SHdr({title,sub,action}){
-  return <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:24}}>
-    <div><h2 style={{fontSize:20,fontWeight:700,color:P.text,marginBottom:4,margin:'0 0 4px'}}>{title}</h2>{sub&&<p style={{fontSize:13,color:P.muted,margin:0}}>{sub}</p>}</div>
-    {action}
+  const isMob=useWindowSize()<768
+  return <div style={{display:'flex',flexDirection:isMob?'column':'row',justifyContent:'space-between',alignItems:isMob?'stretch':'flex-start',gap:isMob?14:12,marginBottom:24}}>
+    <div style={{minWidth:0}}>
+      <h2 style={{fontSize:isMob?17:20,fontWeight:700,color:P.text,marginBottom:4,margin:'0 0 4px',wordBreak:'break-word'}}>{title}</h2>
+      {sub&&<p style={{fontSize:13,color:P.muted,margin:0,wordBreak:'break-word'}}>{sub}</p>}
+    </div>
+    {action&&<div style={{display:'flex',flexWrap:'wrap',gap:8,alignItems:'center'}}>{action}</div>}
   </div>
 }
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
 
+// ─── WA TOAST ─────────────────────────────────────────────────────────────────
+function WaToast({toast,onClose,onView}){
+  return <div style={{background:'#1a1c2e',border:'1px solid rgba(0,208,132,0.3)',borderRadius:12,padding:'14px 16px',width:300,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',gap:10}}>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div style={{display:'flex',alignItems:'center',gap:7}}>
+        <div style={{width:7,height:7,borderRadius:'50%',background:P.green,flexShrink:0}}/>
+        <span style={{fontSize:11,fontWeight:700,color:P.green,textTransform:'uppercase',letterSpacing:'0.08em'}}>Nuevo WhatsApp</span>
+      </div>
+      <button onClick={onClose} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:16,lineHeight:1,padding:0}}>✕</button>
+    </div>
+    <div>
+      <div style={{fontSize:14,fontWeight:700,color:P.text,marginBottom:2}}>{toast.name}</div>
+      <div style={{fontSize:11,color:P.muted,fontFamily:"'JetBrains Mono',monospace"}}>{toast.phone}</div>
+    </div>
+    {toast.preview&&<div style={{fontSize:12,color:P.textSub,background:'rgba(255,255,255,0.04)',borderRadius:6,padding:'7px 10px',fontStyle:'italic',lineHeight:1.5}}>"{toast.preview.length>60?toast.preview.slice(0,60)+'…':toast.preview}"</div>}
+    <button onClick={onView} style={{padding:'8px 12px',borderRadius:8,fontSize:12,fontWeight:600,background:P.greenDim,color:P.green,border:`1px solid ${P.green}40`,cursor:'pointer',textAlign:'center'}}>Ver conversación →</button>
+  </div>
+}
+
 // ─── LOGIN ────────────────────────────────────────────────────────────────────
 function Login({onLogin}){
+  const BACKGROUND_IMAGE='https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=1200'
+  const LOGO_URL='https://pessaro.cl/images/logo-256.webp'
+
+  const windowSize=useWindowSize()
+  const isMobile=windowSize<768
+  const isTablet=windowSize>=768&&windowSize<1024
+  const isDesktop=windowSize>=1024
+
   const[email,setEmail]=useState('')
   const[pass,setPass]=useState('')
   const[error,setError]=useState('')
   const[loading,setLoading]=useState(false)
+  const[view,setView]=useState('login')
+  const[recoveryEmail,setRecoveryEmail]=useState('')
+  const[recoveryError,setRecoveryError]=useState('')
+  const[recoveryLoading,setRecoveryLoading]=useState(false)
+  const[showSplash,setShowSplash]=useState(()=>typeof window!=='undefined'?window.innerWidth<1024:false)
+
+  useEffect(()=>{
+    if(isDesktop){
+      setShowSplash(false)
+    } else if(isMobile){
+      const timer=setTimeout(()=>setShowSplash(false),3500)
+      return()=>clearTimeout(timer)
+    } else if(isTablet){
+      const timer=setTimeout(()=>setShowSplash(false),2500)
+      return()=>clearTimeout(timer)
+    }
+  },[isMobile,isTablet,isDesktop])
+
   const handle=async()=>{
     if(!email||!pass)return
     setLoading(true);setError('')
@@ -119,6 +200,247 @@ function Login({onLogin}){
     if(err){setError(err.message);return}
     onLogin(data.user)
   }
+
+  const handleRecovery=async()=>{
+    if(!recoveryEmail)return
+    setRecoveryLoading(true);setRecoveryError('')
+    const{error:err}=await supabase.auth.resetPasswordForEmail(recoveryEmail,{redirectTo:'https://crm.pessaro.cl'})
+    setRecoveryLoading(false)
+    if(err){setRecoveryError(err.message);return}
+    setView('recovery_sent')
+  }
+
+  const cssAnim=`
+    @keyframes scaleIn{from{transform:scale(0.8);opacity:0}to{transform:scale(1);opacity:1}}
+    @keyframes slideDown{from{transform:translateY(-20px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+    @keyframes fadeInUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+    @keyframes bounce{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+    @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(20px,20px)}}
+    @keyframes pulse{0%,100%{box-shadow:0 8px 32px rgba(124,92,255,0.4)}50%{box-shadow:0 8px 32px rgba(124,92,255,0.7)}}
+  `
+
+  const inputStyle={
+    backgroundColor:'#f5f5f7',color:'#0a0a0f',border:'none',borderRadius:8,
+    padding:'12px 14px',fontSize:'0.9375rem',width:'100%',boxSizing:'border-box',
+    outline:'none',fontFamily:'inherit',transition:'all 0.2s ease',
+  }
+  const onFocusIn=e=>{e.target.style.backgroundColor='#ffffff';e.target.style.boxShadow='0 0 0 2px rgba(124,92,255,0.4)'}
+  const onFocusOut=e=>{e.target.style.backgroundColor='#f5f5f7';e.target.style.boxShadow='none'}
+
+  const recovHeader=(
+    <div style={{textAlign:'center',marginBottom:36}}>
+      <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+        <img src={LOGO_URL} width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
+      </div>
+      <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
+      <p style={{color:'#7c5cff',fontWeight:700,fontSize:13,letterSpacing:'2px',textTransform:'uppercase',margin:'0 0 6px'}}>CRM INTERNO</p>
+      <p style={{color:P.muted,fontSize:13,margin:0}}>Acceso exclusivo para el equipo</p>
+    </div>
+  )
+
+  if(showSplash&&!isDesktop){
+    return(
+      <div style={{minHeight:'100vh',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',overflow:'hidden'}}>
+        <style>{cssAnim}</style>
+        {/* Overlay azul translúcido sobre la imagen */}
+        <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.85) 0%,rgba(30,58,138,0.65) 50%,rgba(10,15,50,0.85) 100%)',zIndex:0}}/>
+        <div style={{position:'absolute',top:'10%',left:'10%',width:300,height:300,background:'radial-gradient(circle,rgba(124,92,255,0.25),transparent 70%)',borderRadius:'50%',animation:'float 6s ease-in-out infinite',pointerEvents:'none',zIndex:1}}/>
+        <div style={{position:'absolute',bottom:'10%',right:'10%',width:250,height:250,background:'radial-gradient(circle,rgba(96,165,250,0.18),transparent 70%)',borderRadius:'50%',animation:'float 8s ease-in-out infinite reverse',pointerEvents:'none',zIndex:1}}/>
+        <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:20,zIndex:2,textAlign:'center',padding:'0 32px'}}>
+          <div style={{width:80,height:80,borderRadius:16,overflow:'hidden',animation:'scaleIn 0.8s cubic-bezier(0.34,1.56,0.64,1) forwards, pulse 2s ease-in-out 1s infinite'}}>
+            <img src={LOGO_URL} alt="Pessaro Capital" style={{width:'100%',height:'100%',objectFit:'cover',display:'block'}}/>
+          </div>
+          <div>
+            <h1 style={{fontSize:28,fontWeight:800,color:'#ffffff',letterSpacing:'-1px',margin:'0 0 4px',animation:'slideDown 0.8s ease-out 0.2s both'}}>Pessaro Capital</h1>
+            <p style={{fontSize:13,fontWeight:700,color:'#7c5cff',letterSpacing:'2px',textTransform:'uppercase',margin:'0 0 12px',animation:'slideDown 0.8s ease-out 0.3s both'}}>CRM INTERNO</p>
+            <p style={{fontSize:14,color:'rgba(255,255,255,0.7)',margin:0,animation:'slideDown 0.8s ease-out 0.4s both'}}>Gestión Inteligente de Inversiones</p>
+          </div>
+          <div style={{display:'flex',gap:8,animation:'fadeIn 0.8s ease-out 0.6s both'}}>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out infinite'}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out 0.2s infinite'}}/>
+            <div style={{width:8,height:8,borderRadius:'50%',background:'#7c5cff',animation:'bounce 1s ease-in-out 0.4s infinite'}}/>
+          </div>
+          <p style={{fontSize:12,color:'rgba(255,255,255,0.5)',animation:'fadeIn 0.8s ease-out 0.6s both',margin:0}}>Cargando panel de control...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if(view==='recovery_sent'){
+    return(
+      <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+        <div style={{width:'100%',maxWidth:380}}>
+          {recovHeader}
+          <GlassCard accent={P.purple}>
+            <div style={{display:'flex',flexDirection:'column',gap:16,textAlign:'center'}}>
+              <div style={{fontSize:32}}>📧</div>
+              <p style={{fontSize:14,color:P.text,lineHeight:1.6,margin:0}}>Si tu email está registrado, recibirás un enlace de recuperación en tu correo.</p>
+              <button onClick={()=>{setView('login');setRecoveryEmail('');setRecoveryError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:13,fontWeight:600,textDecoration:'underline',padding:0}}>← Volver al login</button>
+            </div>
+          </GlassCard>
+        </div>
+      </div>
+    )
+  }
+
+  if(view==='recovery'){
+    return(
+      <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+        <div style={{width:'100%',maxWidth:380}}>
+          {recovHeader}
+          <GlassCard accent={P.purple}>
+            <div style={{display:'flex',flexDirection:'column',gap:16}}>
+              <p style={{fontSize:13,color:P.muted,margin:0}}>Ingresa tu email y te enviaremos un enlace para restablecer tu contraseña.</p>
+              <div><Lbl>Email</Lbl><Input value={recoveryEmail} onChange={setRecoveryEmail} placeholder="tu@pessaro.cl" type="email"/></div>
+              {recoveryError&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{recoveryError}</div>}
+              <Btn onClick={handleRecovery} disabled={recoveryLoading} style={{width:'100%',justifyContent:'center',padding:11}}>{recoveryLoading?'Enviando...':'Enviar enlace de recuperación'}</Btn>
+              <button onClick={()=>{setView('login');setRecoveryError('')}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:13,textDecoration:'underline',padding:0,textAlign:'center'}}>← Volver al login</button>
+            </div>
+          </GlassCard>
+        </div>
+      </div>
+    )
+  }
+
+  if(isDesktop){
+    return(
+      <div style={{minHeight:'100vh',display:'flex'}}>
+        <style>{cssAnim}</style>
+        <div style={{width:'55%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.75) 0%,rgba(30,58,138,0.55) 50%,rgba(10,15,50,0.75) 100%)'}}/>
+          <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 48px'}}>
+            <h1 style={{fontSize:'3.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
+            <p style={{fontSize:'1rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 24px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
+            <p style={{fontSize:'1.25rem',color:'rgba(255,255,255,0.9)',textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 16px'}}>Gestión Inteligente de Inversiones</p>
+            <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',letterSpacing:'0.5px',margin:0,textShadow:'0 2px 6px rgba(0,0,0,0.4)'}}>Acceso exclusivo para el equipo</p>
+          </div>
+        </div>
+        <div style={{width:'45%',backgroundColor:'#0a0a0f',display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 32px',animation:'fadeIn 0.5s ease-in-out'}}>
+          <div style={{width:'100%',maxWidth:360}}>
+            <div style={{textAlign:'center',marginBottom:28}}>
+              <img src={LOGO_URL} height={64} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:24}} alt="Pessaro Capital"/>
+              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px'}}>Pessaro Capital</h2>
+              <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px'}}>CRM INTERNO</p>
+              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:'0 0 28px'}}>Acceso exclusivo para el equipo</p>
+            </div>
+            <div style={{backgroundColor:'#1a1a24',borderRadius:12,padding:24,border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle}}/>
+                </div>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+                </div>
+                {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
+                <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+                <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:14}}>¿Olvidaste tu contraseña?</button>
+              </div>
+            </div>
+            <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:24}}>Usa tu cuenta de Pessaro Capital</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if(isTablet){
+    return(
+      <div style={{minHeight:'100vh',display:'flex',animation:'fadeIn 0.5s ease-in-out'}}>
+        <style>{cssAnim}</style>
+        <div style={{width:'50%',position:'relative',display:'flex',alignItems:'center',justifyContent:'center',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center'}}>
+          <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.75) 0%,rgba(30,58,138,0.55) 50%,rgba(10,15,50,0.75) 100%)'}}/>
+          <div style={{position:'relative',zIndex:1,textAlign:'center',padding:'0 32px'}}>
+            <h1 style={{fontSize:'2.5rem',fontWeight:800,color:'#ffffff',textShadow:'0 4px 12px rgba(0,0,0,0.5)',margin:'0 0 8px',lineHeight:1.1,letterSpacing:'-1px'}}>Pessaro Capital</h1>
+            <p style={{fontSize:'0.875rem',fontWeight:700,color:'#7c5cff',letterSpacing:'3px',textTransform:'uppercase',margin:'0 0 12px',textShadow:'0 2px 8px rgba(0,0,0,0.4)'}}>CRM INTERNO</p>
+            <p style={{fontSize:'1rem',color:'rgba(255,255,255,0.9)',textShadow:'0 2px 8px rgba(0,0,0,0.4)',margin:'0 0 10px'}}>Gestión Inteligente de Inversiones</p>
+            <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.7)',letterSpacing:'0.5px',margin:0}}>Acceso exclusivo para el equipo</p>
+          </div>
+        </div>
+        <div style={{width:'50%',backgroundColor:'#0a0a0f',display:'flex',alignItems:'center',justifyContent:'center',padding:'32px 24px'}}>
+          <div style={{width:'100%',maxWidth:320}}>
+            <div style={{textAlign:'center',marginBottom:24}}>
+              <img src={LOGO_URL} height={56} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:20}} alt="Pessaro Capital"/>
+              <h2 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px'}}>Pessaro Capital</h2>
+              <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px'}}>CRM INTERNO</p>
+              <p style={{fontSize:'0.875rem',color:'rgba(255,255,255,0.6)',margin:'0 0 20px'}}>Acceso exclusivo para el equipo</p>
+            </div>
+            <div style={{backgroundColor:'#1a1a24',borderRadius:12,padding:24,border:'1px solid rgba(255,255,255,0.06)'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+                  <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle,padding:'11px 14px',fontSize:'0.875rem'}}/>
+                </div>
+                <div>
+                  <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,padding:'11px 14px',fontSize:'0.875rem'}}/>
+                </div>
+                {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
+                <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'0.875rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+                <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:10}}>¿Olvidaste tu contraseña?</button>
+              </div>
+            </div>
+            <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:20}}>Usa tu cuenta de Pessaro Capital</p>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return(
+    <div style={{minHeight:'100vh',display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',position:'relative',backgroundImage:`url(${BACKGROUND_IMAGE})`,backgroundSize:'cover',backgroundPosition:'center',padding:'24px 16px'}}>
+      <style>{cssAnim}</style>
+      <div style={{position:'absolute',top:0,right:0,bottom:0,left:0,background:'linear-gradient(135deg,rgba(10,15,50,0.82) 0%,rgba(30,58,138,0.7) 50%,rgba(10,15,50,0.82) 100%)',zIndex:0}}/>
+      <div style={{position:'relative',zIndex:2,width:'100%',maxWidth:360,display:'flex',flexDirection:'column',alignItems:'center'}}>
+        <div style={{textAlign:'center',marginBottom:20}}>
+          <img src={LOGO_URL} height={56} style={{display:'block',margin:'0 auto',borderRadius:12,marginBottom:12}} alt="Pessaro Capital"/>
+          <h1 style={{fontSize:'1.5rem',fontWeight:700,color:'#ffffff',margin:'0 0 4px',textAlign:'center'}}>Pessaro Capital</h1>
+          <p style={{fontSize:'0.75rem',fontWeight:700,color:'#7c5cff',letterSpacing:'2.5px',textTransform:'uppercase',margin:'0 0 8px',textAlign:'center'}}>CRM INTERNO</p>
+          <p style={{fontSize:'0.8125rem',color:'rgba(255,255,255,0.7)',margin:0,textAlign:'center'}}>Acceso exclusivo para el equipo</p>
+        </div>
+        <div style={{width:'calc(100% - 32px)',maxWidth:360,backgroundColor:'rgba(26,26,36,0.85)',backdropFilter:'blur(20px)',WebkitBackdropFilter:'blur(20px)',borderRadius:16,border:'1px solid rgba(255,255,255,0.08)',padding:20,animation:'fadeInUp 0.6s ease-out'}}>
+          <div style={{display:'flex',flexDirection:'column',gap:14}}>
+            <div>
+              <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>EMAIL</label>
+              <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@pessaro.cl" onFocus={onFocusIn} onBlur={onFocusOut} style={{...inputStyle}}/>
+            </div>
+            <div>
+              <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
+              <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+            </div>
+            {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center',marginTop:12}}>{error}</div>}
+            <button onClick={handle} disabled={loading} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,WebkitTapHighlightColor:'transparent'}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
+            <button onClick={()=>{setView('recovery');setError('')}} style={{background:'none',border:'none',color:'#7c5cff',cursor:'pointer',fontSize:'0.8125rem',padding:0,textAlign:'center',textDecoration:'underline',fontFamily:'inherit',marginTop:14,WebkitTapHighlightColor:'transparent'}}>¿Olvidaste tu contraseña?</button>
+          </div>
+        </div>
+        <p style={{fontSize:'0.75rem',color:'rgba(255,255,255,0.4)',textAlign:'center',marginTop:20}}>Usa tu cuenta de Pessaro Capital</p>
+      </div>
+    </div>
+  )
+}
+
+// ─── PASSWORD RESET ───────────────────────────────────────────────────────────
+function PasswordReset({onDone}){
+  const[newPass,setNewPass]=useState('')
+  const[confirm,setConfirm]=useState('')
+  const[error,setError]=useState('')
+  const[loading,setLoading]=useState(false)
+  const[done,setDone]=useState(false)
+
+  const handle=async()=>{
+    if(!newPass||!confirm)return
+    if(newPass.length<8){setError('La contraseña debe tener al menos 8 caracteres.');return}
+    if(newPass!==confirm){setError('Las contraseñas no coinciden.');return}
+    setLoading(true);setError('')
+    const{error:err}=await supabase.auth.updateUser({password:newPass})
+    setLoading(false)
+    if(err){setError(err.message);return}
+    setDone(true)
+    setTimeout(()=>onDone(),2500)
+  }
+
   return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
     <div style={{width:'100%',maxWidth:380}}>
       <div style={{textAlign:'center',marginBottom:36}}>
@@ -127,17 +449,22 @@ function Login({onLogin}){
         </div>
         <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
         <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
-        <p style={{color:P.muted,fontSize:13,margin:0}}>Acceso exclusivo para el equipo</p>
       </div>
       <GlassCard accent={P.purple}>
-        <div style={{display:'flex',flexDirection:'column',gap:16}}>
-          <div><Lbl>Email</Lbl><Input value={email} onChange={setEmail} placeholder="tu@pessaro.cl" type="email"/></div>
-          <div><Lbl>Contraseña</Lbl><Input value={pass} onChange={setPass} placeholder="••••••••" type="password"/></div>
-          {error&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{error}</div>}
-          <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Ingresando...':'Entrar al CRM'}</Btn>
-        </div>
+        {done
+          ? <div style={{textAlign:'center',padding:'8px 0'}}>
+              <div style={{fontSize:32,marginBottom:12}}>✅</div>
+              <p style={{fontSize:14,color:P.text,margin:0}}>¡Contraseña actualizada! Redirigiendo al login…</p>
+            </div>
+          : <div style={{display:'flex',flexDirection:'column',gap:16}}>
+              <p style={{fontSize:13,color:P.muted,margin:0}}>Elige una nueva contraseña para tu cuenta.</p>
+              <div><Lbl>Nueva contraseña</Lbl><Input value={newPass} onChange={setNewPass} placeholder="Mínimo 8 caracteres" type="password"/></div>
+              <div><Lbl>Confirmar contraseña</Lbl><Input value={confirm} onChange={setConfirm} placeholder="Repite la contraseña" type="password"/></div>
+              {error&&<div style={{fontSize:12,color:P.red,background:P.redDim,padding:'10px 12px',borderRadius:8,border:`1px solid ${P.red}30`}}>{error}</div>}
+              <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Guardando...':'Cambiar contraseña'}</Btn>
+            </div>
+        }
       </GlassCard>
-      <p style={{textAlign:'center',marginTop:14,fontSize:11,color:P.muted}}>Usa tu cuenta de Pessaro Capital</p>
     </div>
   </div>
 }
@@ -148,20 +475,21 @@ function Dashboard({contacts,leads,onNav}){
   const newC=contacts.filter(c=>c.status==='new').length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
+  const isMob=useWindowSize()<768
   return <div>
     <SHdr title="Dashboard" sub="Datos en tiempo real desde Supabase"/>
-    <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
+    <div style={{display:'grid',gridTemplateColumns:isMob?'1fr 1fr':'repeat(4,1fr)',gap:14,marginBottom:22}}>
       <StatCard label="Formularios" value={contacts.length} sub={newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'} accent={newC>0?P.orange:P.purple} Icon="📋"/>
       <StatCard label="Leads pipeline" value={leads.length} sub={`${closed} cerrados`} accent={P.blue} Icon="◈"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18,marginBottom:18}}>
+    <div style={{display:'grid',gridTemplateColumns:isMob?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Pipeline por etapa</p>
-        <ResponsiveContainer width="100%" height={180}>
+        <ErrorBoundary><ResponsiveContainer width="100%" height={180}>
           <BarChart data={pipeData} barSize={28}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.purple} radius={[4,4,0,0]}/></BarChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer></ErrorBoundary>
       </GlassCard>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Estado formularios</p>
@@ -195,6 +523,8 @@ function Dashboard({contacts,leads,onNav}){
 
 // ─── CONTACTS (SUPER ADMIN = todos, asesor = propios) ─────────────────────────
 function Contacts({user,isSuperAdmin}){
+  const isSARef=useRef(isSuperAdmin)
+  useEffect(()=>{isSARef.current=isSuperAdmin},[isSuperAdmin])
   const[contacts,setContacts]=useState([])
   const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
@@ -217,8 +547,7 @@ function Contacts({user,isSuperAdmin}){
   const load=useCallback(async()=>{
     setLoading(true)
     try{
-      if(isSuperAdmin){
-        // Super admin: crm_contacts + contact_submissions fusionados
+      if(isSARef.current){
         const[{data:crm},{data:subs},{data:sp}]=await Promise.all([
           supabase.from('crm_contacts').select('*').order('created_at',{ascending:false}),
           supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,status,submitted_at').order('submitted_at',{ascending:false}),
@@ -239,7 +568,8 @@ function Contacts({user,isSuperAdmin}){
       }
     }catch(e){console.error('contacts load:',e)}
     finally{setLoading(false)}
-  },[user.id,isSuperAdmin])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[])
 
   useEffect(()=>{load()},[load])
 
@@ -358,9 +688,9 @@ function Contacts({user,isSuperAdmin}){
   return <div>
     <SHdr title={isSuperAdmin?'Todos los Contactos':'Mis Contactos'}
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
-      action={<div style={{display:'flex',gap:8}}>
-        <Btn variant="ghost" onClick={()=>{setLoading(true);load()}} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
-        {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
+      action={<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        <Btn variant="ghost" onClick={()=>load()} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
+        {isSuperAdmin&&<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           <Btn variant="ghost" onClick={()=>exportContactsCSV(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ CSV</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsExcel(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ Excel</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsHTML(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ HTML</Btn>
@@ -433,7 +763,8 @@ function Contacts({user,isSuperAdmin}){
     </div>
 
     {loading?<Spinner/>:<GlassCard style={{padding:0}}>
-      <table style={{width:'100%',borderCollapse:'collapse'}}>
+      <div style={{overflowX:'auto'}}>
+      <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
         <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
           {[...(isSuperAdmin?['Asesor']:[]),(isSuperAdmin?'Capital':''),'Nombre','Email','Teléfono','Estado','Origen',''].filter(Boolean).map(h=>(
             <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
@@ -462,6 +793,7 @@ function Contacts({user,isSuperAdmin}){
           ))}
         </tbody>
       </table>
+      </div>
       {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>{contacts.length===0?'Aún no tienes contactos. Añade uno o importa un CSV.':'Sin resultados.'}</div>}
     </GlassCard>}
 
@@ -515,7 +847,7 @@ function Pipeline({leads,setLeads,isSuperAdmin}){
   const[filterVariant,setFilterVariant]=useState('all')
   const[filterPerfil,setFilterPerfil]=useState('all')
 
-  const VARIANT_COLORS={'navy':'#4a7cdc','bold':'#c8e000','editorial':'#a8451f','default':P.muted}
+  const VARIANT_COLORS={'navy':'#4a7cdc','bold':'#c8e000','editorial':'#a8451f','minimalist':'#C9A84C','default':P.muted}
   const PERFIL_COLORS={'retail':P.green,'mam':P.purple,'institucional':P.orange}
 
   // Obtener valores únicos presentes en los leads
@@ -625,20 +957,20 @@ function Pipeline({leads,setLeads,isSuperAdmin}){
 }
 
 // ─── CAMPAÑA MODULE ───────────────────────────────────────────────────────────
-function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
+function CampanaModule({campaign,campaignVariants=[],myReferralCode='',isMyVariant=()=>true,onBack,onManageVariant,onToggleVariantStatus,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   const[myContacts,setMyContacts]=useState([])
   const[tiers,setTiers]=useState([])
   const[loading,setLoading]=useState(true)
   const[campTab,setCampTab]=useState('general')
   const[showAdd,setShowAdd]=useState(false)
-  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:'navy'})
+  const[addForm,setAddForm]=useState({crm_contact_id:'',full_name:'',email:'',phone:'',investment_range:'',team:'',perfil:'',variant:(campaignVariants[0]?.variant_key)||'navy'})
   const[addSaving,setAddSaving]=useState(false)
   const[selPart,setSelPart]=useState(null)
   const[filterVariant,setFilterVariant]=useState('all')
   const[filterPerfil,setFilterPerfil]=useState('all')
 
-  // campaign_leads es la fuente única — globalLeads viene del fetch principal
-  const leads=globalLeads||[]
+  // Filtra leads de esta campaña — campaign_leads ya tiene campaign_id desde la migración
+  const leads=(globalLeads||[]).filter(l=>l.campaign_id===campaign.id)
   const deposited=leads.filter(l=>l.deposit_confirmed)
   const capital=deposited.reduce((s,l)=>s+(Number(l.deposit_amount_usd)||0),0)
   const myLeads=isSuperAdmin?leads:leads.filter(l=>l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes((user?.email||'').split('@')[0].toLowerCase()))
@@ -654,7 +986,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
   const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
   const teamColor={radex:'#e74c3c',tradeview:'#3498db'}
-  const variantColor={navy:'#4a7cdc',bold:'#c8e000',editorial:'#a8451f'}
+  const variantColor={navy:'#4a7cdc',bold:'#c8e000',editorial:'#a8451f',minimalist:'#C9A84C'}
   const perfilColor={retail:P.green,mam:P.purple,asesor:P.orange}
 
   const load=useCallback(async()=>{
@@ -684,11 +1016,12 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
       full_name:addForm.full_name,email:addForm.email,phone:addForm.phone||null,
       investment_range:addForm.investment_range||null,team:addForm.team||null,
       perfil:addForm.perfil||null,variant:addForm.variant||'navy',
+      campaign_id:campaign.id,
       referral_code:code,position_in_queue:cnt+1,
       source:'crm_manual',advisor_assigned:user?.email?.split('@')[0]||null,etapa:1,
     }
     const{data,error}=await supabase.from('campaign_leads').insert(payload).select(
-      'id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,deposit_amount_usd'
+      'id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,deposit_amount_usd,campaign_id'
     ).single()
     if(data&&!error){
       setGlobalLeads(p=>[data,...p])
@@ -714,6 +1047,7 @@ function CampanaModule({campaign,user,isSuperAdmin,globalLeads,setGlobalLeads}){
   )
 
   return <div>
+    {onBack&&<button onClick={onBack} style={{marginBottom:12,padding:'6px 12px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:6,fontSize:11,cursor:'pointer',display:'inline-flex',alignItems:'center',gap:6}}>← Volver a campañas</button>}
     <SHdr title={campaign.name} sub={`${leads.length} leads · ${deposited.length} depósitos · ${campaign.status}`}/>
 
     <div style={{display:'flex',gap:8,marginBottom:20}}>
@@ -797,19 +1131,17 @@ return <div key={r} style={{marginBottom:12}}>
     {campTab==='landings'&&<div>
       <p style={{fontSize:12,color:P.muted,marginBottom:20}}>Variantes de landing page activas para esta campaña. Haz clic para abrir en nueva pestaña.</p>
       <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(260px,1fr))',gap:16,marginBottom:28}}>
-        {[
-          {id:'navy',     label:'Navy',     desc:'Fondo azul marino · tipografía Syne · estilo profesional', color:'#4a7cdc', url:'/campana/navy'},
-          {id:'editorial',label:'Editorial',desc:'Fondo crema · Instrument Serif · estilo editorial', color:'#a8451f', url:'/campana/editorial'},
-          {id:'bold',     label:'Bold',     desc:'Fondo negro · Space Grotesk · estilo tecnológico', color:'#c8e000', url:'/campana/bold'},
-        ].map(v=>{
-          const cnt=leads.filter(l=>l.variant===v.id).length
-          const dep=leads.filter(l=>l.variant===v.id&&l.deposit_confirmed).length
-          const top=leads.filter(l=>l.variant===v.id).sort((a,b)=>b.score-a.score).slice(0,1)[0]
-          return <GlassCard key={v.id} style={{borderLeft:`3px solid ${v.color}`,padding:20}}>
+        {campaignVariants.map(v=>{
+          const cnt=leads.filter(l=>l.variant===v.variant_key).length
+          const dep=leads.filter(l=>l.variant===v.variant_key&&l.deposit_confirmed).length
+          const top=leads.filter(l=>l.variant===v.variant_key).sort((a,b)=>b.score-a.score).slice(0,1)[0]
+          const canUse=isMyVariant(v.id)
+          const linkRef=myReferralCode?`?ref=${myReferralCode}`:''
+          return <GlassCard key={v.id} style={{borderLeft:`3px solid ${v.color}`,padding:20,opacity:v.status==='activa'?1:0.55}}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:12}}>
               <div>
-                <div style={{fontSize:11,fontWeight:700,color:v.color,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:4}}>{v.label}</div>
-                <div style={{fontSize:12,color:P.muted,lineHeight:1.5}}>{v.desc}</div>
+                <div style={{fontSize:11,fontWeight:700,color:v.color,letterSpacing:'0.12em',textTransform:'uppercase',marginBottom:4}}>{v.label}{v.status!=='activa'&&' · pausada'}</div>
+                <div style={{fontSize:12,color:P.muted,lineHeight:1.5}}>{v.description||'—'}</div>
               </div>
               <div style={{background:v.color+'18',border:`1px solid ${v.color}40`,borderRadius:8,padding:'4px 10px',textAlign:'center',flexShrink:0,marginLeft:10}}>
                 <div style={{fontSize:18,fontWeight:800,color:v.color}}>{cnt}</div>
@@ -829,38 +1161,54 @@ return <div key={r} style={{marginBottom:12}}>
             {top&&<div style={{fontSize:11,color:P.muted,marginBottom:12,padding:'6px 10px',background:'rgba(255,255,255,0.03)',borderRadius:6}}>
               🏆 Top: <span style={{color:P.text,fontWeight:600}}>{top.full_name}</span> · {top.score} pts
             </div>}
-            <div style={{display:'flex',gap:8}}>
-              <a href={`https://pessaro.cl${v.url}`} target="_blank" rel="noopener noreferrer"
-                style={{flex:1,padding:'9px 0',background:v.color,color:'#000',border:'none',borderRadius:8,
+            <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+              <a href={`https://pessaro.cl${v.landing_url}`} target="_blank" rel="noopener noreferrer"
+                style={{flex:1,minWidth:100,padding:'9px 0',background:v.color,color:'#000',border:'none',borderRadius:8,
                   fontSize:12,fontWeight:700,cursor:'pointer',textAlign:'center',textDecoration:'none',display:'block'}}>
                 Ver landing →
               </a>
-              <a href={`https://pessaro.cl${v.url}?ref=DEMO`} target="_blank" rel="noopener noreferrer"
+              {canUse&&myReferralCode&&<button onClick={()=>{navigator.clipboard.writeText(`https://pessaro.cl${v.landing_url}${linkRef}`)}}
                 style={{padding:'9px 12px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,
-                  borderRadius:8,fontSize:12,cursor:'pointer',textDecoration:'none',display:'block'}}>
-                + Ref
-              </a>
+                  borderRadius:8,fontSize:11,cursor:'pointer'}}>
+                Copiar mi link
+              </button>}
+              {isSuperAdmin&&onManageVariant&&<button onClick={()=>onManageVariant(v)}
+                style={{padding:'9px 12px',background:P.orange+'15',color:P.orange,border:`1px solid ${P.orange}40`,
+                  borderRadius:8,fontSize:11,cursor:'pointer',fontWeight:600}}>
+                ⚙ Asesores
+              </button>}
+              {isSuperAdmin&&onToggleVariantStatus&&<button onClick={()=>onToggleVariantStatus(v)}
+                style={{padding:'9px 12px',background:'rgba(255,255,255,0.05)',color:v.status==='activa'?P.orange:P.green,border:`1px solid ${P.border}`,
+                  borderRadius:8,fontSize:11,cursor:'pointer'}}>
+                {v.status==='activa'?'⏸ Pausar':'▶ Activar'}
+              </button>}
             </div>
           </GlassCard>
         })}
       </div>
 
-      {/* Links de referido por variante */}
-      <GlassCard>
-        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Links de referido por variante</p>
-        {['navy','editorial','bold'].map(v=>(
-          <div key={v} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
-            <span style={{fontSize:12,fontWeight:600,color:P.text,minWidth:70,textTransform:'capitalize'}}>{v}</span>
+      {/* Mis links de referido por variante (solo variantes habilitadas) */}
+      {myReferralCode&&<GlassCard>
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>Mis links de referido</p>
+        {campaignVariants.filter(v=>isMyVariant(v.id)&&v.status==='activa').map(v=>(
+          <div key={v.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
+            <span style={{fontSize:12,fontWeight:600,color:v.color,minWidth:90}}>{v.label}</span>
             <code style={{flex:1,fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'5px 10px',borderRadius:6,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-              {`https://pessaro.cl/campana/${v}?ref=CODIGO`}
+              {`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`}
             </code>
-            <button onClick={()=>navigator.clipboard.writeText(`https://pessaro.cl/campana/${v}?ref=CODIGO`)}
+            <button onClick={()=>navigator.clipboard.writeText(`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`)}
               style={{padding:'5px 10px',background:'rgba(255,255,255,0.06)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:6,fontSize:11,cursor:'pointer'}}>
               Copiar
             </button>
           </div>
         ))}
-      </GlassCard>
+        {campaignVariants.filter(v=>isMyVariant(v.id)&&v.status==='activa').length===0&&
+          <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'10px 0',margin:0}}>No tienes variantes habilitadas. Solicita acceso al super admin.</p>
+        }
+      </GlassCard>}
+      {!myReferralCode&&<GlassCard style={{padding:14,background:P.orange+'10',border:`1px solid ${P.orange}30`}}>
+        <p style={{fontSize:12,color:P.orange,margin:0}}>⚠ No tienes un código de referido asignado. Pide al super admin que te genere uno en "Campañas admin → Links Asesores".</p>
+      </GlassCard>}
     </div>}
 
     {campTab==='mis_leads'&&(loading?<Spinner/>:<div>
@@ -916,6 +1264,7 @@ return <div key={r} style={{marginBottom:12}}>
           <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="+56 9..."/></div>
           <div><Lbl>Capital</Lbl><Sel value={addForm.investment_range} onChange={v=>setAddForm(p=>({...p,investment_range:v}))} options={[{value:'',label:'Seleccionar'},{value:'1k-5k',label:'1k-5k'},{value:'5k-20k',label:'5k-20k'},{value:'20k-50k',label:'20k-50k'},{value:'50k+',label:'50k+'}]}/></div>
           <div><Lbl>Equipo</Lbl><Sel value={addForm.team} onChange={v=>setAddForm(p=>({...p,team:v}))} options={[{value:'',label:'Sin equipo'},{value:'radex',label:'Radex'},{value:'tradeview',label:'Tradeview'}]}/></div>
+          <div><Lbl>Landing</Lbl><Sel value={addForm.variant} onChange={v=>setAddForm(p=>({...p,variant:v}))} options={campaignVariants.length>0?campaignVariants.map(v=>({value:v.variant_key,label:v.label})):[{value:'navy',label:'Navy'},{value:'editorial',label:'Editorial'},{value:'bold',label:'Bold'},{value:'minimalist',label:'Minimalist'}]}/></div>
         </div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
           <Btn variant="ghost" onClick={()=>setShowAdd(false)}>Cancelar</Btn>
@@ -952,20 +1301,235 @@ return <div key={r} style={{marginBottom:12}}>
 }
 
 
+// ─── CAMPAIGNS HUB — vista unificada para todos los roles ──────────────────
+function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setGlobalLeads}){
+  const[variants,setVariants]=useState([])
+  const[advisors,setAdvisors]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[selectedCamp,setSelectedCamp]=useState(null)
+  const[manageVariant,setManageVariant]=useState(null) // for super admin variant-advisors modal
+  const[staffList,setStaffList]=useState([])
+
+  // Load variants and advisor assignments
+  useEffect(()=>{(async()=>{
+    setLoading(true)
+    try{
+      const[{data:v},{data:va},{data:sp}]=await Promise.all([
+        supabase.from('campaign_variants').select('*').order('variant_key'),
+        supabase.from('variant_advisors').select('*'),
+        isSuperAdmin?supabase.from('crm_staff_profiles').select('id,display_name,pessaro_email,role').order('display_name'):Promise.resolve({data:[]}),
+      ])
+      setVariants(v||[])
+      setAdvisors(va||[])
+      setStaffList(sp||[])
+    }catch(e){console.error('CampaignsHub load:',e)}
+    setLoading(false)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  })()},[]) // run once — isSuperAdmin is stable after auth resolves
+
+  // Filter campaigns a este asesor le sirven (super admin ve todas)
+  const myStaffId=staffProfile?.id
+  const visibleCampaigns=campaigns.filter(c=>{
+    if(c.status!=='activa'&&!isSuperAdmin)return false
+    if(isSuperAdmin)return true
+    if(!myStaffId)return false
+    // El asesor ve campañas donde tiene al menos 1 variante habilitada
+    const campVariantIds=variants.filter(v=>v.campaign_id===c.id).map(v=>v.id)
+    return advisors.some(a=>a.staff_id===myStaffId&&a.enabled&&campVariantIds.includes(a.variant_id))
+  })
+
+  const getVariantsFor=campId=>variants.filter(v=>v.campaign_id===campId)
+  const isMyVariant=variantId=>isSuperAdmin?true:advisors.some(a=>a.staff_id===myStaffId&&a.enabled&&a.variant_id===variantId)
+  const enabledAdvisorsFor=variantId=>advisors.filter(a=>a.variant_id===variantId&&a.enabled).length
+  const myReferralCode=staffProfile?.referral_code||''
+
+  // Toggle de asesor en variante (super admin only)
+  const toggleAdvisorOnVariant=async(variantId,staffId)=>{
+    const existing=advisors.find(a=>a.variant_id===variantId&&a.staff_id===staffId)
+    if(existing){
+      const{error}=await supabase.from('variant_advisors').update({enabled:!existing.enabled}).eq('id',existing.id)
+      if(!error)setAdvisors(p=>p.map(a=>a.id===existing.id?{...a,enabled:!a.enabled}:a))
+    }else{
+      const{data,error}=await supabase.from('variant_advisors').insert({variant_id:variantId,staff_id:staffId,enabled:true,granted_by:user?.id}).select().single()
+      if(!error&&data)setAdvisors(p=>[...p,data])
+    }
+  }
+
+  // Toggle status de la variante (activa/pausada) — solo super admin
+  const toggleVariantStatus=async(v)=>{
+    const newStatus=v.status==='activa'?'pausada':'activa'
+    const{error}=await supabase.from('campaign_variants').update({status:newStatus}).eq('id',v.id)
+    if(!error)setVariants(p=>p.map(x=>x.id===v.id?{...x,status:newStatus}:x))
+  }
+
+  if(loading)return <Spinner/>
+
+  // Vista detalle de una campaña seleccionada
+  if(selectedCamp){
+    const camp=selectedCamp
+    const campVariants=getVariantsFor(camp.id)
+    const campLeads=globalLeads.filter(l=>l.campaign_id===camp.id)
+    return <CampanaModule
+      key={camp.id}
+      campaign={camp}
+      campaignVariants={campVariants}
+      myReferralCode={myReferralCode}
+      isMyVariant={isMyVariant}
+      onBack={()=>setSelectedCamp(null)}
+      onManageVariant={isSuperAdmin?setManageVariant:null}
+      onToggleVariantStatus={isSuperAdmin?toggleVariantStatus:null}
+      user={user}
+      isSuperAdmin={isSuperAdmin}
+      globalLeads={globalLeads}
+      setGlobalLeads={setGlobalLeads}
+    />
+  }
+
+  return <div>
+    <SHdr title="Campañas" sub={`${visibleCampaigns.length} ${visibleCampaigns.length===1?'campaña activa':'campañas activas'}${isSuperAdmin?' · super admin':' · variantes asignadas a ti'}`}/>
+
+    {visibleCampaigns.length===0?(
+      <GlassCard style={{padding:40,textAlign:'center'}}>
+        <p style={{fontSize:13,color:P.muted,margin:0}}>
+          {isSuperAdmin?'No hay campañas creadas. Ve a "Campañas admin" para crear una.':'No tienes variantes habilitadas en ninguna campaña. Solicita acceso al super admin.'}
+        </p>
+      </GlassCard>
+    ):(
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
+        {visibleCampaigns.map(c=>{
+          const campVariants=getVariantsFor(c.id)
+          const myVariants=campVariants.filter(v=>isMyVariant(v.id))
+          const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
+          const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
+          const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
+          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18,cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+              <div style={{flex:1}}>
+                <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,marginBottom:4,margin:'0 0 4px'}}>{c.status}</p>
+                <p style={{fontSize:15,fontWeight:700,color:P.text,margin:'0 0 4px'}}>{c.name}</p>
+                <p style={{fontSize:11,color:P.muted,fontFamily:'monospace',margin:0}}>{c.slug}</p>
+              </div>
+              <div style={{textAlign:'right',marginLeft:10}}>
+                <p style={{fontSize:18,fontWeight:800,color:P.text,margin:0,lineHeight:1}}>{totalLeads}</p>
+                <p style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',margin:'4px 0 0'}}>leads</p>
+              </div>
+            </div>
+            {c.description&&<p style={{fontSize:11,color:P.muted,margin:'8px 0',lineHeight:1.5}}>{c.description}</p>}
+            <div style={{display:'flex',gap:8,marginTop:12,fontSize:11}}>
+              <span style={{color:P.green}}>● {deposits} depósitos</span>
+              <span style={{color:P.muted}}>· {totalLeads?Math.round(deposits/totalLeads*100):0}% conv.</span>
+            </div>
+            <div style={{display:'flex',gap:5,marginTop:12,flexWrap:'wrap'}}>
+              {(isSuperAdmin?campVariants:myVariants).map(v=>(
+                <span key={v.id} style={{
+                  fontSize:10,padding:'3px 8px',borderRadius:4,fontWeight:600,letterSpacing:'0.05em',
+                  background:v.color+'22',color:v.color,border:`1px solid ${v.color}40`,
+                  opacity:v.status==='activa'?1:0.5,
+                }}>{v.label}{v.status!=='activa'&&' · pausada'}</span>
+              ))}
+              {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
+            </div>
+          </GlassCard>
+        })}
+      </div>
+    )}
+
+    {/* Modal: gestión de asesores por variante (super admin only) */}
+    {manageVariant&&isSuperAdmin&&<Modal title={`Asesores · ${manageVariant.label}`} onClose={()=>setManageVariant(null)} accent={manageVariant.color}>
+      <div>
+        <p style={{fontSize:12,color:P.muted,marginBottom:14}}>Habilita qué asesores pueden compartir esta variante con sus contactos.</p>
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {staffList.map(sp=>{
+            const a=advisors.find(x=>x.variant_id===manageVariant.id&&x.staff_id===sp.id)
+            const on=a?.enabled||false
+            return <div key={sp.id} style={{display:'flex',alignItems:'center',gap:12,padding:'10px 14px',borderRadius:8,background:'rgba(255,255,255,0.03)',border:`1px solid ${on?manageVariant.color+'40':P.border}`}}>
+              <div style={{flex:1}}>
+                <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 2px'}}>{sp.display_name}</p>
+                <p style={{fontSize:11,color:P.muted,margin:0}}>{sp.pessaro_email} · {sp.role}</p>
+              </div>
+              <button onClick={()=>toggleAdvisorOnVariant(manageVariant.id,sp.id)}
+                style={{padding:'6px 14px',borderRadius:6,fontSize:11,fontWeight:600,letterSpacing:'0.05em',cursor:'pointer',
+                  background:on?manageVariant.color+'22':'rgba(255,255,255,0.04)',
+                  color:on?manageVariant.color:P.muted,
+                  border:`1px solid ${on?manageVariant.color+'60':P.border}`,
+                  textTransform:'uppercase'}}>
+                {on?'✓ Habilitado':'Deshabilitado'}
+              </button>
+            </div>
+          })}
+        </div>
+      </div>
+    </Modal>}
+  </div>
+}
+
 // ─── ADMIN CAMPAÑAS ───────────────────────────────────────────────────────────
 function AdminCampaigns({campaigns,setCampaigns,user}){
   const[showNew,setShowNew]=useState(false)
   const[saving,setSaving]=useState(false)
   const[form,setForm]=useState({name:'',slug:'',description:'',total_spots:50,broker:'',historical_return:'+502%',target_capital:'',start_date:'',status:'activa'})
   const[err,setErr]=useState({})
+  const[variants,setVariants]=useState({})
+  const[staff,setStaff]=useState([])
+  const[leadCounts,setLeadCounts]=useState({})
+  const[advLeadCounts,setAdvLeadCounts]=useState({})
+  const[varAdvisors,setVarAdvisors]=useState({})
+  const[managingVar,setManagingVar]=useState(null)
+  const[generatingCode,setGeneratingCode]=useState(null)
+  const[copiedLink,setCopiedLink]=useState(null)
+  const[showReferrals,setShowReferrals]=useState({})
   const STATUS_C={activa:P.green,pausada:P.orange,cerrada:P.muted}
+  const VAR_COLORS={navy:'#4a7cdc',editorial:'#a8451f',bold:'#c8e000',minimalist:'#C9A84C'}
+  const FALLBACK_VARIANTS=[
+    {variant_key:'navy',label:'Navy',color:'#4a7cdc',status:'activa'},
+    {variant_key:'editorial',label:'Editorial',color:'#a8451f',status:'activa'},
+    {variant_key:'bold',label:'Bold',color:'#c8e000',status:'activa'},
+    {variant_key:'minimalist',label:'Minimalist',color:'#C9A84C',status:'activa'},
+  ]
+  const ROLE_LABEL={super_admin:'Super Admin',admin:'Admin',asesor:'Asesor'}
+  const ROLE_COLOR={super_admin:P.orange,admin:P.blue,asesor:P.purple}
+
+  const loadAdminData=useCallback(async()=>{
+    try{
+      const{data:v}=await supabase.from('campaign_variants').select('*').order('variant_key')
+      if(v&&v.length>0){
+        const m={}
+        v.forEach(x=>{if(!m[x.campaign_id])m[x.campaign_id]=[];m[x.campaign_id].push(x)})
+        setVariants(m)
+      }
+    }catch(e){console.warn('campaign_variants:',e)}
+    try{
+      const{data:s}=await supabase.from('crm_staff_profiles').select('id,display_name,title,role,referral_code,user_id').order('display_name')
+      setStaff(s||[])
+    }catch(e){console.warn('staff:',e)}
+    try{
+      const{data:l}=await supabase.from('campaign_leads').select('variant,advisor_referral_code')
+      if(l){
+        const vc={},ac={}
+        l.forEach(x=>{
+          if(x.variant)vc[x.variant]=(vc[x.variant]||0)+1
+          if(x.advisor_referral_code)ac[x.advisor_referral_code]=(ac[x.advisor_referral_code]||0)+1
+        })
+        setLeadCounts(vc)
+        setAdvLeadCounts(ac)
+      }
+    }catch(e){console.warn('leads:',e)}
+  },[])
+
+  useEffect(()=>{loadAdminData()},[loadAdminData])
+
+  const getCampVariants=cid=>{
+    const v=variants[cid]
+    if(v&&v.length>0)return v
+    return FALLBACK_VARIANTS.map(f=>({...f,campaign_id:cid,landing_url:`https://pessaro.cl/campana/${f.variant_key}`}))
+  }
 
   const validate=()=>{
     const e={}
     if(!form.name.trim())e.name='Obligatorio'
     if(!form.slug.trim())e.slug='Obligatorio'
     else if(!/^[a-z0-9-]+$/.test(form.slug))e.slug='Solo minúsculas, números y guiones'
-    setErr(e); return !Object.keys(e).length
+    setErr(e);return!Object.keys(e).length
   }
 
   const create=async()=>{
@@ -985,13 +1549,67 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
     setCampaigns(p=>p.map(c=>c.id===id?{...c,status}:c))
   }
 
+  const updateVariantStatus=async(variant,newStatus)=>{
+    if(!variant.id)return
+    try{
+      await supabase.from('campaign_variants').update({status:newStatus}).eq('id',variant.id)
+      setVariants(prev=>{
+        const cid=variant.campaign_id
+        return{...prev,[cid]:(prev[cid]||[]).map(v=>v.id===variant.id?{...v,status:newStatus}:v)}
+      })
+    }catch(e){console.error(e)}
+  }
+
+  const generateCode=async s=>{
+    setGeneratingCode(s.id)
+    const name=s.display_name||'USR'
+    const prefix=name.replace(/\s+/g,'').slice(0,3).toUpperCase().padEnd(3,'X')
+    const suffix=Math.random().toString(36).slice(2,7).toUpperCase()
+    const code=prefix+suffix
+    try{
+      await supabase.from('crm_staff_profiles').update({referral_code:code}).eq('id',s.id)
+      setStaff(prev=>prev.map(x=>x.id===s.id?{...x,referral_code:code}:x))
+    }catch(e){console.error(e)}
+    setGeneratingCode(null)
+  }
+
+  const copyLink=async text=>{
+    try{await navigator.clipboard.writeText(text);setCopiedLink(text);setTimeout(()=>setCopiedLink(null),2000)}catch(e){}
+  }
+
+  const openManageAdvisors=async v=>{
+    setManagingVar(v)
+    if(!v.id)return
+    try{
+      const{data}=await supabase.from('variant_advisors').select('*').eq('variant_id',v.id)
+      setVarAdvisors(prev=>({...prev,[v.id]:data||[]}))
+    }catch(e){console.warn('var_advisors:',e)}
+  }
+
+  const toggleAdvisor=async(variantId,staffId)=>{
+    const advisors=varAdvisors[variantId]||[]
+    const existing=advisors.find(a=>a.staff_id===staffId)
+    try{
+      if(existing){
+        await supabase.from('variant_advisors').update({enabled:!existing.enabled}).eq('id',existing.id)
+        setVarAdvisors(prev=>({...prev,[variantId]:prev[variantId].map(a=>a.staff_id===staffId?{...a,enabled:!a.enabled}:a)}))
+      }else{
+        const{data}=await supabase.from('variant_advisors').insert({variant_id:variantId,staff_id:staffId,enabled:true,granted_by:user.id,granted_at:new Date().toISOString()}).select().single()
+        if(data)setVarAdvisors(prev=>({...prev,[variantId]:[...(prev[variantId]||[]),data]}))
+      }
+    }catch(e){console.error(e)}
+  }
+
   return <div>
     <SHdr title="Gestionar Campañas" sub="Crea y administra campañas · solo super admin"
       action={<Btn onClick={()=>setShowNew(true)}>+ Nueva campaña</Btn>}/>
-    <div style={{display:'flex',flexDirection:'column',gap:14}}>
-      {campaigns.map(c=>(
-        <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
-          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12}}>
+    <div style={{display:'flex',flexDirection:'column',gap:18}}>
+      {campaigns.map(c=>{
+        const campVariants=getCampVariants(c.id)
+        const activeVariants=campVariants.filter(v=>v.status==='activa')
+        return <GlassCard key={c.id} style={{borderLeft:`3px solid ${STATUS_C[c.status]}`}}>
+          {/* Campaign header */}
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',flexWrap:'wrap',gap:12,marginBottom:14}}>
             <div>
               <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                 <Badge label={c.status} color={STATUS_C[c.status]}/>
@@ -1017,13 +1635,106 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
               ))}
             </div>
           </div>
-          <div style={{marginTop:12,padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
+
+          {/* Variants */}
+          <div style={{marginBottom:16}}>
+            <p style={{fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Variantes de landing</p>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:10}}>
+              {campVariants.map(v=>{
+                const vc=v.color||VAR_COLORS[v.variant_key]||P.purple
+                const leads=leadCounts[v.variant_key]||0
+                const url=v.landing_url||`https://pessaro.cl/campana/${v.variant_key}`
+                const isHardcoded=!v.id
+                return <div key={v.variant_key} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${vc}30`,borderRadius:10,padding:'12px 14px'}}>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:7}}>
+                    <div style={{display:'flex',alignItems:'center',gap:6}}>
+                      <div style={{width:10,height:10,borderRadius:2,background:vc,flexShrink:0}}/>
+                      <span style={{fontSize:13,fontWeight:700,color:P.text}}>{v.label||v.variant_key}</span>
+                    </div>
+                    <span style={{fontSize:10,fontWeight:600,color:P.muted,background:'rgba(255,255,255,0.05)',padding:'2px 7px',borderRadius:4}}>{leads} leads</span>
+                  </div>
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    style={{fontSize:10,color:vc,fontFamily:'monospace',display:'block',marginBottom:10,wordBreak:'break-all',textDecoration:'none',lineHeight:1.4}}
+                    onMouseEnter={e=>e.currentTarget.style.textDecoration='underline'}
+                    onMouseLeave={e=>e.currentTarget.style.textDecoration='none'}>
+                    {url}
+                  </a>
+                  <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:6}}>
+                    {!isHardcoded&&<div style={{display:'flex',gap:4}}>
+                      {['activa','pausada'].map(s=>(
+                        <button key={s} onClick={()=>updateVariantStatus(v,s)} disabled={v.status===s}
+                          style={{padding:'3px 8px',borderRadius:5,fontSize:10,cursor:v.status===s?'default':'pointer',
+                            background:v.status===s?(s==='activa'?P.greenDim:P.orangeDim):'rgba(255,255,255,0.04)',
+                            color:v.status===s?(s==='activa'?P.green:P.orange):P.muted,
+                            border:`1px solid ${v.status===s?(s==='activa'?P.green+'40':P.orange+'40'):P.border}`,fontWeight:600}}>
+                          {s==='activa'?'Activa':'Pausada'}
+                        </button>
+                      ))}
+                    </div>}
+                    {isHardcoded&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>Fallback local</span>}
+                    <Btn variant="ghost" onClick={()=>openManageAdvisors(v)} style={{padding:'3px 8px',fontSize:10}}>Asesores</Btn>
+                  </div>
+                </div>
+              })}
+            </div>
+          </div>
+
+          {/* Referral codes */}
+          <div style={{marginBottom:14}}>
+            <button onClick={()=>setShowReferrals(p=>({...p,[c.id]:!p[c.id]}))}
+              style={{display:'flex',alignItems:'center',gap:7,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 14px',cursor:'pointer',width:'100%',textAlign:'left',marginBottom:showReferrals[c.id]?10:0}}>
+              <span style={{fontSize:12,fontWeight:600,color:P.textSub}}>🔗 Códigos de referido</span>
+              <span style={{fontSize:11,color:P.muted,marginLeft:'auto'}}>{staff.length} asesores · {staff.filter(s=>s.referral_code).length} con código</span>
+              <span style={{fontSize:12,color:P.muted,marginLeft:6}}>{showReferrals[c.id]?'▲':'▼'}</span>
+            </button>
+            {showReferrals[c.id]&&<div style={{background:'rgba(255,255,255,0.02)',borderRadius:10,border:`1px solid ${P.border}`,overflow:'auto'}}>
+              <div style={{padding:'9px 14px',borderBottom:`1px solid ${P.border}`,display:'grid',gridTemplateColumns:'1.6fr 0.8fr 1.1fr 3fr 0.5fr',gap:8,minWidth:700}}>
+                {['Nombre','Rol','Código','Links por variante','Leads'].map(h=>(
+                  <span key={h} style={{fontSize:10,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.07em'}}>{h}</span>
+                ))}
+              </div>
+              {staff.length===0&&<p style={{padding:'14px',fontSize:13,color:P.muted,margin:0}}>No hay staff registrado.</p>}
+              {staff.map(s=>(
+                <div key={s.id} style={{padding:'10px 14px',borderBottom:`1px solid ${P.border}`,display:'grid',gridTemplateColumns:'1.6fr 0.8fr 1.1fr 3fr 0.5fr',gap:8,alignItems:'center',minWidth:700}}>
+                  <div style={{fontSize:13,fontWeight:600,color:P.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{s.display_name||'—'}</div>
+                  <div>{s.role&&<Badge label={ROLE_LABEL[s.role]||s.role} color={ROLE_COLOR[s.role]||P.muted}/>}</div>
+                  <div>
+                    {s.referral_code
+                      ?<span style={{fontSize:11,fontFamily:'monospace',color:P.green,background:P.greenDim,padding:'2px 7px',borderRadius:4}}>{s.referral_code}</span>
+                      :<Btn variant="ghost" onClick={()=>generateCode(s)} disabled={generatingCode===s.id} style={{padding:'3px 8px',fontSize:11}}>{generatingCode===s.id?'…':'Generar código'}</Btn>
+                    }
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:4}}>
+                    {s.referral_code
+                      ?activeVariants.map(v=>{
+                          const link=`https://pessaro.cl/campana/${v.variant_key}?ref=${s.referral_code}`
+                          const vc=v.color||VAR_COLORS[v.variant_key]||P.purple
+                          return <div key={v.variant_key} style={{display:'flex',alignItems:'center',gap:5}}>
+                            <div style={{width:7,height:7,borderRadius:1,background:vc,flexShrink:0}}/>
+                            <span style={{fontSize:10,color:P.muted,fontFamily:'monospace',flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</span>
+                            <button onClick={()=>copyLink(link)} style={{background:'none',border:`1px solid ${copiedLink===link?P.green:P.border}`,borderRadius:4,padding:'2px 6px',color:copiedLink===link?P.green:P.muted,fontSize:10,cursor:'pointer',flexShrink:0,transition:'all 0.1s'}}>
+                              {copiedLink===link?'✓':'Copiar'}
+                            </button>
+                          </div>
+                        })
+                      :<span style={{fontSize:11,color:P.muted,fontStyle:'italic'}}>Asigna un código primero</span>
+                    }
+                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:s.referral_code?P.text:P.muted,textAlign:'center'}}>
+                    {s.referral_code?(advLeadCounts[s.referral_code]||0):'—'}
+                  </div>
+                </div>
+              ))}
+            </div>}
+          </div>
+
+          <div style={{padding:'8px 12px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}>
             <p style={{fontSize:11,color:P.muted,margin:0}}>
               Los asesores ven <strong style={{color:P.text}}>🚀 {c.name}</strong> en su sidebar {c.status==='activa'?'✓':'· pausada/cerrada = oculta para asesores'}.
             </p>
           </div>
         </GlassCard>
-      ))}
+      })}
       {campaigns.length===0&&<GlassCard><p style={{color:P.muted,fontSize:14,textAlign:'center',padding:'20px 0',margin:0}}>No hay campañas. Crea la primera.</p></GlassCard>}
     </div>
 
@@ -1055,6 +1766,41 @@ function AdminCampaigns({campaigns,setCampaigns,user}){
         <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}>
           <Btn variant="ghost" onClick={()=>setShowNew(false)}>Cancelar</Btn>
           <Btn onClick={create} disabled={saving}>{saving?'Creando...':'Crear campaña'}</Btn>
+        </div>
+      </div>
+    </Modal>}
+
+    {managingVar&&<Modal title={`Asesores — ${managingVar.label||managingVar.variant_key}`} onClose={()=>setManagingVar(null)} accent={managingVar.color||P.purple}>
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        <p style={{fontSize:13,color:P.muted,margin:0}}>Habilita o deshabilita el acceso de cada asesor a esta variante y su link de referido.</p>
+        {!managingVar.id&&<div style={{padding:'10px 12px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
+          <p style={{fontSize:12,color:P.orange,margin:0}}>Esta es una variante de fallback sin registro en DB. Guárdala en la tabla campaign_variants para gestionar permisos.</p>
+        </div>}
+        {managingVar.id&&<div>
+          {staff.length===0&&<p style={{fontSize:13,color:P.muted}}>No hay staff registrado.</p>}
+          {staff.map(s=>{
+            const advisors=varAdvisors[managingVar.id]||[]
+            const adv=advisors.find(a=>a.staff_id===s.id)
+            const enabled=adv?.enabled??false
+            return <div key={s.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 0',borderBottom:`1px solid ${P.border}`}}>
+              <div>
+                <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name||'—'}</div>
+                <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3}}>
+                  {s.role&&<Badge label={ROLE_LABEL[s.role]||s.role} color={ROLE_COLOR[s.role]||P.muted}/>}
+                  {s.referral_code&&<span style={{fontSize:10,color:P.muted,fontFamily:'monospace'}}>{s.referral_code}</span>}
+                </div>
+              </div>
+              <button onClick={()=>toggleAdvisor(managingVar.id,s.id)}
+                style={{padding:'6px 14px',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',
+                  background:enabled?P.greenDim:P.redDim,color:enabled?P.green:P.red,
+                  border:`1px solid ${enabled?P.green+'40':P.red+'40'}`}}>
+                {enabled?'✓ Habilitado':'✗ Desactivado'}
+              </button>
+            </div>
+          })}
+        </div>}
+        <div style={{display:'flex',justifyContent:'flex-end',paddingTop:8}}>
+          <Btn variant="ghost" onClick={()=>setManagingVar(null)}>Cerrar</Btn>
         </div>
       </div>
     </Modal>}
@@ -1090,9 +1836,10 @@ function Tasks({contacts,leads}){
     return''
   }
   const pending=tasks.filter(t=>!t.done), done=tasks.filter(t=>t.done)
+  const isMobT=useWindowSize()<768
   return <div>
     <SHdr title="Tareas" sub={`${pending.length} pendientes · ${done.length} completadas`} action={<Btn onClick={()=>setShowAdd(true)}>+ Nueva tarea</Btn>}/>
-    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:20}}>
+    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:isMobT?'1fr':'1fr 1fr',gap:20}}>
       <div>
         <p style={{fontSize:10,fontWeight:700,color:P.orange,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:14,margin:'0 0 14px'}}>● Pendientes ({pending.length})</p>
         {pending.map(t=><GlassCard key={t.id} style={{marginBottom:10,display:'flex',gap:12,alignItems:'flex-start',borderLeft:`3px solid ${PRIO_COLOR[t.priority]}`}}>
@@ -1134,7 +1881,7 @@ function Tasks({contacts,leads}){
 }
 
 // ─── EMAILS ───────────────────────────────────────────────────────────────────
-function Emails({contacts,leads,staffProfile,user}){
+function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
   const[emails,setEmails]=useState([])
   const[loading,setLoading]=useState(true)
   const[tab,setTab]=useState('historial')
@@ -1233,7 +1980,7 @@ function Emails({contacts,leads,staffProfile,user}){
           <div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{width:8,height:8,borderRadius:'50%',background:selectedTpl.color}}/><h3 style={{margin:0,fontSize:16,fontWeight:700,color:P.text}}>Redactar email</h3></div>
             {staffProfile&&<p style={{margin:'2px 0 0',fontSize:11,color:P.purple}}>Enviando como: <strong>{staffProfile.pessaro_email}</strong></p>}
           </div>
-          <button onClick={()=>setShowModal(false);setRecipientSearch('');setRecipientOpen(false)}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
+          <button onClick={()=>{setShowModal(false);setRecipientSearch('');setRecipientOpen(false)}} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:20}}>✕</button>
         </div>
         <div style={{padding:24,display:'flex',flexDirection:'column',gap:16}}>
           <div>
@@ -1610,6 +2357,7 @@ function Reports({contacts,leads}){
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const capData=['1k-5k','5k-20k','20k-50k','50k+'].map(r=>({name:r,v:leads.filter(l=>l.investment_range===r).length}))
+  const isMobR=useWindowSize()<768
   return <div>
     <SHdr title="Reportes" sub="Analíticas en tiempo real"
       action={<div style={{display:'flex',gap:8}}>
@@ -1623,14 +2371,14 @@ function Reports({contacts,leads}){
       <StatCard label="Leads totales" value={leads.length} accent={P.blue} Icon="◈"/>
       <StatCard label="Cerrados" value={closed} accent={P.orange} Icon="✓"/>
     </div>
-    <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:18,marginBottom:18}}>
+    <div style={{display:'grid',gridTemplateColumns:isMobR?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Leads por etapa</p>
-        <ResponsiveContainer width="100%" height={190}><BarChart data={pipeData} barSize={24}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.purple} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer>
+        <ErrorBoundary><ResponsiveContainer width="100%" height={190}><BarChart data={pipeData} barSize={24}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.purple} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></ErrorBoundary>
       </GlassCard>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Leads por capital</p>
-        <ResponsiveContainer width="100%" height={190}><BarChart data={capData} barSize={24}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.blue} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer>
+        <ErrorBoundary><ResponsiveContainer width="100%" height={190}><BarChart data={capData} barSize={24}><XAxis dataKey="name" tick={{fill:P.muted,fontSize:10}} axisLine={false} tickLine={false}/><YAxis hide/><Tooltip {...TT} formatter={v=>[v,'Leads']}/><Bar dataKey="v" fill={P.blue} radius={[3,3,0,0]}/></BarChart></ResponsiveContainer></ErrorBoundary>
       </GlassCard>
     </div>
     <GlassCard>
@@ -1649,65 +2397,439 @@ function Reports({contacts,leads}){
 
 
 // ─── EQUIPO ───────────────────────────────────────────────────────────────────
-function Equipo({user,isSuperAdmin}){
-  const[staff,setStaff]=useState([])
-  const[loading,setLoading]=useState(true)
+// ─── EQUIPO UNIFICADO (Equipo + TeamAdmin fusionados) ────────────────────────
+function Equipo({user,isSuperAdmin,teamId}){
+  const isMobE=useWindowSize()<768
+  // ── State ────────────────────────────────────────────────────────────────
+  const[staff,setStaff]         =useState([])
+  const[teams,setTeams]         =useState([])
+  const[modules,setModules]     =useState([])
+  const[teamTools,setTeamTools] =useState({})
+  const[loading,setLoading]     =useState(true)
+  const[tab,setTab]             =useState('miembros') // 'miembros' | 'equipos'
   const[showInvite,setShowInvite]=useState(false)
-  const[sending,setSending]=useState(false)
-  const[result,setResult]=useState(null)
-  const[form,setForm]=useState({email:'',display_name:'',title:'Asesor · Pessaro Capital',pessaro_email:'',phone:''})
+  const[editMember,setEditMember]=useState(null)
+  const[selTeam,setSelTeam]     =useState(null)
+  const[showNewTeam,setShowNewTeam]=useState(false)
+  const[newTeamName,setNewTeamName]=useState('')
+  const[sending,setSending]     =useState(false)
+  const[saving,setSaving]       =useState(false)
+  const[flash,setFlash]         =useState(null)
+  const[search,setSearch]       =useState('')
+  const[filterRole,setFilterRole]=useState('todos')
+  const[form,setForm]=useState({email:'',display_name:'',title:'Asesor · Pessaro Capital',pessaro_email:'',phone:'',role:'asesor',team_id:''})
+  const[editForm,setEditForm]   =useState({})
 
-  useEffect(()=>{
-    const load=async()=>{
-      setLoading(true)
-      try{const{data}=await supabase.from('crm_staff_profiles').select('*').order('created_at');setStaff(data||[])}
-      catch(e){console.error(e)}finally{setLoading(false)}
-    };load()
+  const showMsg=(msg,ok=true)=>{setFlash({msg,ok});setTimeout(()=>setFlash(null),3500)}
+
+  // ── Load ─────────────────────────────────────────────────────────────────
+  const load=useCallback(async()=>{
+    setLoading(true)
+    try{
+      const queries=[
+        supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').order('display_name'),
+        supabase.from('crm_teams').select('*').order('name'),
+        supabase.from('crm_modules').select('*').order('sort_order'),
+        supabase.from('team_tools').select('*'),
+      ]
+      if(!isSuperAdmin && teamId){
+        queries[0]=supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').eq('team_id',teamId).order('display_name')
+      }
+      const[{data:s},{data:t},{data:m},{data:tt}]=await Promise.all(queries)
+      // Dedup por user_id: si la query trae filas duplicadas (p.ej. múltiples joins), nos quedamos solo con una
+      const dedup=Array.from(new Map((s||[]).map(r=>[r.user_id,r])).values())
+      setStaff(dedup)
+      setTeams(t||[])
+      setModules(m||[])
+      const map={}
+      ;(tt||[]).forEach(r=>{
+        if(!map[r.team_id]) map[r.team_id]=new Set()
+        if(r.enabled) map[r.team_id].add(r.module_id)
+      })
+      setTeamTools(map)
+      if(!selTeam && t?.length>0) setSelTeam(t[0].id)
+    }catch(e){console.error('equipo load:',e)}
+    finally{setLoading(false)}
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[])
 
+  useEffect(()=>{load()},[load])
+
+  // ── Invite ────────────────────────────────────────────────────────────────
   const invite=async()=>{
     if(!form.email||!form.display_name)return
-    setSending(true);setResult(null)
+    setSending(true)
     try{
       const{data:{session}}=await supabase.auth.getSession()
       const res=await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/crm_invite_user`,{
         method:'POST',
         headers:{'Content-Type':'application/json','Authorization':`Bearer ${session.access_token}`},
-        body:JSON.stringify(form)
+        body:JSON.stringify({...form,team_id:form.team_id||teamId||null})
       })
       const d=await res.json()
-      if(d.ok){
-        setResult({ok:true,msg:d.message})
-        setStaff(p=>[...p,{id:d.user_id,user_id:d.user_id,display_name:form.display_name,title:form.title,pessaro_email:form.pessaro_email||form.email,phone:form.phone}])
-        setForm({email:'',display_name:'',title:'Asesor · Pessaro Capital',pessaro_email:'',phone:''})
-        setShowInvite(false)
-      }else setResult({ok:false,msg:d.error||'Error al enviar'})
-    }catch(e){setResult({ok:false,msg:e.message})}
+      if(d.ok){showMsg('Invitación enviada ✓');setShowInvite(false);setForm({email:'',display_name:'',title:'Asesor · Pessaro Capital',pessaro_email:'',phone:'',role:'asesor',team_id:''});await load()}
+      else showMsg(d.error||'Error al invitar',false)
+    }catch(e){showMsg(e.message,false)}
     setSending(false)
   }
 
+  // ── Edit member ───────────────────────────────────────────────────────────
+  const openEdit=(s)=>{
+    setEditMember(s)
+    setEditForm({display_name:s.display_name,title:s.title||'',pessaro_email:s.pessaro_email||'',phone:s.phone||'',role:s.role||'asesor',team_id:s.team_id||''})
+  }
+
+  const saveMember=async()=>{
+    if(!editMember)return
+    setSaving(true)
+    try{
+      const {data,error}=await supabase.from('crm_staff_profiles').update({
+        display_name:editForm.display_name,
+        title:editForm.title,
+        pessaro_email:editForm.pessaro_email,
+        phone:editForm.phone,
+        role:editForm.role,
+        team_id:editForm.team_id||null,
+      }).eq('user_id',editMember.user_id).select()
+      if(error){showMsg('Error: '+error.message,false);setSaving(false);return}
+      if(!data||data.length===0){
+        showMsg('No se pudo guardar (sin permisos o usuario no encontrado)',false)
+        setSaving(false);return
+      }
+      showMsg('Miembro actualizado ✓')
+      setEditMember(null)
+      await load()
+    }catch(e){showMsg('Error: '+e.message,false)}
+    setSaving(false)
+  }
+
+  // ── Team tools ────────────────────────────────────────────────────────────
+  const toggleTool=async(teamId,moduleId,current)=>{
+    const enabled=!current
+    try{
+      await supabase.from('team_tools').upsert(
+        {team_id:teamId,module_id:moduleId,enabled,updated_by:user.id},
+        {onConflict:'team_id,module_id'}
+      )
+      setTeamTools(prev=>{
+        const m=new Set(prev[teamId]||[])
+        enabled?m.add(moduleId):m.delete(moduleId)
+        return{...prev,[teamId]:m}
+      })
+    }catch(e){showMsg('Error al guardar',false)}
+  }
+
+  // ── Create team ───────────────────────────────────────────────────────────
+  const createTeam=async()=>{
+    if(!newTeamName.trim())return
+    setSaving(true)
+    try{
+      const{data,error}=await supabase.from('crm_teams').insert({name:newTeamName.trim(),created_by:user.id}).select().single()
+      if(error) throw error
+      const rows=modules.map(m=>({team_id:data.id,module_id:m.id,enabled:true,updated_by:user.id}))
+      if(rows.length) await supabase.from('team_tools').insert(rows)
+      setNewTeamName('');setShowNewTeam(false)
+      await load()
+      setSelTeam(data.id)
+      showMsg('Equipo creado ✓')
+    }catch(e){showMsg('Error: '+e.message,false)}
+    setSaving(false)
+  }
+
+  // ── Assign advisor to team ────────────────────────────────────────────────
+  const assignAdvisor=async(userId,newTeamId)=>{
+    try{
+      // .select() devuelve las filas afectadas → si es 0, RLS bloqueó o no encontró
+      const {data,error}=await supabase.from('crm_staff_profiles')
+        .update({team_id:newTeamId||null})
+        .eq('user_id',userId)
+        .select()
+      if(error){showMsg('Error al asignar: '+error.message,false);return}
+      if(!data||data.length===0){
+        showMsg('No se pudo guardar (sin permisos o usuario no encontrado)',false)
+        return
+      }
+      setStaff(prev=>prev.map(s=>s.user_id===userId?{...s,team_id:newTeamId||null,crm_teams:teams.find(t=>t.id===newTeamId)||null}:s))
+      showMsg('Asignación actualizada ✓')
+    }catch(e){showMsg('Error al asignar: '+e.message,false)}
+  }
+
+  // ── Filtered list ─────────────────────────────────────────────────────────
+  const filtered=staff.filter(s=>{
+    const q=search.toLowerCase()
+    const matchQ=!q||(s.display_name||'').toLowerCase().includes(q)||(s.pessaro_email||'').toLowerCase().includes(q)
+    // Normalizar role: lowercase + trim para evitar mismatches por capitalización o espacios
+    const role=(s.role||'').toLowerCase().trim()
+    const matchR=filterRole==='todos'||role===filterRole
+    return matchQ&&matchR
+  })
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+  const roleLabel={super_admin:'Super Admin',broker:'Administrador',asesor:'Asesor'}
+  const roleColor={super_admin:P.orange,broker:P.blue,asesor:P.purple}
+  const roleBg   ={super_admin:P.orangeDim,broker:P.blueDim,asesor:P.purpleDim}
+  const RoleBadge=({role})=>{
+    const r=role||'asesor'
+    return <span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:4,
+      background:roleBg[r]||P.purpleDim,color:roleColor[r]||P.purple,
+      border:`1px solid ${(roleColor[r]||P.purple)}30`}}>{roleLabel[r]||r}</span>
+  }
+
+  const selTeamData =teams.find(t=>t.id===selTeam)
+  const selTeamStaff=staff.filter(s=>s.team_id===selTeam)
+  const unassigned  =staff.filter(s=>!s.team_id)
+  const enabledMods =teamTools[selTeam]||new Set()
+
+  // ── Tabs (solo super admin ve ambos tabs) ─────────────────────────────────
+  const TABS=isSuperAdmin
+    ?[{id:'miembros',label:'👥 Miembros'},{id:'equipos',label:'⬡ Equipos'}]
+    :[{id:'miembros',label:'👥 Mi Equipo'}]
+
   return <div>
-    <SHdr title="Equipo" sub={`${staff.length} miembros del equipo interno`}
-      action={isSuperAdmin&&<Btn onClick={()=>setShowInvite(true)}>✉ Invitar miembro</Btn>}/>
-    {result&&<div style={{marginBottom:16,padding:'10px 14px',borderRadius:8,background:result.ok?P.greenDim:P.redDim,border:`1px solid ${result.ok?P.green+'40':P.red+'40'}`,color:result.ok?P.green:P.red,fontSize:13}}>{result.msg}</div>}
-    {loading?<Spinner/>:<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:16}}>
-      {staff.map(s=>(
-        <GlassCard key={s.id} accent={P.purple}>
-          <div style={{display:'flex',alignItems:'center',gap:14,marginBottom:14}}>
-            <div style={{width:48,height:48,borderRadius:12,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:20,fontWeight:700,color:P.purple,flexShrink:0}}>{(s.display_name||'?')[0].toUpperCase()}</div>
-            <div><p style={{fontSize:15,fontWeight:700,color:P.text,margin:0}}>{s.display_name}</p><p style={{fontSize:12,color:P.purple,margin:'2px 0 0'}}>{s.title}</p></div>
-          </div>
-          <div style={{display:'flex',flexDirection:'column',gap:8}}>
-            {s.pessaro_email&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}><span style={{fontSize:12}}>✉</span><a href={`mailto:${s.pessaro_email}`} style={{fontSize:12,color:P.blue,textDecoration:'none',fontFamily:'monospace'}}>{s.pessaro_email}</a></div>}
-            {s.phone&&<div style={{display:'flex',alignItems:'center',gap:8,padding:'7px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:`1px solid ${P.border}`}}><span style={{fontSize:12}}>📞</span><span style={{fontSize:12,color:P.textSub}}>{s.phone}</span></div>}
-          </div>
-        </GlassCard>
-      ))}
+    {/* Header */}
+    <SHdr
+      title={isSuperAdmin?'Gestión de Equipo':'Mi Equipo'}
+      sub={`${staff.length} miembro${staff.length!==1?'s':''} · ${teams.length} equipo${teams.length!==1?'s':''}`}
+      action={<div style={{display:'flex',gap:8}}>
+        {tab==='equipos'&&isSuperAdmin&&<Btn onClick={()=>setShowNewTeam(true)}>+ Nuevo equipo</Btn>}
+        {tab==='miembros'&&<Btn onClick={()=>setShowInvite(true)}>✉ Invitar miembro</Btn>}
+      </div>}/>
+
+    {/* Flash */}
+    {flash&&<div style={{marginBottom:16,padding:'10px 16px',borderRadius:8,fontSize:13,
+      background:flash.ok?P.greenDim:P.redDim,
+      border:`1px solid ${flash.ok?P.green:P.red}30`,
+      color:flash.ok?P.green:P.red}}>{flash.msg}</div>}
+
+    {/* Tabs */}
+    {isSuperAdmin&&<div style={{display:'flex',gap:4,marginBottom:20,borderBottom:`1px solid ${P.border}`,paddingBottom:0}}>
+      {TABS.map(t=><button key={t.id} onClick={()=>setTab(t.id)}
+        style={{padding:'9px 18px',fontSize:13,fontWeight:tab===t.id?700:400,cursor:'pointer',
+          background:'none',border:'none',borderBottom:tab===t.id?`2px solid ${P.purple}`:'2px solid transparent',
+          color:tab===t.id?P.purple:P.muted,marginBottom:-1,transition:'all 0.1s'}}>
+        {t.label}
+      </button>)}
     </div>}
+
+    {loading?<Spinner/>:<>
+
+    {/* ══ TAB: MIEMBROS ══ */}
+    {tab==='miembros'&&<>
+
+      {/* KPIs super admin */}
+      {isSuperAdmin&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(150px,1fr))',gap:12,marginBottom:20}}>
+        {(()=>{
+          // Helper: normalizar role para conteo consistente
+          const r=s=>(s.role||'').toLowerCase().trim()
+          return[
+            ['Total miembros',staff.length,P.purple],
+            ['Super Admins',staff.filter(s=>r(s)==='super_admin').length,P.orange],
+            ['Administradores',staff.filter(s=>r(s)==='broker'||r(s)==='admin').length,P.blue],
+            ['Asesores',staff.filter(s=>r(s)==='asesor').length,P.green],
+            ['Equipos',teams.length,P.muted],
+          ]
+        })().map(([l,v,c])=><div key={l} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'14px 16px'}}>
+          <div style={{fontSize:22,fontWeight:800,color:c}}>{v}</div>
+          <div style={{fontSize:11,color:P.muted,marginTop:3}}>{l}</div>
+        </div>)}
+      </div>}
+
+      {/* Filtros */}
+      <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre o email..."
+          style={{flex:1,minWidth:200,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
+        {isSuperAdmin&&<div style={{display:'flex',gap:6}}>
+          {['todos','asesor','broker','super_admin'].map(r=><button key={r} onClick={()=>setFilterRole(r)}
+            style={{padding:'7px 12px',borderRadius:8,fontSize:12,cursor:'pointer',fontWeight:filterRole===r?600:400,
+              background:filterRole===r?P.purpleDim:'rgba(255,255,255,0.04)',
+              color:filterRole===r?P.purple:P.muted,
+              border:`1px solid ${filterRole===r?P.purpleBorder:P.border}`}}>
+            {r==='todos'?'Todos':r==='broker'?'Admins':r==='super_admin'?'Super Admin':'Asesores'}
+          </button>)}
+        </div>}
+      </div>
+
+      {/* Tabla miembros */}
+      {filtered.length===0
+        ?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin miembros encontrados</div>
+        :<div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,overflow:'hidden'}}>
+          <table style={{width:'100%',borderCollapse:'collapse'}}>
+            <thead>
+              <tr style={{borderBottom:`1px solid ${P.border}`}}>
+                {['Miembro','Cargo','Rol','Equipo',isSuperAdmin?'Acciones':''].filter(Boolean).map(h=>
+                  <th key={h} style={{padding:'11px 16px',textAlign:'left',fontSize:10,color:P.muted,
+                    textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
+                )}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((s,i)=><tr key={s.user_id}
+                style={{borderBottom:i<filtered.length-1?`1px solid ${P.border}`:'none'}}
+                onMouseEnter={e=>e.currentTarget.style.background='rgba(108,92,231,0.04)'}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+
+                {/* Avatar + nombre */}
+                <td style={{padding:'12px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:36,height:36,borderRadius:9,background:roleBg[s.role]||P.purpleDim,
+                      display:'flex',alignItems:'center',justifyContent:'center',
+                      fontSize:14,fontWeight:700,color:roleColor[s.role]||P.purple,flexShrink:0}}>
+                      {(s.display_name||'?')[0].toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name||'Sin nombre'}</div>
+                      <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{s.pessaro_email||'—'}</div>
+                    </div>
+                  </div>
+                </td>
+
+                <td style={{padding:'12px 16px',fontSize:12,color:P.textSub}}>{s.title||'—'}</td>
+                <td style={{padding:'12px 16px'}}><RoleBadge role={s.role}/></td>
+
+                {/* Equipo — con selector inline si es super admin */}
+                <td style={{padding:'12px 16px'}}>
+                  {isSuperAdmin
+                    ?<select
+                        value={s.team_id||''}
+                        onChange={e=>assignAdvisor(s.user_id,e.target.value||null)}
+                        style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:6,
+                          padding:'4px 8px',color:s.team_id?P.blue:P.muted,fontSize:12,outline:'none',cursor:'pointer'}}>
+                        <option value="">Sin equipo</option>
+                        {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+                      </select>
+                    :s.crm_teams?.name
+                      ?<span style={{fontSize:12,padding:'3px 8px',borderRadius:5,background:P.blueDim,color:P.blue,border:`1px solid ${P.blue}30`}}>{s.crm_teams.name}</span>
+                      :<span style={{fontSize:12,color:P.muted}}>Sin equipo</span>
+                  }
+                </td>
+
+                {/* Editar — solo super admin */}
+                {isSuperAdmin&&<td style={{padding:'12px 16px'}}>
+                  <button onClick={()=>openEdit(s)}
+                    style={{padding:'5px 12px',borderRadius:6,fontSize:12,cursor:'pointer',
+                      background:P.purpleDim,color:P.purple,border:`1px solid ${P.purpleBorder}`,fontWeight:600}}>
+                    ✎ Editar
+                  </button>
+                </td>}
+              </tr>)}
+            </tbody>
+          </table>
+        </div>
+      }
+    </>}
+
+    {/* ══ TAB: EQUIPOS ══ */}
+    {tab==='equipos'&&isSuperAdmin&&<>
+
+      {/* Nuevo equipo form */}
+      {showNewTeam&&<GlassCard style={{marginBottom:16,padding:16}}>
+        <p style={{fontSize:13,fontWeight:600,color:P.text,margin:'0 0 12px'}}>Nuevo equipo</p>
+        <div style={{display:'flex',gap:8}}>
+          <input value={newTeamName} onChange={e=>setNewTeamName(e.target.value)}
+            placeholder="Nombre del equipo..."
+            style={{flex:1,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none'}}/>
+          <Btn onClick={createTeam} disabled={saving}>{saving?'Creando...':'Crear'}</Btn>
+          <Btn variant="ghost" onClick={()=>{setShowNewTeam(false);setNewTeamName('')}}>Cancelar</Btn>
+        </div>
+      </GlassCard>}
+
+      {teams.length===0
+        ?<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin equipos aún</div>
+        :<div style={{display:'grid',gridTemplateColumns:isMobE?'1fr':'220px 1fr',gap:16}}>
+
+          {/* Lista de equipos */}
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            {teams.map(t=><button key={t.id} onClick={()=>setSelTeam(t.id)}
+              style={{padding:'10px 14px',borderRadius:8,textAlign:'left',cursor:'pointer',
+                background:selTeam===t.id?P.purpleDim:'rgba(255,255,255,0.03)',
+                border:`1px solid ${selTeam===t.id?P.purpleBorder:P.border}`,
+                color:selTeam===t.id?P.purple:P.text,fontSize:13,fontWeight:selTeam===t.id?600:400}}>
+              <div>{t.name}</div>
+              <div style={{fontSize:11,color:P.muted,marginTop:2}}>{staff.filter(s=>s.team_id===t.id).length} miembro{staff.filter(s=>s.team_id===t.id).length!==1?'s':''}</div>
+            </button>)}
+          </div>
+
+          {/* Detalle del equipo seleccionado */}
+          {selTeamData?<div style={{display:'flex',flexDirection:'column',gap:14}}>
+
+            {/* Herramientas habilitadas */}
+            <GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>🔧 Herramientas habilitadas</p>
+              {modules.length===0
+                ?<p style={{fontSize:12,color:P.muted}}>Sin módulos configurados</p>
+                :<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(140px,1fr))',gap:8}}>
+                  {modules.map(m=>{
+                    const on=enabledMods.has(m.id)
+                    return <button key={m.id} onClick={()=>toggleTool(selTeam,m.id,on)}
+                      style={{padding:'8px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                        background:on?P.purpleDim:'rgba(255,255,255,0.03)',
+                        border:`1px solid ${on?P.purpleBorder:P.border}`,
+                        color:on?P.purple:P.muted,fontSize:12,fontWeight:on?600:400,
+                        display:'flex',alignItems:'center',gap:6}}>
+                      <span>{on?'✓':'○'}</span>
+                      <span>{m.icon} {m.label}</span>
+                    </button>
+                  })}
+                </div>
+              }
+            </GlassCard>
+
+            {/* Miembros del equipo */}
+            <GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>👥 Miembros del equipo ({selTeamStaff.length})</p>
+              {selTeamStaff.length===0
+                ?<p style={{fontSize:13,color:P.muted}}>Sin miembros asignados</p>
+                :selTeamStaff.map(s=><div key={s.user_id}
+                  style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${P.border}`}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:30,height:30,borderRadius:7,background:roleBg[s.role]||P.purpleDim,
+                      display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:roleColor[s.role]||P.purple}}>
+                      {(s.display_name||'?')[0].toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</div>
+                      <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{s.pessaro_email}</div>
+                    </div>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',gap:8}}>
+                    <RoleBadge role={s.role}/>
+                    <button onClick={()=>assignAdvisor(s.user_id,null)}
+                      style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.redDim,border:`1px solid ${P.red}30`,color:P.red}}>
+                      Quitar
+                    </button>
+                  </div>
+                </div>)
+              }
+            </GlassCard>
+
+            {/* Sin equipo — para asignar al equipo seleccionado */}
+            {unassigned.length>0&&<GlassCard>
+              <p style={{fontSize:11,fontWeight:700,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',margin:'0 0 14px'}}>⚠ Sin equipo asignado ({unassigned.length})</p>
+              {unassigned.map(s=><div key={s.user_id}
+                style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 0',borderBottom:`1px solid ${P.border}`}}>
+                <div>
+                  <span style={{fontSize:13,fontWeight:600,color:P.text}}>{s.display_name}</span>
+                  <span style={{fontSize:11,color:P.muted,marginLeft:8,fontFamily:'monospace'}}>{s.pessaro_email}</span>
+                </div>
+                <button onClick={()=>assignAdvisor(s.user_id,selTeam)}
+                  style={{fontSize:11,padding:'3px 10px',borderRadius:6,cursor:'pointer',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple}}>
+                  + Asignar a {selTeamData.name}
+                </button>
+              </div>)}
+            </GlassCard>}
+
+          </div>:<p style={{color:P.muted,fontSize:13}}>Selecciona un equipo</p>}
+        </div>
+      }
+    </>}
+
+    </>}
+
+    {/* ── Modal: Invitar nuevo miembro ── */}
     {showInvite&&<Modal title="Invitar nuevo miembro" onClose={()=>setShowInvite(false)} accent={P.green}>
       <div style={{display:'flex',flexDirection:'column',gap:14}}>
         <div style={{padding:'10px 14px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}>
-          <p style={{fontSize:12,color:P.green,margin:0}}>Se enviará un email de invitación. El usuario hace clic en el enlace, establece su contraseña y accede al CRM.</p>
+          <p style={{fontSize:12,color:P.green,margin:0}}>Se enviará un email de invitación. El usuario establece su contraseña y accede al CRM.</p>
         </div>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
           <div><Lbl>Email personal *</Lbl><Input value={form.email} onChange={v=>setForm(p=>({...p,email:v}))} placeholder="usuario@gmail.com" type="email"/></div>
@@ -1715,56 +2837,382 @@ function Equipo({user,isSuperAdmin}){
           <div><Lbl>Email @pessaro.cl</Lbl><Input value={form.pessaro_email} onChange={v=>setForm(p=>({...p,pessaro_email:v}))} placeholder="juan@pessaro.cl" type="email"/></div>
           <div><Lbl>Teléfono</Lbl><Input value={form.phone} onChange={v=>setForm(p=>({...p,phone:v}))} placeholder="+56 9 1234 5678"/></div>
           <div style={{gridColumn:'1/-1'}}><Lbl>Cargo</Lbl><Input value={form.title} onChange={v=>setForm(p=>({...p,title:v}))} placeholder="Asesor · Pessaro Capital"/></div>
+          {isSuperAdmin&&<>
+            <div><Lbl>Rol en el sistema</Lbl>
+              <select value={form.role} onChange={e=>setForm(p=>({...p,role:e.target.value}))}
+                style={{width:'100%',background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none'}}>
+                <option value="asesor">Asesor</option>
+                <option value="broker">Administrador</option>
+              </select>
+            </div>
+            <div><Lbl>Equipo</Lbl>
+              <select value={form.team_id} onChange={e=>setForm(p=>({...p,team_id:e.target.value}))}
+                style={{width:'100%',background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none'}}>
+                <option value="">Sin equipo</option>
+                {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+              </select>
+            </div>
+          </>}
         </div>
-        {result&&!result.ok&&<div style={{padding:'10px',background:P.redDim,border:`1px solid ${P.red}30`,borderRadius:8}}><p style={{fontSize:12,color:P.red,margin:0}}>{result.msg}</p></div>}
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
           <Btn variant="ghost" onClick={()=>setShowInvite(false)}>Cancelar</Btn>
           <Btn onClick={invite} disabled={sending||!form.email||!form.display_name}>{sending?'Enviando...':'Enviar invitación ✉'}</Btn>
         </div>
       </div>
     </Modal>}
+
+    {/* ── Modal: Editar miembro ── */}
+    {editMember&&<Modal title={`Editar · ${editMember.display_name}`} onClose={()=>setEditMember(null)} accent={P.purple}>
+      <div style={{display:'flex',flexDirection:'column',gap:14}}>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+          <div style={{gridColumn:'1/-1'}}><Lbl>Nombre completo</Lbl><Input value={editForm.display_name} onChange={v=>setEditForm(p=>({...p,display_name:v}))} placeholder="Nombre completo"/></div>
+          <div><Lbl>Email @pessaro.cl</Lbl><Input value={editForm.pessaro_email} onChange={v=>setEditForm(p=>({...p,pessaro_email:v}))} type="email"/></div>
+          <div><Lbl>Teléfono</Lbl><Input value={editForm.phone} onChange={v=>setEditForm(p=>({...p,phone:v}))}/></div>
+          <div style={{gridColumn:'1/-1'}}><Lbl>Cargo</Lbl><Input value={editForm.title} onChange={v=>setEditForm(p=>({...p,title:v}))}/></div>
+          <div>
+            <Lbl>Rol del sistema</Lbl>
+            <select value={editForm.role} onChange={e=>setEditForm(p=>({...p,role:e.target.value}))}
+              style={{width:'100%',background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none'}}>
+              <option value="asesor">Asesor</option>
+              <option value="broker">Administrador</option>
+              <option value="super_admin">Super Admin</option>
+            </select>
+          </div>
+          <div>
+            <Lbl>Equipo asignado</Lbl>
+            <select value={editForm.team_id} onChange={e=>setEditForm(p=>({...p,team_id:e.target.value}))}
+              style={{width:'100%',background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none'}}>
+              <option value="">Sin equipo</option>
+              {teams.map(t=><option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{padding:'10px 14px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
+          <p style={{fontSize:11,color:P.orange,margin:0}}>⚠ Cambiar el rol actualiza los permisos de acceso inmediatamente.</p>
+        </div>
+        <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:4}}>
+          <Btn variant="ghost" onClick={()=>setEditMember(null)}>Cancelar</Btn>
+          <Btn onClick={saveMember} disabled={saving}>{saving?'Guardando...':'Guardar cambios'}</Btn>
+        </div>
+      </div>
+    </Modal>}
   </div>
 }
 
-// ─── APP ──────────────────────────────────────────────────────────────────────
-export default function App(){
-  const[user,setUser]         =useState(null)
-  const[checking,setChecking] =useState(true)
-  const[isSuperAdmin,setSA]   =useState(false)
-  const[module,setModule]     =useState('dashboard')
-  const[contacts,setContacts] =useState([])
-  const[leads,setLeads]       =useState([])
-  const[staffProfile,setSP]   =useState(null)
-  const[campaigns,setCampaigns]=useState([])
-  const[loading,setLoading]   =useState(true)
+// ─── BROKER VIEW ─────────────────────────────────────────────────────────────
+function BrokerView({user,campaigns,leads,isSuperAdmin}){
+  const[assignments,setAssignments]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[tab,setTab]=useState('campanas')
 
-  // ── Auth ─────────────────────────────────────────────────────────────────
   useEffect(()=>{
-    const checkRole=async(u)=>{
-      if(!u){setSA(false);return}
+    const load=async()=>{
+      setLoading(true)
       try{
-        const{data}=await supabase.rpc('get_my_role')
-        setSA(data==='super_admin')
+        const{data}=await supabase.from('broker_assignments')
+          .select('*,campaigns(id,name),crm_staff_profiles!advisor_user_id(display_name,pessaro_email)')
+          .eq('broker_user_id',user.id)
+        setAssignments(data||[])
+      }catch(e){console.error('broker load:',e)}
+      finally{setLoading(false)}
+    }
+    load()
+  },[user.id])
+
+  const assignedCampaignIds=new Set(assignments.filter(a=>a.campaign_id).map(a=>a.campaign_id))
+  const assignedAdvisorIds=new Set(assignments.filter(a=>a.advisor_user_id).map(a=>a.advisor_user_id))
+  const myCampaigns=campaigns.filter(c=>assignedCampaignIds.has(c.id))
+  const myLeads=leads.filter(l=>assignedAdvisorIds.has(l.advisor_assigned)||assignedCampaignIds.size===0)
+
+  const etapaLabel={1:'Registro',2:'Contactado',3:'Cuenta',4:'KYC',5:'Depósito'}
+  const etapaColor={1:P.muted,2:P.blue,3:P.orange,4:P.purple,5:P.green}
+
+  return <div style={{minHeight:'100vh',background:P.bg,padding:'28px 32px'}}>
+    <div style={{marginBottom:24,display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:12}}>
+      <div>
+        <h1 style={{margin:0,fontSize:22,fontWeight:800,color:P.text}}>Panel Broker</h1>
+        <p style={{margin:'4px 0 0',fontSize:13,color:P.muted}}>Vista supervisora — Pessaro Capital</p>
+      </div>
+      <div style={{padding:'4px 12px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:8}}>
+        <span style={{fontSize:11,color:P.orange,fontWeight:700}}>⬡ Broker</span>
+      </div>
+    </div>
+
+    {/* KPIs */}
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(160px,1fr))',gap:12,marginBottom:24}}>
+      {[
+        ['Campañas asignadas', myCampaigns.length, P.purple],
+        ['Asesores supervisados', assignedAdvisorIds.size, P.blue],
+        ['Leads totales', myLeads.length, P.green],
+        ['Con depósito', myLeads.filter(l=>l.deposit_confirmed).length, P.orange],
+      ].map(([label,val,color])=>(
+        <div key={label} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:'16px 18px'}}>
+          <div style={{fontSize:22,fontWeight:800,color}}>{val}</div>
+          <div style={{fontSize:12,color:P.muted,marginTop:4}}>{label}</div>
+        </div>
+      ))}
+    </div>
+
+    {/* Tabs */}
+    <div style={{display:'flex',gap:8,marginBottom:20}}>
+      {[['campanas','🚀 Campañas'],['leads','👥 Leads'],['asesores','🧑‍💼 Asesores']].map(([id,label])=>(
+        <button key={id} onClick={()=>setTab(id)} style={{padding:'7px 14px',borderRadius:8,fontSize:13,cursor:'pointer',
+          background:tab===id?P.purpleDim:'rgba(255,255,255,0.04)',color:tab===id?P.purple:P.muted,
+          border:`1px solid ${tab===id?P.purpleBorder:P.border}`,fontWeight:tab===id?600:400}}>{label}</button>
+      ))}
+    </div>
+
+    {loading?<div style={{textAlign:'center',padding:48,color:P.muted}}>Cargando...</div>:(<>
+
+      {tab==='campanas'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(260px,1fr))',gap:14}}>
+        {myCampaigns.length===0?<p style={{color:P.muted,fontSize:13}}>Sin campañas asignadas aún.</p>:
+        myCampaigns.map(c=>{
+          const campLeads=myLeads.filter(l=>l.team||true) // all for now
+          const deposited=campLeads.filter(l=>l.deposit_confirmed).length
+          return <div key={c.id} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:18}}>
+            <div style={{fontWeight:700,color:P.text,marginBottom:6}}>{c.name}</div>
+            <div style={{fontSize:12,color:P.muted,marginBottom:12}}>Estado: <span style={{color:P.green}}>{c.status}</span></div>
+            <div style={{display:'flex',gap:8,fontSize:12}}>
+              <div style={{flex:1,background:P.purpleDim,borderRadius:8,padding:'8px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.purple}}>{campLeads.length}</div>
+                <div style={{color:P.muted}}>Leads</div>
+              </div>
+              <div style={{flex:1,background:P.greenDim,borderRadius:8,padding:'8px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.green}}>{deposited}</div>
+                <div style={{color:P.muted}}>Depósitos</div>
+              </div>
+            </div>
+          </div>
+        })}
+      </div>}
+
+      {tab==='leads'&&<div style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,overflow:'hidden'}}>
+        <table style={{width:'100%',borderCollapse:'collapse'}}>
+          <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+            {['Nombre','Email','Etapa','Asesor','Depósito'].map(h=><th key={h} style={{padding:'10px 16px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.1em',fontWeight:600}}>{h}</th>)}
+          </tr></thead>
+          <tbody>
+            {myLeads.slice(0,50).map((l,i)=><tr key={l.id} style={{borderBottom:i<myLeads.length-1?`1px solid ${P.border}`:'none'}}>
+              <td style={{padding:'10px 16px',fontSize:13,color:P.text,fontWeight:600}}>{l.full_name||'—'}</td>
+              <td style={{padding:'10px 16px',fontSize:12,color:P.muted,fontFamily:'monospace'}}>{l.email}</td>
+              <td style={{padding:'10px 16px'}}><span style={{fontSize:11,padding:'3px 8px',borderRadius:5,background:(etapaColor[l.etapa]||P.muted)+'20',color:etapaColor[l.etapa]||P.muted,fontWeight:600}}>{etapaLabel[l.etapa]||'—'}</span></td>
+              <td style={{padding:'10px 16px',fontSize:12,color:P.muted}}>{l.advisor_assigned||'—'}</td>
+              <td style={{padding:'10px 16px'}}>{l.deposit_confirmed?<span style={{color:P.green,fontSize:12,fontWeight:700}}>✓ ${l.deposit_amount_usd||0}</span>:<span style={{color:P.muted,fontSize:12}}>—</span>}</td>
+            </tr>)}
+          </tbody>
+        </table>
+        {myLeads.length===0&&<p style={{textAlign:'center',padding:32,color:P.muted,fontSize:13}}>Sin leads asignados</p>}
+      </div>}
+
+      {tab==='asesores'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:14}}>
+        {assignments.filter(a=>a.advisor_user_id).length===0?<p style={{color:P.muted,fontSize:13}}>Sin asesores asignados aún.</p>:
+        assignments.filter(a=>a.advisor_user_id).map(a=>{
+          const advisorLeads=myLeads.filter(l=>l.advisor_assigned===a.advisor_user_id)
+          const profile=a.crm_staff_profiles
+          return <div key={a.id} style={{background:P.surface,border:`1px solid ${P.border}`,borderRadius:12,padding:18}}>
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+              <div style={{width:34,height:34,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:14,fontWeight:700,color:P.purple}}>
+                {(profile?.display_name||'?')[0].toUpperCase()}
+              </div>
+              <div>
+                <div style={{fontWeight:700,color:P.text,fontSize:13}}>{profile?.display_name||'Asesor'}</div>
+                <div style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{profile?.pessaro_email||'—'}</div>
+              </div>
+            </div>
+            <div style={{display:'flex',gap:8,fontSize:12}}>
+              <div style={{flex:1,background:P.purpleDim,borderRadius:8,padding:'7px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.purple}}>{advisorLeads.length}</div>
+                <div style={{color:P.muted,fontSize:11}}>Leads</div>
+              </div>
+              <div style={{flex:1,background:P.greenDim,borderRadius:8,padding:'7px 10px',textAlign:'center'}}>
+                <div style={{fontWeight:700,color:P.green}}>{advisorLeads.filter(l=>l.deposit_confirmed).length}</div>
+                <div style={{color:P.muted,fontSize:11}}>Depósitos</div>
+              </div>
+            </div>
+          </div>
+        })}
+      </div>}
+    </>)}
+  </div>
+}
+
+// ─── WHATSAPP MESSAGES MODULE ────────────────────────────────────────────────
+function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, setWaAssignments, navPhone, onNavConsumed, onPhoneChange }) {
+  const [selectedPhone, setSelectedPhone] = useState(null)
+  const [selectedName, setSelectedName]   = useState(null)
+  const [subTab, setSubTab]               = useState('chat')
+  const [staffList, setStaffList]         = useState([])
+  const [mobileView, setMobileView]       = useState('inbox') // 'inbox' | 'chat'
+  const isMob = useWindowSize() < 768
+
+  // Load all staff profiles for assignment UI
+  useEffect(()=>{
+    ;(async()=>{
+      const{data}=await supabase.from('crm_staff_profiles').select('id,display_name,role').order('display_name')
+      setStaffList(data||[])
+    })()
+  },[])
+
+  useEffect(()=>{
+    if(navPhone?.phone){
+      setSelectedPhone(navPhone.phone)
+      setSelectedName(navPhone.name||navPhone.phone)
+      setSubTab('chat')
+      setMobileView('chat')
+      onPhoneChange?.(navPhone.phone)
+      onNavConsumed?.()
+    }
+  },[navPhone])
+
+  function handleSelect(phone, name) {
+    setSelectedPhone(phone)
+    setSelectedName(name)
+    setSubTab('chat')
+    setMobileView('chat')
+    onPhoneChange?.(phone)
+  }
+
+  async function handleAssign(phone, assignedToId) {
+    // Optimistic update
+    setWaAssignments(prev=>[...prev.filter(a=>a.client_phone!==phone),{client_phone:phone,assigned_to:assignedToId}])
+    await supabase.from('whatsapp_assignments').upsert(
+      {client_phone:phone,assigned_to:assignedToId,assigned_by:staffProfile?.id},
+      {onConflict:'client_phone'}
+    )
+  }
+
+  return (
+    <div>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
+        <div>
+          <h2 style={{ fontSize:20, fontWeight:700, color:P.text, margin:'0 0 4px' }}>WhatsApp</h2>
+          <p style={{ fontSize:13, color:P.muted, margin:0 }}>Bandeja de mensajes y campañas masivas</p>
+        </div>
+        <div style={{ display:'flex', gap:4 }}>
+          {[['chat','💬 Mensajes'],['campaigns','🚀 Campañas']].map(([id, label]) => (
+            <button key={id} onClick={() => setSubTab(id)}
+              style={{
+                padding:'7px 14px', borderRadius:8, fontSize:12, cursor:'pointer',
+                fontWeight: subTab === id ? 700 : 400,
+                background: subTab === id ? P.greenDim : 'rgba(255,255,255,0.03)',
+                color: subTab === id ? P.green : P.muted,
+                border: subTab === id ? `1px solid ${P.green}40` : `1px solid ${P.border}`,
+              }}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {subTab === 'chat' && (
+        <div style={{ display:'flex', height: isMob ? 'calc(100vh - 160px)' : 'calc(100vh - 180px)', borderRadius:14, overflow:'hidden', border:`1px solid ${P.border}` }}>
+          {(!isMob || mobileView==='inbox') && (
+            <div style={{ width: isMob ? '100%' : 280, flexShrink:0 }}>
+              <WhatsAppInbox
+                selectedPhone={selectedPhone}
+                onSelect={handleSelect}
+                isSuperAdmin={isSuperAdmin}
+                staffProfile={staffProfile}
+                assignments={waAssignments}
+                staffList={staffList}
+              />
+            </div>
+          )}
+          {(!isMob || mobileView==='chat') && (
+            <div style={{ flex:1, display:'flex', flexDirection:'column', position:'relative', minWidth:0 }}>
+              {isMob && (
+                <button onClick={()=>setMobileView('inbox')}
+                  style={{background:P.surface,border:`1px solid ${P.border}`,borderBottom:'none',borderRadius:'8px 8px 0 0',color:P.text,cursor:'pointer',fontSize:13,padding:'10px 14px',display:'flex',alignItems:'center',gap:6,minHeight:44,width:'100%',justifyContent:'flex-start',fontWeight:600}}>
+                  ← Volver a la bandeja
+                </button>
+              )}
+              <ChatWindow
+                clientPhone={selectedPhone}
+                clientName={selectedName}
+                staffId={staffProfile?.id}
+                isSuperAdmin={isSuperAdmin}
+                assignments={waAssignments}
+                staffList={staffList}
+                onAssign={handleAssign}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {subTab === 'campaigns' && (
+        <CampaignSender user={user} />
+      )}
+    </div>
+  )
+}
+
+export default function App(){
+  const[user,setUser]          =useState(null)
+  const[checking,setChecking]  =useState(true)
+  const[isSuperAdmin,setSA]    =useState(false)
+  const[isBroker,setIsBroker]  =useState(false)
+  const[teamId,setTeamId]      =useState(null)
+  const[tools,setTools]        =useState([])   // módulos habilitados para este usuario
+  const[module,setModule]      =useState('dashboard')
+  const[showPasswordReset,setShowPasswordReset]=useState(false)
+  const[contacts,setContacts]  =useState([])
+  const[leads,setLeads]        =useState([])
+  const[staffProfile,setSP]    =useState(null)
+  const[campaigns,setCampaigns]=useState([])
+  const[loading,setLoading]    =useState(true)
+  const[waUnread,setWaUnread]  =useState(0)
+  const[waToasts,setWaToasts]  =useState([])
+  const[waNavPhone,setWaNavPhone]=useState(null)
+  const[waViewingPhone,setWaViewingPhone]=useState(null)
+  const[waAssignments,setWaAssignments]=useState([])
+  const[installPrompt,setInstallPrompt]=useState(null)
+  const[pwaDismissed,setPwaDismissed]=useState(()=>localStorage.getItem('pwa-dismissed')==='1')
+  const[menuOpen,setMenuOpen]=useState(false)
+  const[tabletExpanded,setTabletExpanded]=useState(false)
+  const screenW=useWindowSize()
+  const isMobile=screenW<768
+  const isTablet=screenW>=768&&screenW<1024
+
+  // ── Helpers de rol ────────────────────────────────────────────────────────
+  // canAccess: true si el módulo está en tools[] o el usuario es super_admin
+  const canAccess=(mod)=>isSuperAdmin||tools.includes(mod)
+
+  // ── Auth + perfil RBAC ────────────────────────────────────────────────────
+  useEffect(()=>{
+    const loadProfile=async(u)=>{
+      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return}
+      try{
+        const{data}=await supabase.rpc('get_my_profile')
+        const role=data?.role||'asesor'
+        const tid=data?.team_id||null
+        const t=data?.tools||[]
+        setSA(role==='super_admin')
+        setIsBroker(role==='broker')
+        setTeamId(tid)
+        setTools(t)
       }catch(e){
-        console.warn('get_my_role fallback:',e)
-        // Fallback: check user_metadata directly
-        setSA(u?.user_metadata?.role==='super_admin'||u?.app_metadata?.role==='super_admin')
+        console.warn('get_my_profile fallback:',e)
+        const role=u?.user_metadata?.role||'asesor'
+        setSA(role==='super_admin')
+        setIsBroker(role==='broker')
+        setTools(['dashboard','contacts','pipeline','emails','tasks'])
       }
     }
     supabase.auth.getSession().then(async({data:{session}})=>{
       const u=session?.user??null
       setUser(u)
-      await checkRole(u)
+      await loadProfile(u)
       setChecking(false)
     }).catch(()=>setChecking(false))
-    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(_,session)=>{
+    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,session)=>{
+      if(event==='PASSWORD_RECOVERY'){setShowPasswordReset(true);return}
       const u=session?.user??null
-      // Only update user state if ID changed (prevents loop on token refresh)
       setUser(prev=>{
         if(prev?.id===u?.id) return prev
         return u
       })
-      await checkRole(u)
+      await loadProfile(u)
     })
     return()=>subscription.unsubscribe()
   },[])
@@ -1777,7 +3225,7 @@ export default function App(){
       try{
         const[r1,r2,r3,r4]=await Promise.all([
           supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200),
-          supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil').order('created_at',{ascending:false}),
+          supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,campaign_id,advisor_referral_code').order('created_at',{ascending:false}),
           supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
@@ -1789,10 +3237,6 @@ export default function App(){
       finally{setLoading(false)}
     }
     load()
-    // Recargar al volver a la pestaña (detecta datos insertados externamente)
-    const onVisible = () => { if(document.visibilityState === 'visible') load() }
-    document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
   },[user?.id])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
@@ -1803,87 +3247,281 @@ export default function App(){
     return()=>document.head.removeChild(s)
   },[])
 
+  // ── WA Notification refs (stale-closure-safe for subscription) ─────────────
+  const _moduleRef=useRef(module)
+  const _waPhoneRef=useRef(waViewingPhone)
+  const _staffProfileRef=useRef(staffProfile)
+  const _isSuperAdminRef=useRef(isSuperAdmin)
+  const _waAssignmentsRef=useRef(waAssignments)
+  useEffect(()=>{_moduleRef.current=module},[module])
+  useEffect(()=>{_waPhoneRef.current=waViewingPhone},[waViewingPhone])
+  useEffect(()=>{_staffProfileRef.current=staffProfile},[staffProfile])
+  useEffect(()=>{_isSuperAdminRef.current=isSuperAdmin},[isSuperAdmin])
+  useEffect(()=>{_waAssignmentsRef.current=waAssignments},[waAssignments])
+
+  // ── WA Global Realtime Notifications ──────────────────────────────────────
+  useEffect(()=>{
+    if(!user)return
+    const playBeep=()=>{
+      try{
+        const ctx=new(window.AudioContext||window.webkitAudioContext)()
+        const osc=ctx.createOscillator(),gain=ctx.createGain()
+        osc.connect(gain);gain.connect(ctx.destination)
+        osc.frequency.value=880;osc.type='sine'
+        gain.gain.setValueAtTime(0.25,ctx.currentTime)
+        gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.35)
+        osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.35)
+      }catch(e){}
+    }
+    const ch=supabase.channel('wa-global-notifs')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'whatsapp_messages'},payload=>{
+        const msg=payload.new
+        if(msg.direction!=='inbound')return
+        const phone=msg.client_phone
+        if(_moduleRef.current==='mensajes'&&_waPhoneRef.current===phone)return
+        // Assignment-based filtering: assigned → only notify assignee; unassigned → only notify super_admin
+        const _asgn=_waAssignmentsRef.current.find(a=>a.client_phone===phone)
+        const _myId=_staffProfileRef.current?.id
+        const _amSA=_isSuperAdminRef.current
+        if(_asgn){if(_asgn.assigned_to!==_myId)return}
+        else{if(!_amSA)return}
+        setWaUnread(n=>n+1)
+        playBeep()
+        const id=uid()
+        const preview=(()=>{
+          const c=msg.content
+          if(c?.text)return c.text.slice(0,60)
+          if(msg.message_type==='image')return'🖼 Imagen'
+          if(msg.message_type==='document')return'📄 Documento'
+          if(msg.message_type==='audio')return'🎵 Audio'
+          return''
+        })()
+        setWaToasts(prev=>[...prev,{id,phone,name:msg.client_name||phone,preview}])
+        setTimeout(()=>setWaToasts(prev=>prev.filter(t=>t.id!==id)),8000)
+      })
+      .subscribe()
+    return()=>{supabase.removeChannel(ch)}
+  },[user?.id])
+
+  // ── WA Assignments: load + realtime for notification filtering ────────────
+  useEffect(()=>{
+    if(!user)return
+    ;(async()=>{
+      const{data}=await supabase.from('whatsapp_assignments').select('client_phone,assigned_to')
+      setWaAssignments(data||[])
+    })()
+    const ch=supabase.channel('wa-assign-sync')
+      .on('postgres_changes',{event:'INSERT',schema:'public',table:'whatsapp_assignments'},payload=>{
+        const{client_phone,assigned_to}=payload.new
+        setWaAssignments(prev=>[...prev.filter(a=>a.client_phone!==client_phone),{client_phone,assigned_to}])
+      })
+      .on('postgres_changes',{event:'UPDATE',schema:'public',table:'whatsapp_assignments'},payload=>{
+        const{client_phone,assigned_to}=payload.new
+        setWaAssignments(prev=>prev.map(a=>a.client_phone===client_phone?{client_phone,assigned_to}:a))
+      })
+      .subscribe()
+    return()=>{supabase.removeChannel(ch)}
+  },[user?.id])
+
+  // ── PWA install prompt ────────────────────────────────────────────────────
+  useEffect(()=>{
+    const handler=e=>{e.preventDefault();setInstallPrompt(e)}
+    window.addEventListener('beforeinstallprompt',handler)
+    return()=>window.removeEventListener('beforeinstallprompt',handler)
+  },[])
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
+  if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(!user)return<Login onLogin={setUser}/>
 
-  const logout=async()=>{await supabase.auth.signOut();setUser(null);setSA(false)}
+  const logout=async()=>{await supabase.auth.signOut();localStorage.clear();window.location.href='/'}
 
   // ── Modules ───────────────────────────────────────────────────────────────
-  const campMods={}
-  campaigns.forEach(camp=>{
-    campMods['camp_'+camp.id]=<CampanaModule key={camp.id} campaign={camp} user={user} isSuperAdmin={isSuperAdmin} globalLeads={leads} setGlobalLeads={setLeads}/>
-  })
+  // campMods removed — lazy rendering via renderModule()
 
-  const mods={
-    dashboard: <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>,
-    contacts:  <Contacts user={user} isSuperAdmin={isSuperAdmin}/>,
-    pipeline:  <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>,
-    tasks:     <Tasks contacts={contacts} leads={leads}/>,
-    emails:    <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user}/>,
-    reports:   <Reports contacts={contacts} leads={leads}/>,
-    equipo:<Equipo user={user} isSuperAdmin={isSuperAdmin}/>,
-    ...(isSuperAdmin?{admin_campaigns:<AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>}:{}),
-    ...campMods,
-  }
-
-  const NAV=[
-    {id:'dashboard',label:'Dashboard',icon:'⊞'},
-    {id:'contacts', label:'Contactos', icon:'📋'},
-    {id:'pipeline', label:'Pipeline',  icon:'◈'},
-    ...campaigns.map(c=>({id:'camp_'+c.id,label:c.name,icon:'🚀',color:P.green})),
-    {id:'tasks',    label:'Tareas',    icon:'✓'},
-    {id:'emails',   label:'Emails',    icon:'✉'},
-    {id:'reports',  label:'Reportes',  icon:'▦'},
-    {id:'equipo',label:'Equipo',icon:'👥'},
-    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas',icon:'⚙',color:P.orange}]:[]),
+  const validMods=isBroker?['broker']:[
+    'dashboard',
+    ...(canAccess('contacts') ?['contacts']:[]),
+    ...(canAccess('pipeline') ?['pipeline']:[]),
+    ...(canAccess('tasks')    ?['tasks']:[]),
+    ...(canAccess('emails')   ?['emails']:[]),
+    ...(canAccess('reports')  ?['reports']:[]),
+    ...(canAccess('equipo')   ?['equipo']:[]),
+    ...(canAccess('campaigns')?['campaigns']:[]),
+    ...(isSuperAdmin          ?['admin_campaigns']:[]),
+    ...(canAccess('mensajes') ?['mensajes']:[]),
   ]
 
-  // Ensure current module exists, fallback to dashboard
-  const currentMod=mods[module]?module:'dashboard'
+  // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
+  const NAV=isBroker?[]:[
+    {id:'dashboard',label:'Dashboard',icon:'⊞'},
+    canAccess('contacts') ?{id:'contacts', label:'Contactos', icon:'📋'}:null,
+    canAccess('pipeline') ?{id:'pipeline', label:'Pipeline',  icon:'◈'}:null,
+    canAccess('campaigns')?{id:'campaigns',label:'Campañas',  icon:'🚀', color:P.green}:null,
+    canAccess('tasks')    ?{id:'tasks',    label:'Tareas',    icon:'✓'}:null,
+    canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
+    canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
+    canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
+    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
+    canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
+  ].filter(Boolean)
 
-  return <div style={{display:'flex',minHeight:'100vh',background:P.bg}}>
-    {/* Sidebar */}
-    <div style={{width:218,background:P.sidebar,borderRight:`1px solid ${P.border}`,display:'flex',flexDirection:'column',flexShrink:0,position:'sticky',top:0,height:'100vh'}}>
-      <div style={{padding:'22px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',gap:12}}>
-        <img src={LOGO_URI} width={32} height={32} style={{borderRadius:6,objectFit:'cover',display:'block'}} alt="Pessaro"/>
-        <div><div style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em'}}>Pessaro</div><div style={{fontSize:10,color:P.purple,letterSpacing:'0.10em',textTransform:'uppercase',fontWeight:600}}>Capital CRM</div></div>
+  const currentMod=validMods.includes(module)?module:'dashboard'
+
+  const dismissPWA=()=>{localStorage.setItem('pwa-dismissed','1');setPwaDismissed(true)}
+  const triggerInstall=()=>{if(!installPrompt)return;installPrompt.prompt();installPrompt.userChoice.then(()=>{setInstallPrompt(null)});dismissPWA()}
+
+  // Sidebar effective width
+  const sidebarW=isMobile?260:isTablet?(tabletExpanded?218:60):218
+  const showLabels=isMobile||(!isTablet)||tabletExpanded
+
+  return <>{installPrompt&&!pwaDismissed&&(
+    <div style={{display:'flex',alignItems:'center',gap:12,padding:'10px 18px',background:'#0d1117',borderBottom:'1px solid rgba(62,207,199,0.2)',color:'#e0e0e0',fontSize:13,flexWrap:'wrap'}}>
+      <span style={{flex:1,minWidth:200}}>📱 Instala Pessaro CRM en tu dispositivo para acceso rápido</span>
+      <div style={{display:'flex',gap:8,alignItems:'center'}}>
+        <button onClick={triggerInstall} style={{padding:'6px 16px',borderRadius:8,background:'rgba(62,207,199,0.15)',border:'1px solid rgba(62,207,199,0.4)',color:'#3ECFC7',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit'}}>Instalar</button>
+        <button onClick={dismissPWA} style={{padding:'4px 8px',borderRadius:6,background:'transparent',border:'1px solid rgba(255,255,255,0.1)',color:'#a4b0be',cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>✕</button>
       </div>
-      <nav style={{padding:'10px 8px',flex:1,overflowY:'auto'}}>
-        {NAV.map(item=>{
-          const active=currentMod===item.id
-          const ic=item.color||P.purple
-          return <button key={item.id} onClick={()=>setModule(item.id)}
-            style={{width:'100%',display:'flex',alignItems:'center',gap:9,padding:'9px 12px',borderRadius:8,marginBottom:2,cursor:'pointer',textAlign:'left',
-              background:active?ic+'22':'transparent',color:active?ic:P.muted,
-              border:active?`1px solid ${ic}35`:'1px solid transparent',
-              fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
-            <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7}}>{item.icon}</span>
-            <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>
-            {active&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
-          </button>
-        })}
-      </nav>
-      <div style={{padding:'10px 18px',borderBottom:`1px solid ${P.border}`}}>
-        <div style={{display:'flex',alignItems:'center',gap:6,padding:'7px 10px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}>
-          <div style={{width:6,height:6,borderRadius:'50%',background:P.green}}/><span style={{fontSize:10,color:P.green,fontWeight:600}}>Supabase conectado</span>
+    </div>
+  )}
+  <div style={{display:'flex',flexDirection:'column',minHeight:'100vh',background:P.bg}}>
+    {/* Mobile top bar */}
+    {isMobile&&<div style={{height:48,background:P.sidebar,borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 8px',position:'sticky',top:0,zIndex:100,flexShrink:0}}>
+      <button onClick={()=>setMenuOpen(true)} style={{background:'none',border:'none',color:P.text,fontSize:20,cursor:'pointer',minWidth:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8}}>☰</button>
+      <span style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em'}}>Pessaro CRM</span>
+      <button onClick={()=>{setModule('mensajes');setWaUnread(0)}} style={{background:'none',border:'none',color:waUnread>0?P.red:P.muted,fontSize:18,cursor:'pointer',minWidth:44,height:44,display:'flex',alignItems:'center',justifyContent:'center',borderRadius:8,position:'relative'}}>
+        🔔{waUnread>0&&<span style={{position:'absolute',top:6,right:6,background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 5px',lineHeight:'14px'}}>{waUnread>99?'99+':waUnread}</span>}
+      </button>
+    </div>}
+    <div style={{display:'flex',flex:1,minHeight:0,overflow:'hidden'}}>
+      {/* Backdrop (mobile only) */}
+      {isMobile&&menuOpen&&<div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',zIndex:999}} onClick={()=>setMenuOpen(false)}/>}
+      {/* Sidebar */}
+      <div
+        style={{
+          width:sidebarW,
+          background:P.sidebar,
+          borderRight:`1px solid ${P.border}`,
+          display:'flex',
+          flexDirection:'column',
+          flexShrink:0,
+          position:isMobile?'fixed':'sticky',
+          top:0,
+          left:isMobile?(menuOpen?0:-260):0,
+          height:'100vh',
+          zIndex:isMobile?1000:'auto',
+          transition:'left 0.25s ease, width 0.2s ease',
+          overflow:'hidden',
+        }}
+        onMouseEnter={()=>isTablet&&setTabletExpanded(true)}
+        onMouseLeave={()=>isTablet&&setTabletExpanded(false)}
+      >
+        {/* Logo */}
+        <div style={{padding:isTablet&&!tabletExpanded?'22px 0':'22px 18px',borderBottom:`1px solid ${P.border}`,display:'flex',alignItems:'center',justifyContent:isTablet&&!tabletExpanded?'center':'flex-start',gap:12,flexShrink:0}}>
+          <img src={LOGO_URI} width={32} height={32} style={{borderRadius:6,objectFit:'cover',display:'block',flexShrink:0}} alt="Pessaro"/>
+          {showLabels&&<div><div style={{fontSize:14,fontWeight:800,color:P.text,letterSpacing:'-0.01em',whiteSpace:'nowrap'}}>Pessaro</div><div style={{fontSize:10,color:P.purple,letterSpacing:'0.10em',textTransform:'uppercase',fontWeight:600,whiteSpace:'nowrap'}}>Capital CRM</div></div>}
         </div>
-      </div>
-      <div style={{padding:'14px 18px'}}>
-        <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:8}}>
-          <div style={{width:28,height:28,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:P.purple}}>{(staffProfile?.display_name||user?.email||'?')[0].toUpperCase()}</div>
-          <div>
-            <div style={{fontSize:11,fontWeight:600,color:P.text}}>{staffProfile?.display_name||user?.email?.split('@')[0]}</div>
-            <div style={{fontSize:10,color:P.muted}}>{staffProfile?.title||'Equipo interno'}</div>
+        {/* Nav */}
+        <nav style={{padding:'10px 8px',flex:1,overflowY:'auto'}}>
+          {NAV.map(item=>{
+            const active=currentMod===item.id
+            const ic=item.color||P.purple
+            const showBadge=item.id==='mensajes'&&waUnread>0
+            return <button key={item.id} onClick={()=>{setModule(item.id);if(item.id==='mensajes')setWaUnread(0);if(isMobile)setMenuOpen(false)}}
+              style={{width:'100%',display:'flex',alignItems:'center',justifyContent:showLabels?'flex-start':'center',gap:showLabels?9:0,padding:showLabels?'9px 12px':'11px 0',borderRadius:8,marginBottom:2,cursor:'pointer',textAlign:'left',minHeight:44,position:'relative',
+                background:active?ic+'22':'transparent',color:active?ic:P.muted,
+                border:active?`1px solid ${ic}35`:'1px solid transparent',
+                fontSize:13,fontWeight:active?600:400,transition:'all 0.12s'}}>
+              <span style={{fontSize:15,width:18,textAlign:'center',opacity:active?1:0.7,flexShrink:0}}>{item.icon}</span>
+              {showLabels&&<span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{item.label}</span>}
+              {showBadge&&showLabels&&<span style={{background:P.red,color:'#fff',borderRadius:10,fontSize:9,fontWeight:700,padding:'1px 6px',minWidth:16,textAlign:'center',lineHeight:'14px',flexShrink:0}}>{waUnread>99?'99+':waUnread}</span>}
+              {showBadge&&!showLabels&&<span style={{position:'absolute',top:4,right:4,background:P.red,color:'#fff',borderRadius:'50%',width:8,height:8}}/>}
+              {active&&!showBadge&&showLabels&&<div style={{width:5,height:5,borderRadius:'50%',background:ic,flexShrink:0}}/>}
+            </button>
+          })}
+        </nav>
+        {/* Supabase status */}
+        {showLabels&&<div style={{padding:'8px 12px',borderBottom:`1px solid ${P.border}`,flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:7}}>
+            <div style={{width:5,height:5,borderRadius:'50%',background:P.green,flexShrink:0}}/>
+            <span style={{fontSize:10,color:P.green,fontWeight:600,letterSpacing:'0.04em'}}>Supabase conectado</span>
           </div>
+        </div>}
+        {!showLabels&&<div style={{padding:'8px 0',display:'flex',justifyContent:'center',borderBottom:`1px solid ${P.border}`,flexShrink:0}}><div style={{width:6,height:6,borderRadius:'50%',background:P.green}}/></div>}
+        {/* User card */}
+        <div style={{padding:showLabels?'12px 14px':'10px 0',flexShrink:0,display:'flex',flexDirection:'column',gap:showLabels?0:8,alignItems:showLabels?'stretch':'center'}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:showLabels?10:0,justifyContent:showLabels?'flex-start':'center'}}>
+            <div style={{
+              width:38,height:38,borderRadius:10,flexShrink:0,
+              background:isSuperAdmin?P.orangeDim:isBroker?P.blueDim:P.purpleDim,
+              display:'flex',alignItems:'center',justifyContent:'center',
+              fontSize:15,fontWeight:800,
+              color:isSuperAdmin?P.orange:isBroker?P.blue:P.purple,
+              border:`1.5px solid ${isSuperAdmin?P.orange:isBroker?P.blue:P.purple}30`
+            }}>
+              {(staffProfile?.display_name||user?.email||'?')[0].toUpperCase()}
+            </div>
+            {showLabels&&<div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:700,color:P.text,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                {staffProfile?.display_name||user?.email?.split('@')[0]||'Usuario'}
+              </div>
+              <div style={{fontSize:10,color:P.muted,whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis',marginTop:1}}>
+                {staffProfile?.title||'Pessaro Capital'}
+              </div>
+            </div>}
+          </div>
+          {showLabels&&staffProfile?.pessaro_email&&<div style={{
+            display:'flex',alignItems:'center',gap:6,padding:'5px 8px',marginBottom:8,
+            background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6}}>
+            <span style={{fontSize:10}}>✉</span>
+            <span style={{fontSize:10,color:P.blue,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              {staffProfile.pessaro_email}
+            </span>
+          </div>}
+          {showLabels&&<div style={{marginBottom:10}}>
+            {isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:5}}>
+              <span style={{fontSize:9}}>⚙</span><span style={{fontSize:10,color:P.orange,fontWeight:700,letterSpacing:'0.04em'}}>Super Admin</span>
+            </div>}
+            {isBroker&&!isSuperAdmin&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:5}}>
+              <span style={{fontSize:9}}>⬡</span><span style={{fontSize:10,color:P.blue,fontWeight:700,letterSpacing:'0.04em'}}>Administrador</span>
+            </div>}
+            {!isSuperAdmin&&!isBroker&&<div style={{display:'inline-flex',alignItems:'center',gap:5,padding:'3px 10px',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:5}}>
+              <span style={{fontSize:9}}>◈</span><span style={{fontSize:10,color:P.purple,fontWeight:700,letterSpacing:'0.04em'}}>Asesor</span>
+            </div>}
+          </div>}
+          {showLabels&&<button onClick={logout} style={{width:'100%',padding:'6px 0',fontSize:11,color:P.muted,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:6,cursor:'pointer',transition:'all 0.12s',minHeight:44}}
+            onMouseEnter={e=>{e.currentTarget.style.color=P.red;e.currentTarget.style.borderColor=P.red+'40'}}
+            onMouseLeave={e=>{e.currentTarget.style.color=P.muted;e.currentTarget.style.borderColor=P.border}}>
+            Cerrar sesión →
+          </button>}
+          {!showLabels&&<button onClick={logout} title="Cerrar sesión" style={{width:38,height:38,borderRadius:8,background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,color:P.muted,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>⇒</button>}
         </div>
-        {staffProfile&&<div style={{padding:'4px 8px',background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:5,marginBottom:8}}><p style={{fontSize:10,color:P.purple,margin:0,fontFamily:'monospace'}}>✉ {staffProfile.pessaro_email}</p></div>}
-        {isSuperAdmin&&<div style={{padding:'3px 8px',background:P.orangeDim,border:`1px solid ${P.orange}30`,borderRadius:5,marginBottom:8}}><p style={{fontSize:10,color:P.orange,margin:0,fontWeight:600}}>⚙ Super Admin</p></div>}
-        <button onClick={logout} style={{fontSize:11,color:P.muted,background:'none',border:'none',cursor:'pointer',padding:0}}>Cerrar sesión →</button>
+      </div>
+      {/* Main content */}
+      <div style={{flex:1,padding:isMobile?'16px':isTablet?'20px 24px':'28px 32px',overflowY:'auto',minHeight:0}}>
+        <ErrorBoundary key={currentMod}>{(()=>{
+          if(loading&&currentMod==='dashboard') return <Spinner/>
+          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
+          if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+          if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
+          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
+          if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+          if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
+          return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+        })()}</ErrorBoundary>
       </div>
     </div>
-    {/* Main */}
-    <div style={{flex:1,padding:'28px 32px',overflowY:'auto',minHeight:'100vh'}}>
-      {loading&&currentMod==='dashboard'?<Spinner/>:mods[currentMod]}
-    </div>
+    {waToasts.length>0&&<div style={{position:'fixed',bottom:20,right:20,display:'flex',flexDirection:'column',gap:10,zIndex:9999}}>
+      {waToasts.map(t=><WaToast key={t.id} toast={t}
+        onClose={()=>setWaToasts(p=>p.filter(x=>x.id!==t.id))}
+        onView={()=>{setModule('mensajes');setWaUnread(0);setWaNavPhone({phone:t.phone,name:t.name});setWaToasts(p=>p.filter(x=>x.id!==t.id))}}
+      />)}
+    </div>}
   </div>
+  </>
 }
