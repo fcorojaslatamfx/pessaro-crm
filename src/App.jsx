@@ -2478,14 +2478,19 @@ function Equipo({user,isSuperAdmin,teamId}){
     if(!editMember)return
     setSaving(true)
     try{
-      await supabase.from('crm_staff_profiles').update({
+      const {data,error}=await supabase.from('crm_staff_profiles').update({
         display_name:editForm.display_name,
         title:editForm.title,
         pessaro_email:editForm.pessaro_email,
         phone:editForm.phone,
         role:editForm.role,
         team_id:editForm.team_id||null,
-      }).eq('user_id',editMember.user_id)
+      }).eq('user_id',editMember.user_id).select()
+      if(error){showMsg('Error: '+error.message,false);setSaving(false);return}
+      if(!data||data.length===0){
+        showMsg('No se pudo guardar (sin permisos o usuario no encontrado)',false)
+        setSaving(false);return
+      }
       showMsg('Miembro actualizado ✓')
       setEditMember(null)
       await load()
@@ -2529,10 +2534,19 @@ function Equipo({user,isSuperAdmin,teamId}){
   // ── Assign advisor to team ────────────────────────────────────────────────
   const assignAdvisor=async(userId,newTeamId)=>{
     try{
-      await supabase.from('crm_staff_profiles').update({team_id:newTeamId||null}).eq('user_id',userId)
+      // .select() devuelve las filas afectadas → si es 0, RLS bloqueó o no encontró
+      const {data,error}=await supabase.from('crm_staff_profiles')
+        .update({team_id:newTeamId||null})
+        .eq('user_id',userId)
+        .select()
+      if(error){showMsg('Error al asignar: '+error.message,false);return}
+      if(!data||data.length===0){
+        showMsg('No se pudo guardar (sin permisos o usuario no encontrado)',false)
+        return
+      }
       setStaff(prev=>prev.map(s=>s.user_id===userId?{...s,team_id:newTeamId||null,crm_teams:teams.find(t=>t.id===newTeamId)||null}:s))
       showMsg('Asignación actualizada ✓')
-    }catch(e){showMsg('Error al asignar',false)}
+    }catch(e){showMsg('Error al asignar: '+e.message,false)}
   }
 
   // ── Filtered list ─────────────────────────────────────────────────────────
