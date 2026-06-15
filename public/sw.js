@@ -1,4 +1,4 @@
-const CACHE = 'pessaro-crm-v2';
+const CACHE = 'pessaro-crm-v3';
 const SHELL = ['/', '/index.html'];
 
 self.addEventListener('install', e => {
@@ -19,33 +19,68 @@ self.addEventListener('fetch', e => {
   const url = new URL(e.request.url);
 
   // ── Filtros críticos: NO interceptar requests que no podemos cachear ──
-  // Cache API solo soporta http(s). chrome-extension://, data:, blob:, ws://,
-  // wss:, chrome:, file:, etc. lanzan TypeError en cache.put().
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
-
-  // Solo GET es cacheable. POST/PUT/DELETE/PATCH no se cachean.
   if (e.request.method !== 'GET') return;
-
-  // Bypass para Supabase: siempre red, nunca cache (datos en tiempo real).
   if (url.hostname.includes('supabase.co')) return;
-
-  // Bypass para Meta/WhatsApp Graph API (por si existieran).
   if (url.hostname.includes('graph.facebook.com')) return;
 
-  // ── Stale-while-revalidate para el resto ──
+  // ── Stale-while-revalidate ──
   e.respondWith(
     caches.open(CACHE).then(cache =>
       cache.match(e.request).then(cached => {
         const network = fetch(e.request).then(res => {
-          // Solo cachear respuestas básicas/exitosas (same-origin)
           if (res && res.ok && res.type === 'basic') {
-            // Defensivo: si por cualquier motivo el put falla, no romper el SW
             cache.put(e.request, res.clone()).catch(() => {});
           }
           return res;
-        }).catch(() => cached); // Offline: fallback al cache
+        }).catch(() => cached);
         return cached || network;
       })
-    ).catch(() => fetch(e.request)) // Si el SW falla, ir directo a red
+    ).catch(() => fetch(e.request))
   );
+});
+
+// ── Push notifications (preparado para Web Push futuro) ──────────────────────
+self.addEventListener('push', e => {
+  let data = {};
+  try { data = e.data ? e.data.json() : {}; } catch { data = { title: 'Pessaro CRM', body: 'Nuevo mensaje' }; }
+  const title = data.title || 'Pessaro CRM';
+  const opts = {
+    body: data.body || 'Tienes un mensaje',
+    icon: data.icon || 'https://pessaro.cl/images/logo-256.webp',
+    badge: data.badge || 'https://pessaro.cl/images/logo-256.webp',
+    tag: data.tag || 'pessaro-notif',
+    requireInteraction: true,
+    renotify: true,
+    vibrate: [200, 100, 200],
+    data: { url: data.url || '/', phone: data.phone },
+  };
+  e.waitUntil(self.registration.showNotification(title, opts));
+});
+
+// ── Click en notificación: enfocar/abrir la PWA en el chat correcto ──────────
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const targetUrl = e.notification.data?.url || '/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+      // Si hay una ventana abierta, enfocarla y navegar
+      for (const client of clientList) {
+        if ('focus' in client) {
+          client.postMessage({ type: 'NOTIFICATION_CLICK', phone: e.notification.data?.phone });
+          return client.focus();
+        }
+      }
+      // Si no hay ninguna abierta, abrir nueva
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    })
+  );
+});
+
+// ── Mensaje desde la app para limpiar cache (post-logout) ────────────────────
+self.addEventListener('message', e => {
+  if (e.data?.type === 'CLEAR_CACHE') {
+    caches.keys().then(keys => keys.forEach(k => caches.delete(k)));
+  }
+  if (e.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
