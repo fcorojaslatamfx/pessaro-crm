@@ -3199,7 +3199,13 @@ export default function App(){
         setTools(['dashboard','contacts','pipeline','emails','tasks'])
       }
     }
-    supabase.auth.getSession().then(async({data:{session}})=>{
+    supabase.auth.getSession().then(async({data:{session},error})=>{
+      // Si getSession falla con error de auth (token expirado), limpiar y volver al login
+      if(error){
+        console.warn('getSession error:',error.message)
+        localStorage.clear();sessionStorage.clear()
+        setChecking(false);return
+      }
       const u=session?.user??null
       setUser(u)
       await loadProfile(u)
@@ -3207,6 +3213,24 @@ export default function App(){
     }).catch(()=>setChecking(false))
     const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,session)=>{
       if(event==='PASSWORD_RECOVERY'){setShowPasswordReset(true);return}
+
+      // ── Detección de sesión inválida ─────────────────────────────────────
+      // SIGNED_OUT: logout explícito O refresh_token expirado (400 Bad Request)
+      // TOKEN_REFRESHED con session=null: refresh falló silenciosamente
+      // USER_UPDATED con session=null: caso edge
+      if((event==='SIGNED_OUT'||event==='TOKEN_REFRESHED'||event==='USER_UPDATED')&&!session){
+        console.warn('[auth] Sesión expirada o invalidada. event:',event)
+        // Limpiar todo el estado de auth + storage
+        try{localStorage.clear();sessionStorage.clear()}catch{}
+        setUser(null);setSA(false);setIsBroker(false);setTeamId(null);setTools([])
+        // Si no estamos ya en el login screen, redirigir
+        // (evita el loop de spinners cuando los queries fallan con 401)
+        if(window.location.pathname!=='/'){
+          window.location.replace('/')
+        }
+        return
+      }
+
       const u=session?.user??null
       setUser(prev=>{
         if(prev?.id===u?.id) return prev
@@ -3214,7 +3238,42 @@ export default function App(){
       })
       await loadProfile(u)
     })
-    return()=>subscription.unsubscribe()
+
+    // ── Watchdog de sesión: detecta token muerto que onAuthStateChange no captura ──
+    // Cubre el caso refresh_token 400 después de inactividad larga (PWA escritorio que queda abierta)
+    let lastCheck=0
+    const checkSession=async(source)=>{
+      const now=Date.now()
+      if(now-lastCheck<5000)return // debounce 5s para no spammear getSession
+      lastCheck=now
+      try{
+        const{data:{session},error}=await supabase.auth.getSession()
+        if(!session||error){
+          console.warn(`[auth-watchdog:${source}] sin sesión activa`,error?.message||'')
+          try{localStorage.clear();sessionStorage.clear()}catch{}
+          if(window.location.pathname!=='/'){
+            window.location.replace('/')
+          }else{
+            // Ya estamos en login, solo asegurar que el state esté limpio
+            setUser(null);setChecking(false)
+          }
+        }
+      }catch(e){console.error('[auth-watchdog] error:',e)}
+    }
+    // Verificar cada 60s
+    const watchdog=setInterval(()=>checkSession('interval'),60000)
+    // Verificar al volver al foreground (tabs visible, focus de ventana PWA)
+    const onVisibility=()=>{if(document.visibilityState==='visible')checkSession('visibility')}
+    const onFocus=()=>checkSession('focus')
+    document.addEventListener('visibilitychange',onVisibility)
+    window.addEventListener('focus',onFocus)
+
+    return()=>{
+      subscription.unsubscribe()
+      clearInterval(watchdog)
+      document.removeEventListener('visibilitychange',onVisibility)
+      window.removeEventListener('focus',onFocus)
+    }
   },[])
 
   // ── Load data ─────────────────────────────────────────────────────────────
@@ -3253,40 +3312,104 @@ export default function App(){
   const _staffProfileRef=useRef(staffProfile)
   const _isSuperAdminRef=useRef(isSuperAdmin)
   const _waAssignmentsRef=useRef(waAssignments)
+  // Map<phone, {phone, name, preview, onClick, native, addedAt}>
+  const _pendingNotifsRef=useRef(new Map())
   useEffect(()=>{_moduleRef.current=module},[module])
   useEffect(()=>{_waPhoneRef.current=waViewingPhone},[waViewingPhone])
   useEffect(()=>{_staffProfileRef.current=staffProfile},[staffProfile])
   useEffect(()=>{_isSuperAdminRef.current=isSuperAdmin},[isSuperAdmin])
   useEffect(()=>{_waAssignmentsRef.current=waAssignments},[waAssignments])
 
+  // Cancelar notificación pendiente cuando el user abre el chat manualmente
+  useEffect(()=>{
+    if(module==='mensajes'&&waViewingPhone&&window.__crmAckNotif){
+      window.__crmAckNotif(waViewingPhone)
+    }
+  },[module,waViewingPhone])
+
   // ── WA Global Realtime Notifications ──────────────────────────────────────
+  // Sistema completo: sonido + vibración + notification nativa + auto-repeat cada 30s
   useEffect(()=>{
     if(!user)return
-    const playBeep=()=>{
+
+    // ── Helpers ──────────────────────────────────────────────────────────
+    // Sonido (1 o 2 beeps)
+    const playBeep=(count=1)=>{
       try{
         const ctx=new(window.AudioContext||window.webkitAudioContext)()
-        const osc=ctx.createOscillator(),gain=ctx.createGain()
-        osc.connect(gain);gain.connect(ctx.destination)
-        osc.frequency.value=880;osc.type='sine'
-        gain.gain.setValueAtTime(0.25,ctx.currentTime)
-        gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+0.35)
-        osc.start(ctx.currentTime);osc.stop(ctx.currentTime+0.35)
-      }catch(e){}
+        const playOne=offset=>{
+          const osc=ctx.createOscillator(),gain=ctx.createGain()
+          osc.connect(gain);gain.connect(ctx.destination)
+          osc.frequency.value=880;osc.type='sine'
+          gain.gain.setValueAtTime(0.3,ctx.currentTime+offset)
+          gain.gain.exponentialRampToValueAtTime(0.001,ctx.currentTime+offset+0.4)
+          osc.start(ctx.currentTime+offset);osc.stop(ctx.currentTime+offset+0.4)
+        }
+        for(let i=0;i<count;i++)playOne(i*0.5)
+      }catch{}
     }
+    // Vibración (móviles compatibles)
+    const vibrate=()=>{try{navigator.vibrate?.([200,100,200])}catch{}}
+    // Notification nativa del SO
+    const showNativeNotif=(title,body,tag,onClick)=>{
+      if(typeof Notification==='undefined'||Notification.permission!=='granted')return null
+      try{
+        const n=new Notification(title,{
+          body,tag,
+          icon:'https://pessaro.cl/images/logo-256.webp',
+          badge:'https://pessaro.cl/images/logo-256.webp',
+          requireInteraction:true,renotify:true,
+        })
+        n.onclick=()=>{try{window.focus()}catch{};try{n.close()}catch{};onClick?.()}
+        return n
+      }catch{return null}
+    }
+    // Ack: marca una notificación como vista (cancela repetición)
+    const ackNotif=phone=>{
+      const e=_pendingNotifsRef.current.get(phone)
+      if(e?.native)try{e.native.close()}catch{}
+      _pendingNotifsRef.current.delete(phone)
+    }
+    // Expuesto globalmente para que otros componentes (WaToast.onView, ChatWindow al abrir) lo llamen
+    window.__crmAckNotif=ackNotif
+
+    // ── Pedir permiso de notificaciones (defer al primer click del user) ──
+    if(typeof Notification!=='undefined'&&Notification.permission==='default'){
+      const askOnce=()=>{Notification.requestPermission().catch(()=>{});document.removeEventListener('click',askOnce)}
+      document.addEventListener('click',askOnce,{once:true})
+    }
+
+    // ── Auto-repeat cada 30s mientras haya pendientes ────────────────────
+    const repeatTimer=setInterval(()=>{
+      if(_pendingNotifsRef.current.size===0)return
+      // Si la pestaña tiene foco Y el user está en módulo Mensajes, asumir que ya las ve
+      if(document.hasFocus()&&_moduleRef.current==='mensajes'){
+        Array.from(_pendingNotifsRef.current.keys()).forEach(p=>ackNotif(p))
+        return
+      }
+      // Re-disparar TODAS las pendientes (sonido + vibración + notif)
+      _pendingNotifsRef.current.forEach(e=>{
+        playBeep(1);vibrate()
+        showNativeNotif(`🔔 Sin leer: ${e.name||e.phone}`,e.preview||'Tienes mensajes pendientes',`wa-repeat-${e.phone}`,e.onClick)
+      })
+    },30000)
+
+    // ── Realtime listener: nuevos mensajes inbound ───────────────────────
     const ch=supabase.channel('wa-global-notifs')
       .on('postgres_changes',{event:'INSERT',schema:'public',table:'whatsapp_messages'},payload=>{
         const msg=payload.new
         if(msg.direction!=='inbound')return
         const phone=msg.client_phone
         if(_moduleRef.current==='mensajes'&&_waPhoneRef.current===phone)return
-        // Assignment-based filtering: assigned → only notify assignee; unassigned → only notify super_admin
+        // Assignment filter (sin cambios)
         const _asgn=_waAssignmentsRef.current.find(a=>a.client_phone===phone)
         const _myId=_staffProfileRef.current?.id
         const _amSA=_isSuperAdminRef.current
         if(_asgn){if(_asgn.assigned_to!==_myId)return}
         else{if(!_amSA)return}
         setWaUnread(n=>n+1)
-        playBeep()
+        // Disparar combo: sonido + vibración
+        playBeep(2);vibrate()
         const id=uid()
         const preview=(()=>{
           const c=msg.content
@@ -3296,11 +3419,22 @@ export default function App(){
           if(msg.message_type==='audio')return'🎵 Audio'
           return''
         })()
-        setWaToasts(prev=>[...prev,{id,phone,name:msg.client_name||phone,preview}])
+        const name=msg.client_name||phone
+        const goToChat=()=>{setModule('mensajes');setWaNavPhone({phone,name});ackNotif(phone)}
+        // Toast in-app (existente)
+        setWaToasts(prev=>[...prev,{id,phone,name,preview}])
         setTimeout(()=>setWaToasts(prev=>prev.filter(t=>t.id!==id)),8000)
+        // Notification nativa + registrar para repeat
+        const native=showNativeNotif(`💬 ${name}`,preview||'Nuevo mensaje',`wa-${phone}`,goToChat)
+        _pendingNotifsRef.current.set(phone,{phone,name,preview,onClick:goToChat,native,addedAt:Date.now()})
       })
       .subscribe()
-    return()=>{supabase.removeChannel(ch)}
+    return()=>{
+      clearInterval(repeatTimer)
+      supabase.removeChannel(ch)
+      _pendingNotifsRef.current.forEach((_,p)=>ackNotif(p))
+      delete window.__crmAckNotif
+    }
   },[user?.id])
 
   // ── WA Assignments: load + realtime for notification filtering ────────────
@@ -3334,7 +3468,37 @@ export default function App(){
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(!user)return<Login onLogin={setUser}/>
 
-  const logout=async()=>{await supabase.auth.signOut();localStorage.clear();window.location.href='/'}
+  // Logout robusto: funciona aunque supabase.auth.signOut() falle (token expirado)
+  // PWA escritorio: desregistrar SW + hard reload (replace + backup con reload)
+  const logout=async()=>{
+    console.log('[logout] iniciando...')
+    // 1. Limpiar storage PRIMERO (siempre funciona, incluso sin red)
+    try{localStorage.clear();sessionStorage.clear()}catch{}
+    // 2. Desregistrar service workers (fuerza estado fresh próxima carga)
+    if('serviceWorker' in navigator){
+      try{
+        const regs=await navigator.serviceWorker.getRegistrations()
+        await Promise.all(regs.map(r=>r.unregister().catch(()=>{})))
+      }catch{}
+    }
+    // 3. Limpiar caches del SW
+    if('caches' in window){
+      try{
+        const keys=await caches.keys()
+        await Promise.all(keys.map(k=>caches.delete(k).catch(()=>{})))
+      }catch{}
+    }
+    // 4. SignOut con scope:local (NO requiere red, funciona con token expirado)
+    try{
+      await Promise.race([
+        supabase.auth.signOut({scope:'local'}).catch(()=>{}),
+        new Promise(resolve=>setTimeout(resolve,1500)),
+      ])
+    }catch{}
+    // 5. Redirect limpio + backup reload por si replace falla en PWA standalone
+    try{window.location.replace('/')}catch{window.location.href='/'}
+    setTimeout(()=>{try{window.location.reload()}catch{}},300)
+  }
 
   // ── Modules ───────────────────────────────────────────────────────────────
   // campMods removed — lazy rendering via renderModule()
