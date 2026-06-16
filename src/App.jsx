@@ -3241,32 +3241,39 @@ export default function App(){
 
     // ── Watchdog de sesión: detecta token muerto que onAuthStateChange no captura ──
     // Cubre el caso refresh_token 400 después de inactividad larga (PWA escritorio que queda abierta)
-    // ── Watchdog robusto contra falsos positivos ─────────────────────────────
-    // Resiste:
-    //  - focus/blur al abrir DevTools (Chrome dispara focus en main window)
-    //  - getSession() lento o transitorio (no desloguea por 1 fallo)
-    //  - Múltiples eventos en cascada (debounce 5s)
+    // ── Watchdog ultra-conservador contra falsos positivos ─────────────────
+    // Resistente a:
+    //  - Apertura de DevTools (sin focus listener)
+    //  - Cambio entre pestañas/ventanas (grace period)
+    //  - Errores transient de red (3 fallos consecutivos + sólo errores AUTH explícitos)
     let lastCheck=0
     let lastOkAt=Date.now()
     let consecutiveFails=0
-    const CHECK_DEBOUNCE=5000      // Mínimo 5s entre checks
-    const FOCUS_GRACE=15000        // 15s desde último OK → ignora focus events
-    const MAX_FAILS=2              // 2 fallos consecutivos antes de desloguear
+    const CHECK_DEBOUNCE=10000     // Mínimo 10s entre checks
+    const GRACE_PERIOD=30000       // 30s desde último OK → ignora visibility events
+    const MAX_FAILS=3              // 3 fallos consecutivos antes de desloguear
+
+    // Solo desloguear si el error es explícitamente de auth (no por timeout/red)
+    const isAuthError=(error)=>{
+      if(!error?.message)return false
+      const m=error.message.toLowerCase()
+      return m.includes('refresh')||m.includes('expired')||m.includes('invalid')||m.includes('jwt')||m.includes('unauthorized')
+    }
 
     const checkSession=async(source)=>{
       const now=Date.now()
       if(now-lastCheck<CHECK_DEBOUNCE)return
-      // Grace period: focus/visibility recientes a OK reciente → ignorar
-      if((source==='focus'||source==='visibility')&&now-lastOkAt<FOCUS_GRACE){
+      // Grace period: si recién verificamos OK, ignorar visibility events
+      if(source==='visibility'&&now-lastOkAt<GRACE_PERIOD){
         return
       }
       lastCheck=now
       try{
         const{data:{session},error}=await supabase.auth.getSession()
-        if(!session||error){
+        if(error&&isAuthError(error)){
+          // Error explícito de auth (token expirado) → ahora sí desloguear
           consecutiveFails++
-          console.warn(`[auth-watchdog:${source}] fallo ${consecutiveFails}/${MAX_FAILS}`,error?.message||'session null')
-          // Solo desloguear tras N fallos consecutivos (evita race conditions)
+          console.warn(`[auth-watchdog:${source}] auth error ${consecutiveFails}/${MAX_FAILS}:`,error.message)
           if(consecutiveFails>=MAX_FAILS){
             try{localStorage.clear();sessionStorage.clear()}catch{}
             if(window.location.pathname!=='/'){
@@ -3275,7 +3282,19 @@ export default function App(){
               setUser(null);setChecking(false)
             }
           }
+        }else if(!session){
+          // Session null pero sin error explícito → posible transient, contar pero NO desloguear todavía
+          consecutiveFails++
+          console.debug(`[auth-watchdog:${source}] session null ${consecutiveFails}/${MAX_FAILS}`)
+          // Solo desloguear si llevamos MUCHOS intentos seguidos sin sesión
+          if(consecutiveFails>=MAX_FAILS+2){
+            try{localStorage.clear();sessionStorage.clear()}catch{}
+            if(window.location.pathname!=='/'){window.location.replace('/')}
+            else{setUser(null);setChecking(false)}
+          }
         }else{
+          // Sesión OK
+          if(consecutiveFails>0)console.debug('[auth-watchdog] recuperado tras fallos')
           consecutiveFails=0
           lastOkAt=now
         }
@@ -3283,17 +3302,14 @@ export default function App(){
     }
     // Verificar cada 60s
     const watchdog=setInterval(()=>checkSession('interval'),60000)
-    // Verificar al volver al foreground (tabs visible, focus de ventana PWA)
+    // Verificar al volver al foreground (NO usamos focus listener: muy ruidoso con DevTools)
     const onVisibility=()=>{if(document.visibilityState==='visible')checkSession('visibility')}
-    const onFocus=()=>checkSession('focus')
     document.addEventListener('visibilitychange',onVisibility)
-    window.addEventListener('focus',onFocus)
 
     return()=>{
       subscription.unsubscribe()
       clearInterval(watchdog)
       document.removeEventListener('visibilitychange',onVisibility)
-      window.removeEventListener('focus',onFocus)
     }
   },[])
 
