@@ -3437,6 +3437,93 @@ export default function App(){
     }
   },[user?.id])
 
+  // ── Web Push Subscription ─────────────────────────────────────────────────
+  // Suscribe el dispositivo al servicio de push del navegador (FCM/Mozilla autopush)
+  // POST la subscription al endpoint para que el webhook de WhatsApp pueda enviarle push
+  // cuando la PWA está cerrada. Funciona en paralelo con el sistema local de realtime.
+  useEffect(()=>{
+    if(!user)return
+    if(!('serviceWorker' in navigator)||!('PushManager' in window))return
+    const VAPID_PUBLIC=import.meta.env.VITE_VAPID_PUBLIC_KEY
+    if(!VAPID_PUBLIC){console.warn('[push] VITE_VAPID_PUBLIC_KEY no configurada — saltando subscription');return}
+
+    // Helper: convertir base64url a Uint8Array (requerido por pushManager.subscribe)
+    const urlBase64ToUint8Array=(b64)=>{
+      const padding='='.repeat((4-b64.length%4)%4)
+      const base64=(b64+padding).replace(/-/g,'+').replace(/_/g,'/')
+      const raw=window.atob(base64)
+      const arr=new Uint8Array(raw.length)
+      for(let i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i)
+      return arr
+    }
+
+    let cancelled=false
+
+    const setupPush=async()=>{
+      try{
+        if(typeof Notification==='undefined')return
+        if(Notification.permission!=='granted'){
+          console.log('[push] permission no concedido aún:',Notification.permission)
+          return
+        }
+        const reg=await navigator.serviceWorker.ready
+        let sub=await reg.pushManager.getSubscription()
+        if(!sub){
+          sub=await reg.pushManager.subscribe({
+            userVisibleOnly:true,
+            applicationServerKey:urlBase64ToUint8Array(VAPID_PUBLIC),
+          })
+          console.log('[push] nueva subscription creada')
+        }
+        if(cancelled)return
+        const {data:{session}}=await supabase.auth.getSession()
+        if(!session?.access_token){console.warn('[push] sin access_token');return}
+        const SUPABASE_URL=import.meta.env.VITE_SUPABASE_URL||'https://ldlflxujrjihiybrcree.supabase.co'
+        const res=await fetch(`${SUPABASE_URL}/functions/v1/push_notifications_2026_02_27`,{
+          method:'POST',
+          headers:{
+            'Content-Type':'application/json',
+            'Authorization':`Bearer ${session.access_token}`,
+          },
+          body:JSON.stringify({action:'subscribe',subscription:sub.toJSON()}),
+        })
+        const result=await res.json()
+        if(result.success){console.log('[push] ✅ subscription registrada en servidor')}
+        else{console.warn('[push] error registrando subscription:',result)}
+      }catch(e){console.error('[push] setup error:',e)}
+    }
+
+    // Intentar inmediatamente si ya hay permission
+    setupPush()
+    // Reintentar cuando el usuario otorgue permission (después del primer click)
+    const retryTimer=setInterval(()=>{
+      if(cancelled){clearInterval(retryTimer);return}
+      if(typeof Notification!=='undefined'&&Notification.permission==='granted'){
+        setupPush()
+        clearInterval(retryTimer)
+      }
+    },3000)
+
+    // Escuchar mensajes del SW (click en notif → navegar al chat)
+    const onSWMessage=(e)=>{
+      if(e.data?.type==='NOTIFICATION_CLICK'&&e.data?.phone){
+        setModule('mensajes')
+        setWaNavPhone({phone:e.data.phone,name:''})
+      }
+      if(e.data?.type==='PUSH_SUBSCRIPTION_CHANGED'){
+        console.log('[push] subscription cambió, re-suscribiendo...')
+        setupPush()
+      }
+    }
+    navigator.serviceWorker.addEventListener('message',onSWMessage)
+
+    return()=>{
+      cancelled=true
+      clearInterval(retryTimer)
+      navigator.serviceWorker.removeEventListener('message',onSWMessage)
+    }
+  },[user?.id])
+
   // ── WA Assignments: load + realtime for notification filtering ────────────
   useEffect(()=>{
     if(!user)return
