@@ -3241,22 +3241,43 @@ export default function App(){
 
     // ── Watchdog de sesión: detecta token muerto que onAuthStateChange no captura ──
     // Cubre el caso refresh_token 400 después de inactividad larga (PWA escritorio que queda abierta)
+    // ── Watchdog robusto contra falsos positivos ─────────────────────────────
+    // Resiste:
+    //  - focus/blur al abrir DevTools (Chrome dispara focus en main window)
+    //  - getSession() lento o transitorio (no desloguea por 1 fallo)
+    //  - Múltiples eventos en cascada (debounce 5s)
     let lastCheck=0
+    let lastOkAt=Date.now()
+    let consecutiveFails=0
+    const CHECK_DEBOUNCE=5000      // Mínimo 5s entre checks
+    const FOCUS_GRACE=15000        // 15s desde último OK → ignora focus events
+    const MAX_FAILS=2              // 2 fallos consecutivos antes de desloguear
+
     const checkSession=async(source)=>{
       const now=Date.now()
-      if(now-lastCheck<5000)return // debounce 5s para no spammear getSession
+      if(now-lastCheck<CHECK_DEBOUNCE)return
+      // Grace period: focus/visibility recientes a OK reciente → ignorar
+      if((source==='focus'||source==='visibility')&&now-lastOkAt<FOCUS_GRACE){
+        return
+      }
       lastCheck=now
       try{
         const{data:{session},error}=await supabase.auth.getSession()
         if(!session||error){
-          console.warn(`[auth-watchdog:${source}] sin sesión activa`,error?.message||'')
-          try{localStorage.clear();sessionStorage.clear()}catch{}
-          if(window.location.pathname!=='/'){
-            window.location.replace('/')
-          }else{
-            // Ya estamos en login, solo asegurar que el state esté limpio
-            setUser(null);setChecking(false)
+          consecutiveFails++
+          console.warn(`[auth-watchdog:${source}] fallo ${consecutiveFails}/${MAX_FAILS}`,error?.message||'session null')
+          // Solo desloguear tras N fallos consecutivos (evita race conditions)
+          if(consecutiveFails>=MAX_FAILS){
+            try{localStorage.clear();sessionStorage.clear()}catch{}
+            if(window.location.pathname!=='/'){
+              window.location.replace('/')
+            }else{
+              setUser(null);setChecking(false)
+            }
           }
+        }else{
+          consecutiveFails=0
+          lastOkAt=now
         }
       }catch(e){console.error('[auth-watchdog] error:',e)}
     }
