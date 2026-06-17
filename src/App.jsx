@@ -142,6 +142,91 @@ function SHdr({title,sub,action}){
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
 
 // ─── WA TOAST ─────────────────────────────────────────────────────────────────
+// ─── BANNER DE PERMISO DE NOTIFICACIONES ──────────────────────────────────
+// Aparece flotante arriba cuando Notification.permission === 'default'
+// Permite al usuario activarlas con un click visible (no esperar a que clickee algo random)
+function NotifPermBanner({onGranted}){
+  const[show,setShow]=useState(false)
+  const[busy,setBusy]=useState(false)
+  const[dismissed,setDismissed]=useState(false)
+
+  useEffect(()=>{
+    if(typeof Notification==='undefined')return
+    // Solo mostrar si nunca se preguntó y no fue rechazado
+    if(Notification.permission==='default'){
+      // Esperar 2s tras login para no abrumar al usuario en el primer instante
+      const t=setTimeout(()=>{
+        if(!sessionStorage.getItem('notif_banner_dismissed'))setShow(true)
+      },2000)
+      return()=>clearTimeout(t)
+    }
+  },[])
+
+  const handleActivate=async()=>{
+    setBusy(true)
+    try{
+      const result=await Notification.requestPermission()
+      if(result==='granted'){
+        setShow(false)
+        if(onGranted)onGranted()
+      }else{
+        // denied o default → ocultar banner, no insistir más en esta sesión
+        sessionStorage.setItem('notif_banner_dismissed','1')
+        setShow(false)
+      }
+    }catch(e){
+      console.error('[notif-banner] error:',e)
+    }finally{
+      setBusy(false)
+    }
+  }
+
+  const handleDismiss=()=>{
+    sessionStorage.setItem('notif_banner_dismissed','1')
+    setShow(false)
+    setDismissed(true)
+  }
+
+  if(!show||dismissed)return null
+
+  return(
+    <div style={{
+      position:'fixed',top:20,left:'50%',transform:'translateX(-50%)',
+      maxWidth:520,width:'calc(100% - 40px)',
+      background:'linear-gradient(135deg, rgba(124,92,255,0.95), rgba(96,72,200,0.95))',
+      borderRadius:14,padding:'14px 18px',
+      boxShadow:'0 8px 28px rgba(124,92,255,0.4), 0 0 0 1px rgba(255,255,255,0.1) inset',
+      zIndex:99999,
+      display:'flex',alignItems:'center',gap:14,
+      animation:'slideDown 0.4s ease-out',
+      backdropFilter:'blur(12px)',
+    }}>
+      <div style={{fontSize:24,flexShrink:0}}>🔔</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:700,color:'#fff',marginBottom:2}}>
+          Activa las notificaciones del CRM
+        </div>
+        <div style={{fontSize:11,color:'rgba(255,255,255,0.85)',lineHeight:1.4}}>
+          Recibe alertas de WhatsApp incluso con la app cerrada
+        </div>
+      </div>
+      <button onClick={handleActivate} disabled={busy} style={{
+        background:'rgba(255,255,255,0.95)',color:'#5a3fd6',
+        border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,
+        fontWeight:700,cursor:busy?'wait':'pointer',whiteSpace:'nowrap',
+        flexShrink:0,
+      }}>
+        {busy?'…':'Activar'}
+      </button>
+      <button onClick={handleDismiss} disabled={busy} style={{
+        background:'transparent',color:'rgba(255,255,255,0.7)',
+        border:'none',cursor:'pointer',padding:4,fontSize:18,lineHeight:1,
+        flexShrink:0,
+      }} title="Recordar más tarde">×</button>
+    </div>
+  )
+}
+
 function WaToast({toast,onClose,onView}){
   return <div style={{background:'#1a1c2e',border:'1px solid rgba(0,208,132,0.3)',borderRadius:12,padding:'14px 16px',width:300,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',gap:10}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -3810,6 +3895,7 @@ export default function App(){
         onView={()=>{setModule('mensajes');setWaUnread(0);setWaNavPhone({phone:t.phone,name:t.name});setWaToasts(p=>p.filter(x=>x.id!==t.id))}}
       />)}
     </div>}
+    <NotifPermBanner onGranted={()=>console.log('[notif-banner] permission granted, push subscribe se activará automáticamente')}/>
   </div>
   </>
 }
