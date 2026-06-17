@@ -3331,9 +3331,13 @@ export default function App(){
     //  - Apertura de DevTools (sin focus listener)
     //  - Cambio entre pestañas/ventanas (grace period)
     //  - Errores transient de red (3 fallos consecutivos + sólo errores AUTH explícitos)
+    //  - Sesión aún no hidratada del localStorage al iniciar (INITIAL_GRACE 90s)
+    //  - Token en localStorage pero getSession devuelve null transient
     let lastCheck=0
     let lastOkAt=Date.now()
     let consecutiveFails=0
+    const startedAt=Date.now()
+    const INITIAL_GRACE=90000      // 90s de gracia inicial al montar la app
     const CHECK_DEBOUNCE=10000     // Mínimo 10s entre checks
     const GRACE_PERIOD=30000       // 30s desde último OK → ignora visibility events
     const MAX_FAILS=3              // 3 fallos consecutivos antes de desloguear
@@ -3345,8 +3349,23 @@ export default function App(){
       return m.includes('refresh')||m.includes('expired')||m.includes('invalid')||m.includes('jwt')||m.includes('unauthorized')
     }
 
+    // Verifica si HAY token en localStorage (aunque la session no esté hidratada aún)
+    const hasLocalToken=()=>{
+      try{
+        const SUPABASE_REF='ldlflxujrjihiybrcree'
+        const raw=localStorage.getItem(`sb-${SUPABASE_REF}-auth-token`)
+        if(!raw)return false
+        const parsed=JSON.parse(raw)
+        return !!(parsed?.access_token||parsed?.refresh_token)
+      }catch{return false}
+    }
+
     const checkSession=async(source)=>{
       const now=Date.now()
+      // Grace inicial al montar: no desloguear en los primeros 90s aunque session sea null
+      if(now-startedAt<INITIAL_GRACE){
+        return
+      }
       if(now-lastCheck<CHECK_DEBOUNCE)return
       // Grace period: si recién verificamos OK, ignorar visibility events
       if(source==='visibility'&&now-lastOkAt<GRACE_PERIOD){
@@ -3368,10 +3387,15 @@ export default function App(){
             }
           }
         }else if(!session){
-          // Session null pero sin error explícito → posible transient, contar pero NO desloguear todavía
+          // Session null sin error AUTH → verificar si localStorage TIENE token (es transient)
+          if(hasLocalToken()){
+            // localStorage tiene token → session se está re-hidratando, NO contar como fallo
+            console.debug(`[auth-watchdog:${source}] session null pero localStorage OK, ignorando`)
+            return
+          }
           consecutiveFails++
-          console.debug(`[auth-watchdog:${source}] session null ${consecutiveFails}/${MAX_FAILS}`)
-          // Solo desloguear si llevamos MUCHOS intentos seguidos sin sesión
+          console.debug(`[auth-watchdog:${source}] session null sin storage ${consecutiveFails}/${MAX_FAILS+2}`)
+          // Solo desloguear si MUCHOS intentos seguidos sin sesión Y sin storage
           if(consecutiveFails>=MAX_FAILS+2){
             try{localStorage.clear();sessionStorage.clear()}catch{}
             if(window.location.pathname!=='/'){window.location.replace('/')}
