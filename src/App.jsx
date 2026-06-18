@@ -289,10 +289,29 @@ function Login({onLogin}){
   const handleRecovery=async()=>{
     if(!recoveryEmail)return
     setRecoveryLoading(true);setRecoveryError('')
-    const{error:err}=await supabase.auth.resetPasswordForEmail(recoveryEmail,{redirectTo:'https://crm.pessaro.cl'})
-    setRecoveryLoading(false)
-    if(err){setRecoveryError(err.message);return}
-    setView('recovery_sent')
+    try{
+      const SUPABASE_URL=import.meta.env.VITE_SUPABASE_URL
+      const ANON_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY
+      const res=await fetch(`${SUPABASE_URL}/functions/v1/password_recovery_2026_06_18`,{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'Authorization':`Bearer ${ANON_KEY}`,
+        },
+        body:JSON.stringify({email:recoveryEmail.trim().toLowerCase()})
+      })
+      const data=await res.json().catch(()=>({}))
+      setRecoveryLoading(false)
+      if(!res.ok||!data?.success){
+        setRecoveryError(data?.error||'No se pudo enviar el correo. Intenta nuevamente.')
+        return
+      }
+      setView('recovery_sent')
+    }catch(e){
+      setRecoveryLoading(false)
+      setRecoveryError('Error de red. Verifica tu conexión.')
+      console.error('[recovery] error:',e)
+    }
   }
 
   const cssAnim=`
