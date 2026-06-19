@@ -3209,7 +3209,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
   // Load all staff profiles for assignment UI
   useEffect(()=>{
     ;(async()=>{
-      const{data}=await supabase.from('crm_staff_profiles').select('id,display_name,role').order('display_name')
+      const{data}=await supabase.from('crm_staff_profiles').select('id,user_id,display_name,role').order('display_name')
       setStaffList(data||[])
     })()
   },[])
@@ -3295,6 +3295,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
                 assignments={waAssignments}
                 staffList={staffList}
                 onAssign={handleAssign}
+                currentUserId={user?.id}
               />
             </div>
           )}
