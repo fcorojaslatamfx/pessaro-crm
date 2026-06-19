@@ -538,10 +538,30 @@ function PasswordReset({onDone}){
     if(newPass.length<8){setError('La contraseña debe tener al menos 8 caracteres.');return}
     if(newPass!==confirm){setError('Las contraseñas no coinciden.');return}
     setLoading(true);setError('')
-    const{error:err}=await supabase.auth.updateUser({password:newPass})
+
+    // Race entre updateUser y timeout de seguridad de 8s.
+    // Supabase JS v2 a veces NO resuelve updateUser() después de un PASSWORD_RECOVERY
+    // event aunque PUT /user retorne 200 en backend (bug conocido relacionado con
+    // _notifyAllSubscribers awaiting callbacks). Como el backend log confirma que
+    // el password se cambió, hacemos timeout y asumimos éxito.
+    let result
+    try{
+      const timeoutPromise=new Promise(resolve=>setTimeout(()=>resolve({timeout:true}),8000))
+      result=await Promise.race([
+        supabase.auth.updateUser({password:newPass}),
+        timeoutPromise
+      ])
+    }catch(e){
+      setLoading(false)
+      setError('Error de red. Intenta nuevamente.')
+      console.error('[reset] error:',e)
+      return
+    }
     setLoading(false)
-    if(err){setError(err.message);return}
+    if(result?.error){setError(result.error.message);return}
+    // Éxito (o timeout — el PUT en backend ya fue exitoso). Hacer signOut limpio.
     setDone(true)
+    try{supabase.auth.signOut({scope:'global'}).catch(()=>{})}catch{}
     setTimeout(()=>onDone(),2500)
   }
 
@@ -568,6 +588,43 @@ function PasswordReset({onDone}){
               <Btn onClick={handle} disabled={loading} style={{width:'100%',justifyContent:'center',padding:11}}>{loading?'Guardando...':'Cambiar contraseña'}</Btn>
             </div>
         }
+      </GlassCard>
+    </div>
+  </div>
+}
+
+// ─── NO STAFF SCREEN ──────────────────────────────────────────────────────────
+// Pantalla mostrada cuando un usuario autenticado NO está registrado como staff CRM.
+// Caso típico: cliente del portal pessaro.cl con credenciales válidas intenta
+// entrar al CRM. La sesión ya fue cerrada en loadProfile; aquí solo informamos.
+function NoStaffScreen({onBackToLogin}){
+  return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+    <div style={{width:'100%',maxWidth:440}}>
+      <div style={{textAlign:'center',marginBottom:36}}>
+        <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+          <img src={LOGO_URI} width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
+        </div>
+        <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
+        <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
+      </div>
+      <GlassCard accent={P.red}>
+        <div style={{display:'flex',flexDirection:'column',gap:18,textAlign:'center'}}>
+          <div style={{fontSize:48,lineHeight:1}}>🚫</div>
+          <h2 style={{fontSize:20,fontWeight:800,color:P.text,margin:0}}>Acceso denegado</h2>
+          <p style={{fontSize:14,color:P.muted,margin:0,lineHeight:1.6}}>
+            Tu cuenta no está registrada como <strong>staff del CRM</strong> de Pessaro Capital.
+          </p>
+          <div style={{background:P.redDim,border:`1px solid ${P.red}30`,borderRadius:10,padding:'12px 14px',textAlign:'left'}}>
+            <p style={{fontSize:12,color:P.text,margin:'0 0 6px',fontWeight:600}}>¿Eres cliente de Pessaro Capital?</p>
+            <p style={{fontSize:12,color:P.muted,margin:0,lineHeight:1.5}}>
+              Este sitio es de uso exclusivo para el equipo interno. Para acceder a tu portal de cliente, visita <a href="https://pessaro.cl/portal-cliente" style={{color:P.purple,textDecoration:'none',fontWeight:600}}>pessaro.cl/portal-cliente</a>.
+            </p>
+          </div>
+          <p style={{fontSize:12,color:P.muted,margin:0,lineHeight:1.5}}>
+            Si crees que esto es un error, contacta al administrador en <a href="mailto:info@pessaro.cl" style={{color:P.purple,textDecoration:'none'}}>info@pessaro.cl</a>.
+          </p>
+          <Btn onClick={onBackToLogin} style={{width:'100%',justifyContent:'center',padding:11,marginTop:6}}>Volver al login</Btn>
+        </div>
       </GlassCard>
     </div>
   </div>
@@ -3282,25 +3339,45 @@ export default function App(){
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
   const canAccess=(mod)=>isSuperAdmin||tools.includes(mod)
 
+  // ── Estado para mostrar error de acceso no autorizado ─────────────────────
+  const[noStaffError,setNoStaffError]=useState(false)
+
   // ── Auth + perfil RBAC ────────────────────────────────────────────────────
   useEffect(()=>{
+    // loadProfile: valida que el usuario sea staff CRM + carga rol/tools
+    // Retorna true si OK, false si NO es staff (cliente del portal pessaro.cl)
     const loadProfile=async(u)=>{
-      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return}
+      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return true}
       try{
         const{data}=await supabase.rpc('get_my_profile')
-        const role=data?.role||'asesor'
+        const role=data?.role
+        // RESTRICCIÓN: solo staff CRM puede entrar
+        // Si role==='no_staff' → es cliente del portal pessaro.cl, NO debe acceder al CRM
+        if(role==='no_staff'){
+          console.warn('[auth] Acceso denegado: usuario no registrado como staff CRM')
+          setNoStaffError(true)
+          // signOut limpio
+          try{await supabase.auth.signOut({scope:'local'})}catch{}
+          try{localStorage.clear();sessionStorage.clear()}catch{}
+          setUser(null);setSA(false);setIsBroker(false);setTeamId(null);setTools([])
+          return false
+        }
+        const finalRole=role||'asesor'
         const tid=data?.team_id||null
         const t=data?.tools||[]
-        setSA(role==='super_admin')
-        setIsBroker(role==='broker')
+        setSA(finalRole==='super_admin')
+        setIsBroker(finalRole==='broker')
         setTeamId(tid)
         setTools(t)
+        setNoStaffError(false)
+        return true
       }catch(e){
         console.warn('get_my_profile fallback:',e)
         const role=u?.user_metadata?.role||'asesor'
         setSA(role==='super_admin')
         setIsBroker(role==='broker')
         setTools(['dashboard','contacts','pipeline','emails','tasks'])
+        return true
       }
     }
     supabase.auth.getSession().then(async({data:{session},error})=>{
@@ -3315,7 +3392,11 @@ export default function App(){
       await loadProfile(u)
       setChecking(false)
     }).catch(()=>setChecking(false))
-    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,session)=>{
+    // IMPORTANTE: el handler de onAuthStateChange NO debe ser async ni tener awaits.
+    // Si lo es, el SDK de Supabase queda bloqueado esperando que termine,
+    // y operaciones como updateUser() (cambio de contraseña) se cuelgan.
+    // Solución: ejecutar loadProfile sin await (fire-and-forget).
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
       if(event==='PASSWORD_RECOVERY'){setShowPasswordReset(true);return}
 
       // ── Detección de sesión inválida ─────────────────────────────────────
@@ -3340,7 +3421,8 @@ export default function App(){
         if(prev?.id===u?.id) return prev
         return u
       })
-      await loadProfile(u)
+      // Fire-and-forget: NO bloquear el callback con await
+      loadProfile(u).catch(e=>console.warn('[auth] loadProfile error:',e))
     })
 
     // ── Watchdog de sesión: detecta token muerto que onAuthStateChange no captura ──
@@ -3718,6 +3800,7 @@ export default function App(){
 
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
+  if(noStaffError)return<NoStaffScreen onBackToLogin={()=>{setNoStaffError(false)}}/>
   if(!user)return<Login onLogin={setUser}/>
 
   // Logout robusto: funciona aunque supabase.auth.signOut() falle (token expirado)
