@@ -700,6 +700,9 @@ function Contacts({user,isSuperAdmin}){
   const[formErr,setFormErr]=useState({})
   const[saving,setSaving]=useState(false)
   const[csvRows,setCsvRows]=useState([])
+  const[csvNew,setCsvNew]=useState([])              // filas sin duplicado
+  const[csvDuplicates,setCsvDuplicates]=useState([])// {row, existing, decision: 'skip'|'update'|'duplicate'|null}
+  const[dupReviewIdx,setDupReviewIdx]=useState(-1)  // índice del duplicado en revisión (-1 = modal cerrado)
   const[csvErrors,setCsvErrors]=useState([])
   const[csvImporting,setCsvImporting]=useState(false)
   const[csvDone,setCsvDone]=useState(null)
@@ -803,25 +806,63 @@ function Contacts({user,isSuperAdmin}){
     }catch(e){console.error('updateStatus:',e)}
   }
 
+  // Parser mejorado: detecta separador automáticamente (coma, tab, punto y coma),
+  // soporta comillas dobles, columna 'notas' opcional. Acepta .csv y .txt
   const parseCSV=text=>{
-    const lines=text.trim().split('\n')
-    if(lines.length<2)return{rows:[],errors:['El CSV debe tener encabezado y al menos una fila']}
-    const headers=lines[0].split(",").map(h=>h.trim().toLowerCase().replace(/['"]/g,""))
+    const trimmed=text.trim()
+    if(!trimmed)return{rows:[],errors:['Archivo vacío']}
+    const lines=trimmed.split(/\r?\n/)
+    if(lines.length<2)return{rows:[],errors:['El archivo debe tener encabezado y al menos una fila']}
+    // Detectar separador por frecuencia en la primera línea
+    const firstLine=lines[0]
+    const seps=[
+      {sep:'\t',count:(firstLine.match(/\t/g)||[]).length},
+      {sep:',', count:(firstLine.match(/,/g)||[]).length},
+      {sep:';', count:(firstLine.match(/;/g)||[]).length},
+    ].sort((a,b)=>b.count-a.count)
+    const sep=seps[0].count>0?seps[0].sep:','
+    // Parsea una línea respetando comillas dobles (RFC 4180-ish)
+    const parseLine=line=>{
+      const out=[];let cur='';let q=false
+      for(let i=0;i<line.length;i++){
+        const c=line[i]
+        if(c==='"'){
+          if(q&&line[i+1]==='"'){cur+='"';i++}
+          else q=!q
+        }else if(c===sep&&!q){out.push(cur.trim());cur=''}
+        else cur+=c
+      }
+      out.push(cur.trim())
+      return out
+    }
+    const headers=parseLine(lines[0]).map(h=>h.toLowerCase().replace(/['"]/g,''))
     const ni=headers.findIndex(h=>/nombre|name|full_name/.test(h))
-    const ei=headers.findIndex(h=>/correo|email/.test(h))
-    const pi=headers.findIndex(h=>/tel|phone|movil|móvil/.test(h))
-    const ai=headers.findIndex(h=>/dir|address/.test(h))
+    const ei=headers.findIndex(h=>/correo|email|mail/.test(h))
+    const pi=headers.findIndex(h=>/tel|phone|movil|móvil|fono/.test(h))
+    const ai=headers.findIndex(h=>/dir|address|direccion|domicilio/.test(h))
+    const noi=headers.findIndex(h=>/nota|note|comentario|observ/.test(h))
     const errs=[]
     if(ni<0)errs.push('Columna "nombre" no encontrada')
     if(ei<0)errs.push('Columna "correo/email" no encontrada')
     if(pi<0)errs.push('Columna "telefono" no encontrada')
     if(errs.length)return{rows:[],errors:errs}
-    const rows=[];
+    const rows=[]
     lines.slice(1).forEach((line,i)=>{
-      const cols=line.split(',').map(c=>c.trim().replace(/^"|"$/g,''))
-      const n=cols[ni]||'',e=cols[ei]||'',p=cols[pi]||''
-      if(!n||!e||!p){errs.push(`Fila ${i+2}: faltan campos`);return}
-      rows.push({full_name:n,email:e,phone:p,address:ai>=0?cols[ai]||'':'',status:'activo',source:'csv'})
+      if(!line.trim())return // ignorar líneas vacías
+      const cols=parseLine(line)
+      const n=cols[ni]||''
+      const e=(cols[ei]||'').toLowerCase()
+      const p=cols[pi]||''
+      if(!n||!e||!p){errs.push(`Fila ${i+2}: faltan campos requeridos`);return}
+      rows.push({
+        full_name:n,
+        email:e,
+        phone:p,
+        address:ai>=0?(cols[ai]||''):'',
+        notes:noi>=0?(cols[noi]||''):'',
+        status:'activo',
+        source:'csv',
+      })
     })
     return{rows,errors:errs}
   }
@@ -830,18 +871,91 @@ function Contacts({user,isSuperAdmin}){
     if(!file)return
     const text=await file.text()
     const{rows,errors}=parseCSV(text)
-    setCsvRows(rows);setCsvErrors(errors);setCsvDone(null)
+    setCsvErrors(errors);setCsvDone(null)
+    if(!rows.length){setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1);return}
+    // Detectar duplicados por email contra crm_contacts del usuario
+    const emails=rows.map(r=>r.email)
+    const{data:existing}=await supabase
+      .from('crm_contacts')
+      .select('id,full_name,email,phone,address,notes,user_id')
+      .in('email',emails)
+      .eq('user_id',user.id)
+    const existingMap=new Map((existing||[]).map(c=>[(c.email||'').toLowerCase(),c]))
+    const newRows=[]
+    const dups=[]
+    for(const r of rows){
+      const ex=existingMap.get(r.email.toLowerCase())
+      if(ex)dups.push({row:r,existing:ex,decision:null})
+      else newRows.push(r)
+    }
+    setCsvRows(rows);setCsvNew(newRows);setCsvDuplicates(dups)
+    setDupReviewIdx(dups.length>0?0:-1)
+  }
+
+  // Aplica una decisión al duplicado en revisión y avanza al siguiente
+  const decideDup=(decision)=>{
+    setCsvDuplicates(prev=>{
+      const next=[...prev]
+      if(dupReviewIdx>=0&&dupReviewIdx<next.length){
+        next[dupReviewIdx]={...next[dupReviewIdx],decision}
+      }
+      return next
+    })
+    // Avanzar al siguiente pendiente
+    setDupReviewIdx(prev=>{
+      const next=prev+1
+      return next<csvDuplicates.length?next:-1
+    })
   }
 
   const importCSV=async()=>{
     if(!csvRows.length)return
-    setCsvImporting(true)
-    const{data,error}=await supabase.from('crm_contacts').insert(csvRows.map(r=>({...r,user_id:user.id}))).select()
-    setCsvImporting(false)
-    if(error){setCsvErrors([error.message]);return}
-    setContacts(p=>[...(data||[]),...p])
-    setCsvDone(`✓ ${data?.length||0} contactos importados`)
-    setCsvRows([]);setCsvErrors([])
+    // Verificar que todos los duplicados tengan decisión
+    const pending=csvDuplicates.filter(d=>!d.decision)
+    if(pending.length>0){
+      setCsvErrors([`Tienes ${pending.length} duplicado(s) pendiente(s) de revisar.`])
+      setDupReviewIdx(csvDuplicates.findIndex(d=>!d.decision))
+      return
+    }
+    setCsvImporting(true);setCsvErrors([])
+    let inserted=0,updated=0,skipped=0
+    const insertedRows=[]
+    try{
+      // 1) Insertar nuevos (sin duplicado) + los que el usuario marcó como duplicado-permitido
+      const toInsert=[
+        ...csvNew.map(r=>({...r,user_id:user.id})),
+        ...csvDuplicates.filter(d=>d.decision==='duplicate').map(d=>({...d.row,user_id:user.id})),
+      ]
+      if(toInsert.length){
+        const{data,error}=await supabase.from('crm_contacts').insert(toInsert).select()
+        if(error)throw error
+        inserted=data?.length||0
+        insertedRows.push(...(data||[]))
+      }
+      // 2) Actualizar duplicados con decision='update' — solo campos vacíos del existente (regla A)
+      const toUpdate=csvDuplicates.filter(d=>d.decision==='update')
+      for(const d of toUpdate){
+        const patch={}
+        if(!d.existing.full_name && d.row.full_name) patch.full_name=d.row.full_name
+        if(!d.existing.phone     && d.row.phone)     patch.phone=d.row.phone
+        if(!d.existing.address   && d.row.address)   patch.address=d.row.address
+        if(!d.existing.notes     && d.row.notes)     patch.notes=d.row.notes
+        if(Object.keys(patch).length===0)continue
+        const{error:e}=await supabase.from('crm_contacts').update(patch).eq('id',d.existing.id)
+        if(!e)updated++
+      }
+      // 3) Contar skipped
+      skipped=csvDuplicates.filter(d=>d.decision==='skip').length
+      // 4) Refrescar lista
+      if(insertedRows.length)setContacts(p=>[...insertedRows,...p])
+      if(updated>0)await load() // recargar para reflejar updates
+      setCsvDone(`✓ ${inserted} nuevos · ${updated} actualizados · ${skipped} omitidos`)
+      setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1)
+    }catch(e){
+      setCsvErrors([e.message||'Error al importar'])
+    }finally{
+      setCsvImporting(false)
+    }
   }
 
   const getAdvisorName=uid=>staffList.find(s=>s.user_id===uid)?.display_name||'Asesor'
@@ -892,29 +1006,115 @@ function Contacts({user,isSuperAdmin}){
     </GlassCard>}
 
     {tab==='csv'&&<GlassCard accent={P.blue} style={{marginBottom:20}}>
-      <p style={{fontWeight:700,color:P.text,marginBottom:6,margin:'0 0 6px'}}>Importar CSV</p>
-      <p style={{fontSize:12,color:P.muted,marginBottom:14,margin:'0 0 14px'}}>Columnas requeridas: <strong style={{color:P.text}}>nombre, correo, telefono</strong> · opcional: direccion</p>
-      <div style={{display:'flex',gap:10,marginBottom:14}}>
-        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion\nJuan García,juan@ejemplo.com,+56912345678,Av. Ejemplo 123');a.download='plantilla.csv';a.click()}}
+      <p style={{fontWeight:700,color:P.text,marginBottom:6,margin:'0 0 6px'}}>Importar contactos (CSV o TXT)</p>
+      <p style={{fontSize:12,color:P.muted,marginBottom:14,margin:'0 0 14px'}}>Columnas requeridas: <strong style={{color:P.text}}>nombre, correo, telefono</strong> · opcionales: <strong style={{color:P.text}}>direccion, notas</strong>. Separador detectado automáticamente (coma, tab, punto y coma).</p>
+      <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion,notas\nJuan García,juan@ejemplo.com,+56 9 1234 5678,Av. Ejemplo 123,Cliente referido\nMaría López,maria@ejemplo.com,+56 9 8765 4321,,Interesada en PAMM');a.download='plantilla_contactos.csv';a.click()}}
           style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla CSV</button>
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent('nombre\tcorreo\ttelefono\tdireccion\tnotas\nJuan García\tjuan@ejemplo.com\t+56 9 1234 5678\tAv. Ejemplo 123\tCliente referido\nMaría López\tmaria@ejemplo.com\t+56 9 8765 4321\t\tInteresada en PAMM');a.download='plantilla_contactos.txt';a.click()}}
+          style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla TXT</button>
       </div>
       <div onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)}
         onDrop={e=>{e.preventDefault();setDragOver(false);handleCSVFile(e.dataTransfer.files[0])}}
         style={{border:`2px dashed ${dragOver?P.blue:P.border}`,borderRadius:10,padding:'20px',textAlign:'center',background:dragOver?P.blueDim:'rgba(255,255,255,0.02)',cursor:'pointer',marginBottom:12}}
         onClick={()=>document.getElementById('csvInput').click()}>
-        <p style={{fontSize:14,color:P.textSub,margin:0}}>📂 Arrastra tu CSV o <span style={{color:P.blue,fontWeight:600}}>haz clic</span></p>
-        <input id="csvInput" type="file" accept=".csv" style={{display:'none'}} onChange={e=>handleCSVFile(e.target.files[0])}/>
+        <p style={{fontSize:14,color:P.textSub,margin:0}}>📂 Arrastra tu CSV o TXT, o <span style={{color:P.blue,fontWeight:600}}>haz clic</span></p>
+        <input id="csvInput" type="file" accept=".csv,.txt,text/csv,text/plain" style={{display:'none'}} onChange={e=>handleCSVFile(e.target.files[0])}/>
       </div>
       {csvErrors.length>0&&<div style={{marginBottom:10,padding:'10px',background:P.redDim,borderRadius:8}}>{csvErrors.map((e,i)=><p key={i} style={{fontSize:12,color:P.red,margin:'2px 0'}}>{e}</p>)}</div>}
       {csvRows.length>0&&<div>
-        <p style={{fontSize:12,color:P.muted,marginBottom:8,margin:'0 0 8px'}}>{csvRows.length} contactos listos</p>
+        {/* Resumen del análisis */}
+        <div style={{display:'flex',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:6,padding:'4px 10px'}}>Total leídos: <strong style={{color:P.text}}>{csvRows.length}</strong></span>
+          <span style={{fontSize:11,color:P.green,background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:6,padding:'4px 10px'}}>Nuevos: <strong>{csvNew.length}</strong></span>
+          {csvDuplicates.length>0&&(()=>{
+            const pendCount=csvDuplicates.filter(d=>!d.decision).length
+            return <span style={{fontSize:11,color:pendCount>0?P.orange:P.purple,background:pendCount>0?'rgba(253,150,68,0.10)':P.purpleDim,border:`1px solid ${pendCount>0?'rgba(253,150,68,0.30)':'rgba(108,92,231,0.30)'}`,borderRadius:6,padding:'4px 10px'}}>Duplicados: <strong>{csvDuplicates.length}</strong>{pendCount>0?` (${pendCount} sin revisar)`:''}</span>
+          })()}
+        </div>
+        {/* Botón para revisar duplicados pendientes */}
+        {csvDuplicates.filter(d=>!d.decision).length>0&&<div style={{marginBottom:10,padding:'10px 14px',background:'rgba(253,150,68,0.10)',border:`1px solid rgba(253,150,68,0.30)`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <p style={{fontSize:12,color:P.orange,margin:0,fontWeight:600}}>⚠ Hay {csvDuplicates.filter(d=>!d.decision).length} contacto(s) que ya existen. Revísalos uno a uno antes de importar.</p>
+          <Btn variant="ghost" onClick={()=>setDupReviewIdx(csvDuplicates.findIndex(d=>!d.decision))} style={{fontSize:12,padding:'6px 12px'}}>Revisar duplicados →</Btn>
+        </div>}
         {csvDone&&<div style={{marginBottom:10,padding:'8px 12px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}><p style={{fontSize:13,color:P.green,margin:0}}>{csvDone}</p></div>}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <Btn variant="ghost" onClick={()=>{setCsvRows([]);setCsvErrors([]);setCsvDone(null)}}>Cancelar</Btn>
-          <Btn variant="blue" onClick={importCSV} disabled={csvImporting}>{csvImporting?'Importando...':'Importar '+csvRows.length}</Btn>
+          <Btn variant="ghost" onClick={()=>{setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1);setCsvErrors([]);setCsvDone(null)}}>Cancelar</Btn>
+          <Btn variant="blue" onClick={importCSV} disabled={csvImporting||csvDuplicates.some(d=>!d.decision)}>{csvImporting?'Importando...':`Importar (${csvNew.length} nuevos + ${csvDuplicates.filter(d=>d.decision==='update').length} actualizar + ${csvDuplicates.filter(d=>d.decision==='duplicate').length} duplicar)`}</Btn>
         </div>
       </div>}
     </GlassCard>}
+
+    {/* Modal: revisión de duplicado por contacto */}
+    {dupReviewIdx>=0&&dupReviewIdx<csvDuplicates.length&&(()=>{
+      const d=csvDuplicates[dupReviewIdx]
+      const totalPending=csvDuplicates.filter(x=>!x.decision).length
+      const fields=[['full_name','Nombre'],['phone','Teléfono'],['address','Dirección'],['notes','Notas']]
+      return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1100,padding:20}}
+        onClick={()=>setDupReviewIdx(-1)}>
+        <div style={{background:'#1a1c2e',border:'1px solid rgba(255,255,255,0.10)',borderRadius:14,padding:22,width:'100%',maxWidth:640,maxHeight:'90vh',overflow:'auto',display:'flex',flexDirection:'column',gap:14}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+            <div>
+              <p style={{margin:0,fontSize:15,fontWeight:700,color:P.text}}>Duplicado detectado por email</p>
+              <p style={{margin:'2px 0 0',fontSize:11,color:P.muted}}>Revisando {dupReviewIdx+1} de {csvDuplicates.length} · {totalPending} pendiente(s)</p>
+            </div>
+            <button onClick={()=>setDupReviewIdx(-1)} style={{background:'none',border:'none',color:P.muted,fontSize:18,cursor:'pointer',lineHeight:1,padding:0}}>✕</button>
+          </div>
+          <div style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:10,padding:'10px 14px'}}>
+            <p style={{margin:0,fontSize:12,color:P.muted}}>Email:</p>
+            <p style={{margin:'2px 0 0',fontSize:14,color:P.text,fontWeight:600,fontFamily:'monospace'}}>{d.row.email}</p>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {/* Existente */}
+            <div style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,padding:14}}>
+              <p style={{margin:'0 0 10px',fontSize:11,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>📋 Existente</p>
+              {fields.map(([f,l])=>(
+                <div key={f} style={{marginBottom:8}}>
+                  <p style={{margin:0,fontSize:10,color:P.muted}}>{l}</p>
+                  <p style={{margin:'2px 0 0',fontSize:12,color:d.existing[f]?P.text:P.muted,fontStyle:d.existing[f]?'normal':'italic',wordBreak:'break-word'}}>{d.existing[f]||'(vacío)'}</p>
+                </div>
+              ))}
+            </div>
+            {/* Nuevo del CSV */}
+            <div style={{background:'rgba(108,92,231,0.08)',border:`1px solid rgba(108,92,231,0.25)`,borderRadius:10,padding:14}}>
+              <p style={{margin:'0 0 10px',fontSize:11,color:P.purple,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>📥 Nuevo (del archivo)</p>
+              {fields.map(([f,l])=>{
+                const willFill=d.existing && !d.existing[f] && d.row[f]
+                return <div key={f} style={{marginBottom:8}}>
+                  <p style={{margin:0,fontSize:10,color:P.muted}}>{l}</p>
+                  <p style={{margin:'2px 0 0',fontSize:12,color:d.row[f]?P.text:P.muted,fontStyle:d.row[f]?'normal':'italic',wordBreak:'break-word'}}>
+                    {d.row[f]||'(vacío)'}
+                    {willFill&&<span style={{marginLeft:6,fontSize:9,color:P.green,background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:4,padding:'1px 5px'}}>llenaría existente</span>}
+                  </p>
+                </div>
+              })}
+            </div>
+          </div>
+          <div style={{borderTop:`1px solid ${P.border}`,paddingTop:14,display:'flex',flexDirection:'column',gap:8}}>
+            <p style={{margin:'0 0 4px',fontSize:11,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>¿Qué hacemos con este duplicado?</p>
+            <Btn variant="ghost" onClick={()=>decideDup('skip')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.text,fontWeight:600}}>⊘ Omitir</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>No hacer nada con este contacto. El existente queda igual.</div>
+              </div>
+            </Btn>
+            <Btn variant="ghost" onClick={()=>decideDup('update')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.green,fontWeight:600}}>✏ Actualizar — solo campos vacíos del existente</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>Llenar los campos que están vacíos en el existente con los datos del archivo (no sobrescribe nada lleno).</div>
+              </div>
+            </Btn>
+            <Btn variant="ghost" onClick={()=>decideDup('duplicate')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.orange,fontWeight:600}}>+ Crear nuevo (permitir duplicado)</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>Insertar un nuevo contacto aunque ya exista uno con este email. No recomendado.</div>
+              </div>
+            </Btn>
+          </div>
+        </div>
+      </div>
+    })()}
 
     <div style={{display:'flex',gap:10,marginBottom:16}}>
       <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:300}}/>
@@ -3203,6 +3403,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
   const [selectedName, setSelectedName]   = useState(null)
   const [subTab, setSubTab]               = useState('chat')
   const [staffList, setStaffList]         = useState([])
+  const [myContacts, setMyContacts]       = useState([])  // contactos personales del usuario (para "Iniciar chat")
   const [mobileView, setMobileView]       = useState('inbox') // 'inbox' | 'chat'
   const isMob = useWindowSize() < 768
 
@@ -3213,6 +3414,20 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
       setStaffList(data||[])
     })()
   },[])
+
+  // Cargar contactos personales del usuario (para iniciar chats vía plantilla)
+  useEffect(()=>{
+    if(!user?.id)return
+    ;(async()=>{
+      const{data}=await supabase
+        .from('crm_contacts')
+        .select('id,full_name,phone,email')
+        .eq('user_id',user.id)
+        .not('phone','is',null)
+        .order('full_name')
+      setMyContacts(data||[])
+    })()
+  },[user?.id])
 
   useEffect(()=>{
     if(navPhone?.phone){
@@ -3276,6 +3491,8 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
                 staffProfile={staffProfile}
                 assignments={waAssignments}
                 staffList={staffList}
+                myContacts={myContacts}
+                currentUserId={user?.id}
               />
             </div>
           )}
