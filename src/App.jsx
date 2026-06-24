@@ -2755,23 +2755,23 @@ tr:last-child td{border-bottom:none}
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
-function Reports({contacts,leads}){
+function Reports({contacts,leads,isSuperAdmin}){
   const closed=leads.filter(l=>l.etapa===5).length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const capData=['1k-5k','5k-20k','20k-50k','50k+'].map(r=>({name:r,v:leads.filter(l=>l.investment_range===r).length}))
   const isMobR=useWindowSize()<768
   return <div>
-    <SHdr title="Reportes" sub="Analíticas en tiempo real"
+    <SHdr title="Reportes" sub={isSuperAdmin?'Analíticas en tiempo real':'Mis analíticas'}
       action={<div style={{display:'flex',gap:8}}>
         <Btn variant="ghost" onClick={()=>exportCSV(contacts,leads)} style={{fontSize:12}}>⬇ CSV</Btn>
         <Btn variant="ghost" onClick={()=>exportExcel(contacts,leads)} style={{fontSize:12}}>⬇ Excel</Btn>
         <Btn onClick={()=>openPDF(contacts,leads)} style={{fontSize:12,background:'linear-gradient(135deg,#0a1f5c,#2563eb)',color:'#fff',border:'none',boxShadow:'0 4px 14px rgba(37,99,235,.35)'}}>🖨 PDF corporativo</Btn>
       </div>}/>
     <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
-      <StatCard label="Formularios" value={contacts.length} accent={P.purple} Icon="📋"/>
+      <StatCard label={isSuperAdmin?'Formularios':'Mis contactos'} value={contacts.length} accent={P.purple} Icon="📋"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
-      <StatCard label="Leads totales" value={leads.length} accent={P.blue} Icon="◈"/>
+      <StatCard label={isSuperAdmin?'Leads totales':'Mis leads'} value={leads.length} accent={P.blue} Icon="◈"/>
       <StatCard label="Cerrados" value={closed} accent={P.orange} Icon="✓"/>
     </div>
     <div style={{display:'grid',gridTemplateColumns:isMobR?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
@@ -4275,19 +4275,29 @@ export default function App(){
       {/* Main content */}
       <div style={{flex:1,padding:isMobile?'16px':isTablet?'20px 24px':'28px 32px',overflowY:'auto',minHeight:0}}>
         <ErrorBoundary key={currentMod}>{(()=>{
+          // ── Filtro definitivo de leads por rol (imposible de evadir) ──
+          const myLeads=(()=>{
+            if(isSuperAdmin)return leads
+            const ep=(user?.email||'').split('@')[0].toLowerCase()
+            const rc=staffProfile?.referral_code||''
+            return leads.filter(l=>
+              (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(ep))
+              ||(rc&&l.advisor_referral_code&&l.advisor_referral_code===rc)
+            )
+          })()
           if(loading&&currentMod==='dashboard') return <Spinner/>
-          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
+          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
           if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
-          if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+          if(currentMod==='pipeline')  return <Pipeline leads={myLeads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={myLeads}/>
+          if(currentMod==='emails')    return <Emails contacts={contacts} leads={myLeads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='reports')   return <Reports contacts={contacts} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
-          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
+          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
-          return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
         })()}</ErrorBoundary>
       </div>
     </div>
