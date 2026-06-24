@@ -142,6 +142,91 @@ function SHdr({title,sub,action}){
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
 
 // ─── WA TOAST ─────────────────────────────────────────────────────────────────
+// ─── BANNER DE PERMISO DE NOTIFICACIONES ──────────────────────────────────
+// Aparece flotante arriba cuando Notification.permission === 'default'
+// Permite al usuario activarlas con un click visible (no esperar a que clickee algo random)
+function NotifPermBanner({onGranted}){
+  const[show,setShow]=useState(false)
+  const[busy,setBusy]=useState(false)
+  const[dismissed,setDismissed]=useState(false)
+
+  useEffect(()=>{
+    if(typeof Notification==='undefined')return
+    // Solo mostrar si nunca se preguntó y no fue rechazado
+    if(Notification.permission==='default'){
+      // Esperar 2s tras login para no abrumar al usuario en el primer instante
+      const t=setTimeout(()=>{
+        if(!sessionStorage.getItem('notif_banner_dismissed'))setShow(true)
+      },2000)
+      return()=>clearTimeout(t)
+    }
+  },[])
+
+  const handleActivate=async()=>{
+    setBusy(true)
+    try{
+      const result=await Notification.requestPermission()
+      if(result==='granted'){
+        setShow(false)
+        if(onGranted)onGranted()
+      }else{
+        // denied o default → ocultar banner, no insistir más en esta sesión
+        sessionStorage.setItem('notif_banner_dismissed','1')
+        setShow(false)
+      }
+    }catch(e){
+      console.error('[notif-banner] error:',e)
+    }finally{
+      setBusy(false)
+    }
+  }
+
+  const handleDismiss=()=>{
+    sessionStorage.setItem('notif_banner_dismissed','1')
+    setShow(false)
+    setDismissed(true)
+  }
+
+  if(!show||dismissed)return null
+
+  return(
+    <div style={{
+      position:'fixed',top:20,left:'50%',transform:'translateX(-50%)',
+      maxWidth:520,width:'calc(100% - 40px)',
+      background:'linear-gradient(135deg, rgba(124,92,255,0.95), rgba(96,72,200,0.95))',
+      borderRadius:14,padding:'14px 18px',
+      boxShadow:'0 8px 28px rgba(124,92,255,0.4), 0 0 0 1px rgba(255,255,255,0.1) inset',
+      zIndex:99999,
+      display:'flex',alignItems:'center',gap:14,
+      animation:'slideDown 0.4s ease-out',
+      backdropFilter:'blur(12px)',
+    }}>
+      <div style={{fontSize:24,flexShrink:0}}>🔔</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:700,color:'#fff',marginBottom:2}}>
+          Activa las notificaciones del CRM
+        </div>
+        <div style={{fontSize:11,color:'rgba(255,255,255,0.85)',lineHeight:1.4}}>
+          Recibe alertas de WhatsApp incluso con la app cerrada
+        </div>
+      </div>
+      <button onClick={handleActivate} disabled={busy} style={{
+        background:'rgba(255,255,255,0.95)',color:'#5a3fd6',
+        border:'none',borderRadius:8,padding:'8px 14px',fontSize:12,
+        fontWeight:700,cursor:busy?'wait':'pointer',whiteSpace:'nowrap',
+        flexShrink:0,
+      }}>
+        {busy?'…':'Activar'}
+      </button>
+      <button onClick={handleDismiss} disabled={busy} style={{
+        background:'transparent',color:'rgba(255,255,255,0.7)',
+        border:'none',cursor:'pointer',padding:4,fontSize:18,lineHeight:1,
+        flexShrink:0,
+      }} title="Recordar más tarde">×</button>
+    </div>
+  )
+}
+
 function WaToast({toast,onClose,onView}){
   return <div style={{background:'#1a1c2e',border:'1px solid rgba(0,208,132,0.3)',borderRadius:12,padding:'14px 16px',width:300,boxShadow:'0 8px 32px rgba(0,0,0,0.6)',display:'flex',flexDirection:'column',gap:10}}>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
@@ -204,10 +289,29 @@ function Login({onLogin}){
   const handleRecovery=async()=>{
     if(!recoveryEmail)return
     setRecoveryLoading(true);setRecoveryError('')
-    const{error:err}=await supabase.auth.resetPasswordForEmail(recoveryEmail,{redirectTo:'https://crm.pessaro.cl'})
-    setRecoveryLoading(false)
-    if(err){setRecoveryError(err.message);return}
-    setView('recovery_sent')
+    try{
+      const SUPABASE_URL=import.meta.env.VITE_SUPABASE_URL
+      const ANON_KEY=import.meta.env.VITE_SUPABASE_ANON_KEY
+      const res=await fetch(`${SUPABASE_URL}/functions/v1/password_recovery_2026_06_18`,{
+        method:'POST',
+        headers:{
+          'Content-Type':'application/json',
+          'Authorization':`Bearer ${ANON_KEY}`,
+        },
+        body:JSON.stringify({email:recoveryEmail.trim().toLowerCase()})
+      })
+      const data=await res.json().catch(()=>({}))
+      setRecoveryLoading(false)
+      if(!res.ok||!data?.success){
+        setRecoveryError(data?.error||'No se pudo enviar el correo. Intenta nuevamente.')
+        return
+      }
+      setView('recovery_sent')
+    }catch(e){
+      setRecoveryLoading(false)
+      setRecoveryError('Error de red. Verifica tu conexión.')
+      console.error('[recovery] error:',e)
+    }
   }
 
   const cssAnim=`
@@ -434,10 +538,30 @@ function PasswordReset({onDone}){
     if(newPass.length<8){setError('La contraseña debe tener al menos 8 caracteres.');return}
     if(newPass!==confirm){setError('Las contraseñas no coinciden.');return}
     setLoading(true);setError('')
-    const{error:err}=await supabase.auth.updateUser({password:newPass})
+
+    // Race entre updateUser y timeout de seguridad de 8s.
+    // Supabase JS v2 a veces NO resuelve updateUser() después de un PASSWORD_RECOVERY
+    // event aunque PUT /user retorne 200 en backend (bug conocido relacionado con
+    // _notifyAllSubscribers awaiting callbacks). Como el backend log confirma que
+    // el password se cambió, hacemos timeout y asumimos éxito.
+    let result
+    try{
+      const timeoutPromise=new Promise(resolve=>setTimeout(()=>resolve({timeout:true}),8000))
+      result=await Promise.race([
+        supabase.auth.updateUser({password:newPass}),
+        timeoutPromise
+      ])
+    }catch(e){
+      setLoading(false)
+      setError('Error de red. Intenta nuevamente.')
+      console.error('[reset] error:',e)
+      return
+    }
     setLoading(false)
-    if(err){setError(err.message);return}
+    if(result?.error){setError(result.error.message);return}
+    // Éxito (o timeout — el PUT en backend ya fue exitoso). Hacer signOut limpio.
     setDone(true)
+    try{supabase.auth.signOut({scope:'global'}).catch(()=>{})}catch{}
     setTimeout(()=>onDone(),2500)
   }
 
@@ -469,17 +593,58 @@ function PasswordReset({onDone}){
   </div>
 }
 
+// ─── NO STAFF SCREEN ──────────────────────────────────────────────────────────
+// Pantalla mostrada cuando un usuario autenticado NO está registrado como staff CRM.
+// Caso típico: cliente del portal pessaro.cl con credenciales válidas intenta
+// entrar al CRM. La sesión ya fue cerrada en loadProfile; aquí solo informamos.
+function NoStaffScreen({onBackToLogin}){
+  return <div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}>
+    <div style={{width:'100%',maxWidth:440}}>
+      <div style={{textAlign:'center',marginBottom:36}}>
+        <div style={{display:'flex',justifyContent:'center',marginBottom:16}}>
+          <img src={LOGO_URI} width={52} height={52} style={{borderRadius:10,display:'block'}} alt="Pessaro"/>
+        </div>
+        <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px'}}>Pessaro Capital</h1>
+        <p style={{color:P.purple,fontWeight:600,fontSize:14,letterSpacing:'0.08em',textTransform:'uppercase',margin:'0 0 6px'}}>CRM Interno</p>
+      </div>
+      <GlassCard accent={P.red}>
+        <div style={{display:'flex',flexDirection:'column',gap:18,textAlign:'center'}}>
+          <div style={{fontSize:48,lineHeight:1}}>🚫</div>
+          <h2 style={{fontSize:20,fontWeight:800,color:P.text,margin:0}}>Acceso denegado</h2>
+          <p style={{fontSize:14,color:P.muted,margin:0,lineHeight:1.6}}>
+            Tu cuenta no está registrada como <strong>staff del CRM</strong> de Pessaro Capital.
+          </p>
+          <div style={{background:P.redDim,border:`1px solid ${P.red}30`,borderRadius:10,padding:'12px 14px',textAlign:'left'}}>
+            <p style={{fontSize:12,color:P.text,margin:'0 0 6px',fontWeight:600}}>¿Eres cliente de Pessaro Capital?</p>
+            <p style={{fontSize:12,color:P.muted,margin:0,lineHeight:1.5}}>
+              Este sitio es de uso exclusivo para el equipo interno. Para acceder a tu portal de cliente, visita <a href="https://pessaro.cl/portal-cliente" style={{color:P.purple,textDecoration:'none',fontWeight:600}}>pessaro.cl/portal-cliente</a>.
+            </p>
+          </div>
+          <p style={{fontSize:12,color:P.muted,margin:0,lineHeight:1.5}}>
+            Si crees que esto es un error, contacta al administrador en <a href="mailto:info@pessaro.cl" style={{color:P.purple,textDecoration:'none'}}>info@pessaro.cl</a>.
+          </p>
+          <Btn onClick={onBackToLogin} style={{width:'100%',justifyContent:'center',padding:11,marginTop:6}}>Volver al login</Btn>
+        </div>
+      </GlassCard>
+    </div>
+  </div>
+}
+
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({contacts,leads,onNav}){
+function Dashboard({contacts,leads,onNav,isSuperAdmin}){
   const closed=leads.filter(l=>l.etapa===5).length
-  const newC=contacts.filter(c=>c.status==='new').length
-  const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital)||0),0)
+  const newC=isSuperAdmin?contacts.filter(c=>c.status==='new').length:0
+  const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const isMob=useWindowSize()<768
+  // Status breakdown adapts to SA (form statuses) vs asesor (contact statuses)
+  const statusRows=isSuperAdmin
+    ?[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados / Spam',P.muted]]
+    :[['activo','Activos',P.green],['prospecto','Prospectos',P.orange],['cliente','Clientes',P.purple],['inactivo','Inactivos',P.muted]]
   return <div>
     <SHdr title="Dashboard" sub="Datos en tiempo real desde Supabase"/>
     <div style={{display:'grid',gridTemplateColumns:isMob?'1fr 1fr':'repeat(4,1fr)',gap:14,marginBottom:22}}>
-      <StatCard label="Formularios" value={contacts.length} sub={newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'} accent={newC>0?P.orange:P.purple} Icon="📋"/>
+      <StatCard label={isSuperAdmin?'Formularios':'Mis contactos'} value={contacts.length} sub={isSuperAdmin?(newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'):(contacts.length>0?`${contacts.filter(c=>c.status==='activo').length} activos`:'Sin contactos')} accent={isSuperAdmin&&newC>0?P.orange:P.purple} Icon="📋"/>
       <StatCard label="Leads pipeline" value={leads.length} sub={`${closed} cerrados`} accent={P.blue} Icon="◈"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
@@ -492,8 +657,8 @@ function Dashboard({contacts,leads,onNav}){
         </ResponsiveContainer></ErrorBoundary>
       </GlassCard>
       <GlassCard>
-        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Estado formularios</p>
-        {[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados / Spam',P.muted]].map(([s,l,c])=>{
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>{isSuperAdmin?'Estado formularios':'Estado contactos'}</p>
+        {statusRows.map(([s,l,c])=>{
           const cnt=contacts.filter(x=>x.status===s).length
           return <div key={s} style={{marginBottom:12}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:13,color:P.textSub}}>{l}</span><span style={{fontSize:13,fontFamily:'monospace',color:c,fontWeight:600}}>{cnt}</span></div>
@@ -503,20 +668,20 @@ function Dashboard({contacts,leads,onNav}){
       </GlassCard>
     </div>
     <GlassCard>
-      <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Últimos formularios</p>
-      {contacts.filter(c=>c.status!=='archived').slice(0,6).map((c,i)=>(
+      <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>{isSuperAdmin?'Últimos formularios':'Mis contactos recientes'}</p>
+      {contacts.filter(c=>c.status!=='archived'&&c.status!=='inactivo').slice(0,6).map((c,i)=>(
         <div key={c.id} onClick={()=>onNav('contacts')} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<5?`1px solid ${P.border}`:'none',cursor:'pointer',borderRadius:6}} onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.03)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             <div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple}}>{(c.full_name||'?')[0]}</div>
             <div><p style={{fontSize:13,fontWeight:600,color:P.text,margin:0}}>{c.full_name}</p><p style={{fontSize:11,color:P.muted,margin:0}}>{c.email}</p></div>
           </div>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            {c.investment_capital>0&&<span style={{fontSize:12,fontFamily:'monospace',color:P.green}}>{fmt(c.investment_capital)}</span>}
-            <Badge label={c.status} color={STATUS_COLOR[c.status]||P.muted}/>
+            {(c.investment_capital||c._capital)>0&&<span style={{fontSize:12,fontFamily:'monospace',color:P.green}}>{fmt(c.investment_capital||c._capital)}</span>}
+            <Badge label={c.status} color={isSuperAdmin?(STATUS_COLOR[c.status]||P.muted):(SCOLOR_MAP[c.status]||P.muted)}/>
           </div>
         </div>
       ))}
-      {contacts.length===0&&<p style={{color:P.muted,fontSize:13,margin:0}}>Sin formularios aún</p>}
+      {contacts.length===0&&<p style={{color:P.muted,fontSize:13,margin:0}}>{isSuperAdmin?'Sin formularios aún':'Sin contactos aún'}</p>}
     </GlassCard>
   </div>
 }
@@ -539,6 +704,9 @@ function Contacts({user,isSuperAdmin}){
   const[formErr,setFormErr]=useState({})
   const[saving,setSaving]=useState(false)
   const[csvRows,setCsvRows]=useState([])
+  const[csvNew,setCsvNew]=useState([])              // filas sin duplicado
+  const[csvDuplicates,setCsvDuplicates]=useState([])// {row, existing, decision: 'skip'|'update'|'duplicate'|null}
+  const[dupReviewIdx,setDupReviewIdx]=useState(-1)  // índice del duplicado en revisión (-1 = modal cerrado)
   const[csvErrors,setCsvErrors]=useState([])
   const[csvImporting,setCsvImporting]=useState(false)
   const[csvDone,setCsvDone]=useState(null)
@@ -642,25 +810,63 @@ function Contacts({user,isSuperAdmin}){
     }catch(e){console.error('updateStatus:',e)}
   }
 
+  // Parser mejorado: detecta separador automáticamente (coma, tab, punto y coma),
+  // soporta comillas dobles, columna 'notas' opcional. Acepta .csv y .txt
   const parseCSV=text=>{
-    const lines=text.trim().split('\n')
-    if(lines.length<2)return{rows:[],errors:['El CSV debe tener encabezado y al menos una fila']}
-    const headers=lines[0].split(",").map(h=>h.trim().toLowerCase().replace(/['"]/g,""))
+    const trimmed=text.trim()
+    if(!trimmed)return{rows:[],errors:['Archivo vacío']}
+    const lines=trimmed.split(/\r?\n/)
+    if(lines.length<2)return{rows:[],errors:['El archivo debe tener encabezado y al menos una fila']}
+    // Detectar separador por frecuencia en la primera línea
+    const firstLine=lines[0]
+    const seps=[
+      {sep:'\t',count:(firstLine.match(/\t/g)||[]).length},
+      {sep:',', count:(firstLine.match(/,/g)||[]).length},
+      {sep:';', count:(firstLine.match(/;/g)||[]).length},
+    ].sort((a,b)=>b.count-a.count)
+    const sep=seps[0].count>0?seps[0].sep:','
+    // Parsea una línea respetando comillas dobles (RFC 4180-ish)
+    const parseLine=line=>{
+      const out=[];let cur='';let q=false
+      for(let i=0;i<line.length;i++){
+        const c=line[i]
+        if(c==='"'){
+          if(q&&line[i+1]==='"'){cur+='"';i++}
+          else q=!q
+        }else if(c===sep&&!q){out.push(cur.trim());cur=''}
+        else cur+=c
+      }
+      out.push(cur.trim())
+      return out
+    }
+    const headers=parseLine(lines[0]).map(h=>h.toLowerCase().replace(/['"]/g,''))
     const ni=headers.findIndex(h=>/nombre|name|full_name/.test(h))
-    const ei=headers.findIndex(h=>/correo|email/.test(h))
-    const pi=headers.findIndex(h=>/tel|phone|movil|móvil/.test(h))
-    const ai=headers.findIndex(h=>/dir|address/.test(h))
+    const ei=headers.findIndex(h=>/correo|email|mail/.test(h))
+    const pi=headers.findIndex(h=>/tel|phone|movil|móvil|fono/.test(h))
+    const ai=headers.findIndex(h=>/dir|address|direccion|domicilio/.test(h))
+    const noi=headers.findIndex(h=>/nota|note|comentario|observ/.test(h))
     const errs=[]
     if(ni<0)errs.push('Columna "nombre" no encontrada')
     if(ei<0)errs.push('Columna "correo/email" no encontrada')
     if(pi<0)errs.push('Columna "telefono" no encontrada')
     if(errs.length)return{rows:[],errors:errs}
-    const rows=[];
+    const rows=[]
     lines.slice(1).forEach((line,i)=>{
-      const cols=line.split(',').map(c=>c.trim().replace(/^"|"$/g,''))
-      const n=cols[ni]||'',e=cols[ei]||'',p=cols[pi]||''
-      if(!n||!e||!p){errs.push(`Fila ${i+2}: faltan campos`);return}
-      rows.push({full_name:n,email:e,phone:p,address:ai>=0?cols[ai]||'':'',status:'activo',source:'csv'})
+      if(!line.trim())return // ignorar líneas vacías
+      const cols=parseLine(line)
+      const n=cols[ni]||''
+      const e=(cols[ei]||'').toLowerCase()
+      const p=cols[pi]||''
+      if(!n||!e||!p){errs.push(`Fila ${i+2}: faltan campos requeridos`);return}
+      rows.push({
+        full_name:n,
+        email:e,
+        phone:p,
+        address:ai>=0?(cols[ai]||''):'',
+        notes:noi>=0?(cols[noi]||''):'',
+        status:'activo',
+        source:'csv',
+      })
     })
     return{rows,errors:errs}
   }
@@ -669,18 +875,91 @@ function Contacts({user,isSuperAdmin}){
     if(!file)return
     const text=await file.text()
     const{rows,errors}=parseCSV(text)
-    setCsvRows(rows);setCsvErrors(errors);setCsvDone(null)
+    setCsvErrors(errors);setCsvDone(null)
+    if(!rows.length){setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1);return}
+    // Detectar duplicados por email contra crm_contacts del usuario
+    const emails=rows.map(r=>r.email)
+    const{data:existing}=await supabase
+      .from('crm_contacts')
+      .select('id,full_name,email,phone,address,notes,user_id')
+      .in('email',emails)
+      .eq('user_id',user.id)
+    const existingMap=new Map((existing||[]).map(c=>[(c.email||'').toLowerCase(),c]))
+    const newRows=[]
+    const dups=[]
+    for(const r of rows){
+      const ex=existingMap.get(r.email.toLowerCase())
+      if(ex)dups.push({row:r,existing:ex,decision:null})
+      else newRows.push(r)
+    }
+    setCsvRows(rows);setCsvNew(newRows);setCsvDuplicates(dups)
+    setDupReviewIdx(dups.length>0?0:-1)
+  }
+
+  // Aplica una decisión al duplicado en revisión y avanza al siguiente
+  const decideDup=(decision)=>{
+    setCsvDuplicates(prev=>{
+      const next=[...prev]
+      if(dupReviewIdx>=0&&dupReviewIdx<next.length){
+        next[dupReviewIdx]={...next[dupReviewIdx],decision}
+      }
+      return next
+    })
+    // Avanzar al siguiente pendiente
+    setDupReviewIdx(prev=>{
+      const next=prev+1
+      return next<csvDuplicates.length?next:-1
+    })
   }
 
   const importCSV=async()=>{
     if(!csvRows.length)return
-    setCsvImporting(true)
-    const{data,error}=await supabase.from('crm_contacts').insert(csvRows.map(r=>({...r,user_id:user.id}))).select()
-    setCsvImporting(false)
-    if(error){setCsvErrors([error.message]);return}
-    setContacts(p=>[...(data||[]),...p])
-    setCsvDone(`✓ ${data?.length||0} contactos importados`)
-    setCsvRows([]);setCsvErrors([])
+    // Verificar que todos los duplicados tengan decisión
+    const pending=csvDuplicates.filter(d=>!d.decision)
+    if(pending.length>0){
+      setCsvErrors([`Tienes ${pending.length} duplicado(s) pendiente(s) de revisar.`])
+      setDupReviewIdx(csvDuplicates.findIndex(d=>!d.decision))
+      return
+    }
+    setCsvImporting(true);setCsvErrors([])
+    let inserted=0,updated=0,skipped=0
+    const insertedRows=[]
+    try{
+      // 1) Insertar nuevos (sin duplicado) + los que el usuario marcó como duplicado-permitido
+      const toInsert=[
+        ...csvNew.map(r=>({...r,user_id:user.id})),
+        ...csvDuplicates.filter(d=>d.decision==='duplicate').map(d=>({...d.row,user_id:user.id})),
+      ]
+      if(toInsert.length){
+        const{data,error}=await supabase.from('crm_contacts').insert(toInsert).select()
+        if(error)throw error
+        inserted=data?.length||0
+        insertedRows.push(...(data||[]))
+      }
+      // 2) Actualizar duplicados con decision='update' — solo campos vacíos del existente (regla A)
+      const toUpdate=csvDuplicates.filter(d=>d.decision==='update')
+      for(const d of toUpdate){
+        const patch={}
+        if(!d.existing.full_name && d.row.full_name) patch.full_name=d.row.full_name
+        if(!d.existing.phone     && d.row.phone)     patch.phone=d.row.phone
+        if(!d.existing.address   && d.row.address)   patch.address=d.row.address
+        if(!d.existing.notes     && d.row.notes)     patch.notes=d.row.notes
+        if(Object.keys(patch).length===0)continue
+        const{error:e}=await supabase.from('crm_contacts').update(patch).eq('id',d.existing.id)
+        if(!e)updated++
+      }
+      // 3) Contar skipped
+      skipped=csvDuplicates.filter(d=>d.decision==='skip').length
+      // 4) Refrescar lista
+      if(insertedRows.length)setContacts(p=>[...insertedRows,...p])
+      if(updated>0)await load() // recargar para reflejar updates
+      setCsvDone(`✓ ${inserted} nuevos · ${updated} actualizados · ${skipped} omitidos`)
+      setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1)
+    }catch(e){
+      setCsvErrors([e.message||'Error al importar'])
+    }finally{
+      setCsvImporting(false)
+    }
   }
 
   const getAdvisorName=uid=>staffList.find(s=>s.user_id===uid)?.display_name||'Asesor'
@@ -731,29 +1010,115 @@ function Contacts({user,isSuperAdmin}){
     </GlassCard>}
 
     {tab==='csv'&&<GlassCard accent={P.blue} style={{marginBottom:20}}>
-      <p style={{fontWeight:700,color:P.text,marginBottom:6,margin:'0 0 6px'}}>Importar CSV</p>
-      <p style={{fontSize:12,color:P.muted,marginBottom:14,margin:'0 0 14px'}}>Columnas requeridas: <strong style={{color:P.text}}>nombre, correo, telefono</strong> · opcional: direccion</p>
-      <div style={{display:'flex',gap:10,marginBottom:14}}>
-        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion\nJuan García,juan@ejemplo.com,+56912345678,Av. Ejemplo 123');a.download='plantilla.csv';a.click()}}
+      <p style={{fontWeight:700,color:P.text,marginBottom:6,margin:'0 0 6px'}}>Importar contactos (CSV o TXT)</p>
+      <p style={{fontSize:12,color:P.muted,marginBottom:14,margin:'0 0 14px'}}>Columnas requeridas: <strong style={{color:P.text}}>nombre, correo, telefono</strong> · opcionales: <strong style={{color:P.text}}>direccion, notas</strong>. Separador detectado automáticamente (coma, tab, punto y coma).</p>
+      <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion,notas\nJuan García,juan@ejemplo.com,+56 9 1234 5678,Av. Ejemplo 123,Cliente referido\nMaría López,maria@ejemplo.com,+56 9 8765 4321,,Interesada en PAMM');a.download='plantilla_contactos.csv';a.click()}}
           style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla CSV</button>
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent('nombre\tcorreo\ttelefono\tdireccion\tnotas\nJuan García\tjuan@ejemplo.com\t+56 9 1234 5678\tAv. Ejemplo 123\tCliente referido\nMaría López\tmaria@ejemplo.com\t+56 9 8765 4321\t\tInteresada en PAMM');a.download='plantilla_contactos.txt';a.click()}}
+          style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla TXT</button>
       </div>
       <div onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)}
         onDrop={e=>{e.preventDefault();setDragOver(false);handleCSVFile(e.dataTransfer.files[0])}}
         style={{border:`2px dashed ${dragOver?P.blue:P.border}`,borderRadius:10,padding:'20px',textAlign:'center',background:dragOver?P.blueDim:'rgba(255,255,255,0.02)',cursor:'pointer',marginBottom:12}}
         onClick={()=>document.getElementById('csvInput').click()}>
-        <p style={{fontSize:14,color:P.textSub,margin:0}}>📂 Arrastra tu CSV o <span style={{color:P.blue,fontWeight:600}}>haz clic</span></p>
-        <input id="csvInput" type="file" accept=".csv" style={{display:'none'}} onChange={e=>handleCSVFile(e.target.files[0])}/>
+        <p style={{fontSize:14,color:P.textSub,margin:0}}>📂 Arrastra tu CSV o TXT, o <span style={{color:P.blue,fontWeight:600}}>haz clic</span></p>
+        <input id="csvInput" type="file" accept=".csv,.txt,text/csv,text/plain" style={{display:'none'}} onChange={e=>handleCSVFile(e.target.files[0])}/>
       </div>
       {csvErrors.length>0&&<div style={{marginBottom:10,padding:'10px',background:P.redDim,borderRadius:8}}>{csvErrors.map((e,i)=><p key={i} style={{fontSize:12,color:P.red,margin:'2px 0'}}>{e}</p>)}</div>}
       {csvRows.length>0&&<div>
-        <p style={{fontSize:12,color:P.muted,marginBottom:8,margin:'0 0 8px'}}>{csvRows.length} contactos listos</p>
+        {/* Resumen del análisis */}
+        <div style={{display:'flex',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:11,color:P.muted,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:6,padding:'4px 10px'}}>Total leídos: <strong style={{color:P.text}}>{csvRows.length}</strong></span>
+          <span style={{fontSize:11,color:P.green,background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:6,padding:'4px 10px'}}>Nuevos: <strong>{csvNew.length}</strong></span>
+          {csvDuplicates.length>0&&(()=>{
+            const pendCount=csvDuplicates.filter(d=>!d.decision).length
+            return <span style={{fontSize:11,color:pendCount>0?P.orange:P.purple,background:pendCount>0?'rgba(253,150,68,0.10)':P.purpleDim,border:`1px solid ${pendCount>0?'rgba(253,150,68,0.30)':'rgba(108,92,231,0.30)'}`,borderRadius:6,padding:'4px 10px'}}>Duplicados: <strong>{csvDuplicates.length}</strong>{pendCount>0?` (${pendCount} sin revisar)`:''}</span>
+          })()}
+        </div>
+        {/* Botón para revisar duplicados pendientes */}
+        {csvDuplicates.filter(d=>!d.decision).length>0&&<div style={{marginBottom:10,padding:'10px 14px',background:'rgba(253,150,68,0.10)',border:`1px solid rgba(253,150,68,0.30)`,borderRadius:8,display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <p style={{fontSize:12,color:P.orange,margin:0,fontWeight:600}}>⚠ Hay {csvDuplicates.filter(d=>!d.decision).length} contacto(s) que ya existen. Revísalos uno a uno antes de importar.</p>
+          <Btn variant="ghost" onClick={()=>setDupReviewIdx(csvDuplicates.findIndex(d=>!d.decision))} style={{fontSize:12,padding:'6px 12px'}}>Revisar duplicados →</Btn>
+        </div>}
         {csvDone&&<div style={{marginBottom:10,padding:'8px 12px',background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:8}}><p style={{fontSize:13,color:P.green,margin:0}}>{csvDone}</p></div>}
         <div style={{display:'flex',gap:8,justifyContent:'flex-end'}}>
-          <Btn variant="ghost" onClick={()=>{setCsvRows([]);setCsvErrors([]);setCsvDone(null)}}>Cancelar</Btn>
-          <Btn variant="blue" onClick={importCSV} disabled={csvImporting}>{csvImporting?'Importando...':'Importar '+csvRows.length}</Btn>
+          <Btn variant="ghost" onClick={()=>{setCsvRows([]);setCsvNew([]);setCsvDuplicates([]);setDupReviewIdx(-1);setCsvErrors([]);setCsvDone(null)}}>Cancelar</Btn>
+          <Btn variant="blue" onClick={importCSV} disabled={csvImporting||csvDuplicates.some(d=>!d.decision)}>{csvImporting?'Importando...':`Importar (${csvNew.length} nuevos + ${csvDuplicates.filter(d=>d.decision==='update').length} actualizar + ${csvDuplicates.filter(d=>d.decision==='duplicate').length} duplicar)`}</Btn>
         </div>
       </div>}
     </GlassCard>}
+
+    {/* Modal: revisión de duplicado por contacto */}
+    {dupReviewIdx>=0&&dupReviewIdx<csvDuplicates.length&&(()=>{
+      const d=csvDuplicates[dupReviewIdx]
+      const totalPending=csvDuplicates.filter(x=>!x.decision).length
+      const fields=[['full_name','Nombre'],['phone','Teléfono'],['address','Dirección'],['notes','Notas']]
+      return <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.78)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1100,padding:20}}
+        onClick={()=>setDupReviewIdx(-1)}>
+        <div style={{background:'#1a1c2e',border:'1px solid rgba(255,255,255,0.10)',borderRadius:14,padding:22,width:'100%',maxWidth:640,maxHeight:'90vh',overflow:'auto',display:'flex',flexDirection:'column',gap:14}}
+          onClick={e=>e.stopPropagation()}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10}}>
+            <div>
+              <p style={{margin:0,fontSize:15,fontWeight:700,color:P.text}}>Duplicado detectado por email</p>
+              <p style={{margin:'2px 0 0',fontSize:11,color:P.muted}}>Revisando {dupReviewIdx+1} de {csvDuplicates.length} · {totalPending} pendiente(s)</p>
+            </div>
+            <button onClick={()=>setDupReviewIdx(-1)} style={{background:'none',border:'none',color:P.muted,fontSize:18,cursor:'pointer',lineHeight:1,padding:0}}>✕</button>
+          </div>
+          <div style={{background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,borderRadius:10,padding:'10px 14px'}}>
+            <p style={{margin:0,fontSize:12,color:P.muted}}>Email:</p>
+            <p style={{margin:'2px 0 0',fontSize:14,color:P.text,fontWeight:600,fontFamily:'monospace'}}>{d.row.email}</p>
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
+            {/* Existente */}
+            <div style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,padding:14}}>
+              <p style={{margin:'0 0 10px',fontSize:11,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>📋 Existente</p>
+              {fields.map(([f,l])=>(
+                <div key={f} style={{marginBottom:8}}>
+                  <p style={{margin:0,fontSize:10,color:P.muted}}>{l}</p>
+                  <p style={{margin:'2px 0 0',fontSize:12,color:d.existing[f]?P.text:P.muted,fontStyle:d.existing[f]?'normal':'italic',wordBreak:'break-word'}}>{d.existing[f]||'(vacío)'}</p>
+                </div>
+              ))}
+            </div>
+            {/* Nuevo del CSV */}
+            <div style={{background:'rgba(108,92,231,0.08)',border:`1px solid rgba(108,92,231,0.25)`,borderRadius:10,padding:14}}>
+              <p style={{margin:'0 0 10px',fontSize:11,color:P.purple,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>📥 Nuevo (del archivo)</p>
+              {fields.map(([f,l])=>{
+                const willFill=d.existing && !d.existing[f] && d.row[f]
+                return <div key={f} style={{marginBottom:8}}>
+                  <p style={{margin:0,fontSize:10,color:P.muted}}>{l}</p>
+                  <p style={{margin:'2px 0 0',fontSize:12,color:d.row[f]?P.text:P.muted,fontStyle:d.row[f]?'normal':'italic',wordBreak:'break-word'}}>
+                    {d.row[f]||'(vacío)'}
+                    {willFill&&<span style={{marginLeft:6,fontSize:9,color:P.green,background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:4,padding:'1px 5px'}}>llenaría existente</span>}
+                  </p>
+                </div>
+              })}
+            </div>
+          </div>
+          <div style={{borderTop:`1px solid ${P.border}`,paddingTop:14,display:'flex',flexDirection:'column',gap:8}}>
+            <p style={{margin:'0 0 4px',fontSize:11,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:600}}>¿Qué hacemos con este duplicado?</p>
+            <Btn variant="ghost" onClick={()=>decideDup('skip')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.text,fontWeight:600}}>⊘ Omitir</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>No hacer nada con este contacto. El existente queda igual.</div>
+              </div>
+            </Btn>
+            <Btn variant="ghost" onClick={()=>decideDup('update')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.green,fontWeight:600}}>✏ Actualizar — solo campos vacíos del existente</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>Llenar los campos que están vacíos en el existente con los datos del archivo (no sobrescribe nada lleno).</div>
+              </div>
+            </Btn>
+            <Btn variant="ghost" onClick={()=>decideDup('duplicate')} style={{justifyContent:'flex-start',padding:'10px 14px',textAlign:'left'}}>
+              <div>
+                <div style={{fontSize:13,color:P.orange,fontWeight:600}}>+ Crear nuevo (permitir duplicado)</div>
+                <div style={{fontSize:11,color:P.muted,marginTop:2}}>Insertar un nuevo contacto aunque ya exista uno con este email. No recomendado.</div>
+              </div>
+            </Btn>
+          </div>
+        </div>
+      </div>
+    })()}
 
     <div style={{display:'flex',gap:10,marginBottom:16}}>
       <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:300}}/>
@@ -1399,10 +1764,12 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
         {visibleCampaigns.map(c=>{
           const campVariants=getVariantsFor(c.id)
           const myVariants=campVariants.filter(v=>isMyVariant(v.id))
+          const activeMyVariants=myVariants.filter(v=>v.status==='activa')
           const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
           const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
           const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
-          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18,cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
+          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18}}>
+            <div style={{cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
               <div style={{flex:1}}>
                 <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,marginBottom:4,margin:'0 0 4px'}}>{c.status}</p>
@@ -1429,6 +1796,28 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
               ))}
               {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
             </div>
+            <p style={{fontSize:11,color:P.blue,margin:'12px 0 0',cursor:'pointer'}}>Ver detalle →</p>
+            </div>
+            {/* ── Referral links para asesores (acceso directo sin entrar al detalle) ── */}
+            {!isSuperAdmin&&myReferralCode&&activeMyVariants.length>0&&<div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+                <span style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>🔗 Mis links de referido</span>
+                <span style={{fontSize:10,color:P.purple,background:P.purpleDim,padding:'2px 6px',borderRadius:4,fontFamily:'monospace',fontWeight:700}}>{myReferralCode}</span>
+              </div>
+              {activeMyVariants.map(v=>{
+                const link=`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`
+                return <div key={v.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  <span style={{fontSize:11,fontWeight:600,color:v.color,minWidth:80}}>{v.label}</span>
+                  <code style={{flex:1,fontSize:10,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'4px 8px',borderRadius:4,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</code>
+                  <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(link).then(()=>{const btn=e.currentTarget;btn.textContent='✓ Copiado';btn.style.color=P.green;btn.style.borderColor=P.green+'40';setTimeout(()=>{btn.textContent='Copiar';btn.style.color=P.muted;btn.style.borderColor=P.border},1500)})}}
+                    style={{padding:'4px 10px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:5,fontSize:10,cursor:'pointer',flexShrink:0,fontWeight:600}}>
+                    Copiar
+                  </button>
+                </div>
+              })}
+            </div>}
+            {/* SA: indicador rápido de código de referido */}
+            {isSuperAdmin&&myReferralCode&&<div style={{marginTop:10,fontSize:10,color:P.muted}}>📋 Mi código: <span style={{color:P.purple,fontFamily:'monospace',fontWeight:600}}>{myReferralCode}</span></div>}
           </GlassCard>
         })}
       </div>
@@ -1896,10 +2285,15 @@ function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
 
   const loadHistory=useCallback(async()=>{
     setLoading(true)
-    try{const{data}=await supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(60);setEmails(data||[])}
+    try{
+      let q=supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(60)
+      if(!isSuperAdmin)q=q.eq('sent_by',user.id)
+      const{data}=await q
+      setEmails(data||[])
+    }
     catch(e){console.error(e)}
     finally{setLoading(false)}
-  },[])
+  },[isSuperAdmin,user.id])
   useEffect(()=>{loadHistory()},[loadHistory])
 
   const sc={sent:P.blue,delivered:P.blue,opened:P.green,clicked:P.green,bounced:P.red,complained:P.red,delayed:P.orange}
@@ -3042,16 +3436,31 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
   const [selectedName, setSelectedName]   = useState(null)
   const [subTab, setSubTab]               = useState('chat')
   const [staffList, setStaffList]         = useState([])
+  const [myContacts, setMyContacts]       = useState([])  // contactos personales del usuario (para "Iniciar chat")
   const [mobileView, setMobileView]       = useState('inbox') // 'inbox' | 'chat'
   const isMob = useWindowSize() < 768
 
   // Load all staff profiles for assignment UI
   useEffect(()=>{
     ;(async()=>{
-      const{data}=await supabase.from('crm_staff_profiles').select('id,display_name,role').order('display_name')
+      const{data}=await supabase.from('crm_staff_profiles').select('id,user_id,display_name,role').order('display_name')
       setStaffList(data||[])
     })()
   },[])
+
+  // Cargar contactos personales del usuario (para iniciar chats vía plantilla)
+  useEffect(()=>{
+    if(!user?.id)return
+    ;(async()=>{
+      const{data}=await supabase
+        .from('crm_contacts')
+        .select('id,full_name,phone,email')
+        .eq('user_id',user.id)
+        .not('phone','is',null)
+        .order('full_name')
+      setMyContacts(data||[])
+    })()
+  },[user?.id])
 
   useEffect(()=>{
     if(navPhone?.phone){
@@ -3115,6 +3524,8 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
                 staffProfile={staffProfile}
                 assignments={waAssignments}
                 staffList={staffList}
+                myContacts={myContacts}
+                currentUserId={user?.id}
               />
             </div>
           )}
@@ -3134,6 +3545,7 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
                 assignments={waAssignments}
                 staffList={staffList}
                 onAssign={handleAssign}
+                currentUserId={user?.id}
               />
             </div>
           )}
@@ -3178,25 +3590,45 @@ export default function App(){
   // canAccess: true si el módulo está en tools[] o el usuario es super_admin
   const canAccess=(mod)=>isSuperAdmin||tools.includes(mod)
 
+  // ── Estado para mostrar error de acceso no autorizado ─────────────────────
+  const[noStaffError,setNoStaffError]=useState(false)
+
   // ── Auth + perfil RBAC ────────────────────────────────────────────────────
   useEffect(()=>{
+    // loadProfile: valida que el usuario sea staff CRM + carga rol/tools
+    // Retorna true si OK, false si NO es staff (cliente del portal pessaro.cl)
     const loadProfile=async(u)=>{
-      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return}
+      if(!u){setSA(false);setIsBroker(false);setTeamId(null);setTools([]);return true}
       try{
         const{data}=await supabase.rpc('get_my_profile')
-        const role=data?.role||'asesor'
+        const role=data?.role
+        // RESTRICCIÓN: solo staff CRM puede entrar
+        // Si role==='no_staff' → es cliente del portal pessaro.cl, NO debe acceder al CRM
+        if(role==='no_staff'){
+          console.warn('[auth] Acceso denegado: usuario no registrado como staff CRM')
+          setNoStaffError(true)
+          // signOut limpio
+          try{await supabase.auth.signOut({scope:'local'})}catch{}
+          try{localStorage.clear();sessionStorage.clear()}catch{}
+          setUser(null);setSA(false);setIsBroker(false);setTeamId(null);setTools([])
+          return false
+        }
+        const finalRole=role||'asesor'
         const tid=data?.team_id||null
         const t=data?.tools||[]
-        setSA(role==='super_admin')
-        setIsBroker(role==='broker')
+        setSA(finalRole==='super_admin')
+        setIsBroker(finalRole==='broker')
         setTeamId(tid)
         setTools(t)
+        setNoStaffError(false)
+        return true
       }catch(e){
         console.warn('get_my_profile fallback:',e)
         const role=u?.user_metadata?.role||'asesor'
         setSA(role==='super_admin')
         setIsBroker(role==='broker')
         setTools(['dashboard','contacts','pipeline','emails','tasks'])
+        return true
       }
     }
     supabase.auth.getSession().then(async({data:{session},error})=>{
@@ -3211,7 +3643,11 @@ export default function App(){
       await loadProfile(u)
       setChecking(false)
     }).catch(()=>setChecking(false))
-    const{data:{subscription}}=supabase.auth.onAuthStateChange(async(event,session)=>{
+    // IMPORTANTE: el handler de onAuthStateChange NO debe ser async ni tener awaits.
+    // Si lo es, el SDK de Supabase queda bloqueado esperando que termine,
+    // y operaciones como updateUser() (cambio de contraseña) se cuelgan.
+    // Solución: ejecutar loadProfile sin await (fire-and-forget).
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((event,session)=>{
       if(event==='PASSWORD_RECOVERY'){setShowPasswordReset(true);return}
 
       // ── Detección de sesión inválida ─────────────────────────────────────
@@ -3236,37 +3672,64 @@ export default function App(){
         if(prev?.id===u?.id) return prev
         return u
       })
-      await loadProfile(u)
+      // Fire-and-forget: NO bloquear el callback con await
+      loadProfile(u).catch(e=>console.warn('[auth] loadProfile error:',e))
     })
 
     // ── Watchdog de sesión: detecta token muerto que onAuthStateChange no captura ──
     // Cubre el caso refresh_token 400 después de inactividad larga (PWA escritorio que queda abierta)
-    // ── Watchdog robusto contra falsos positivos ─────────────────────────────
-    // Resiste:
-    //  - focus/blur al abrir DevTools (Chrome dispara focus en main window)
-    //  - getSession() lento o transitorio (no desloguea por 1 fallo)
-    //  - Múltiples eventos en cascada (debounce 5s)
+    // ── Watchdog ultra-conservador contra falsos positivos ─────────────────
+    // Resistente a:
+    //  - Apertura de DevTools (sin focus listener)
+    //  - Cambio entre pestañas/ventanas (grace period)
+    //  - Errores transient de red (3 fallos consecutivos + sólo errores AUTH explícitos)
+    //  - Sesión aún no hidratada del localStorage al iniciar (INITIAL_GRACE 90s)
+    //  - Token en localStorage pero getSession devuelve null transient
     let lastCheck=0
     let lastOkAt=Date.now()
     let consecutiveFails=0
-    const CHECK_DEBOUNCE=5000      // Mínimo 5s entre checks
-    const FOCUS_GRACE=15000        // 15s desde último OK → ignora focus events
-    const MAX_FAILS=2              // 2 fallos consecutivos antes de desloguear
+    const startedAt=Date.now()
+    const INITIAL_GRACE=90000      // 90s de gracia inicial al montar la app
+    const CHECK_DEBOUNCE=10000     // Mínimo 10s entre checks
+    const GRACE_PERIOD=30000       // 30s desde último OK → ignora visibility events
+    const MAX_FAILS=3              // 3 fallos consecutivos antes de desloguear
+
+    // Solo desloguear si el error es explícitamente de auth (no por timeout/red)
+    const isAuthError=(error)=>{
+      if(!error?.message)return false
+      const m=error.message.toLowerCase()
+      return m.includes('refresh')||m.includes('expired')||m.includes('invalid')||m.includes('jwt')||m.includes('unauthorized')
+    }
+
+    // Verifica si HAY token en localStorage (aunque la session no esté hidratada aún)
+    const hasLocalToken=()=>{
+      try{
+        const SUPABASE_REF='ldlflxujrjihiybrcree'
+        const raw=localStorage.getItem(`sb-${SUPABASE_REF}-auth-token`)
+        if(!raw)return false
+        const parsed=JSON.parse(raw)
+        return !!(parsed?.access_token||parsed?.refresh_token)
+      }catch{return false}
+    }
 
     const checkSession=async(source)=>{
       const now=Date.now()
+      // Grace inicial al montar: no desloguear en los primeros 90s aunque session sea null
+      if(now-startedAt<INITIAL_GRACE){
+        return
+      }
       if(now-lastCheck<CHECK_DEBOUNCE)return
-      // Grace period: focus/visibility recientes a OK reciente → ignorar
-      if((source==='focus'||source==='visibility')&&now-lastOkAt<FOCUS_GRACE){
+      // Grace period: si recién verificamos OK, ignorar visibility events
+      if(source==='visibility'&&now-lastOkAt<GRACE_PERIOD){
         return
       }
       lastCheck=now
       try{
         const{data:{session},error}=await supabase.auth.getSession()
-        if(!session||error){
+        if(error&&isAuthError(error)){
+          // Error explícito de auth (token expirado) → ahora sí desloguear
           consecutiveFails++
-          console.warn(`[auth-watchdog:${source}] fallo ${consecutiveFails}/${MAX_FAILS}`,error?.message||'session null')
-          // Solo desloguear tras N fallos consecutivos (evita race conditions)
+          console.warn(`[auth-watchdog:${source}] auth error ${consecutiveFails}/${MAX_FAILS}:`,error.message)
           if(consecutiveFails>=MAX_FAILS){
             try{localStorage.clear();sessionStorage.clear()}catch{}
             if(window.location.pathname!=='/'){
@@ -3275,7 +3738,24 @@ export default function App(){
               setUser(null);setChecking(false)
             }
           }
+        }else if(!session){
+          // Session null sin error AUTH → verificar si localStorage TIENE token (es transient)
+          if(hasLocalToken()){
+            // localStorage tiene token → session se está re-hidratando, NO contar como fallo
+            console.debug(`[auth-watchdog:${source}] session null pero localStorage OK, ignorando`)
+            return
+          }
+          consecutiveFails++
+          console.debug(`[auth-watchdog:${source}] session null sin storage ${consecutiveFails}/${MAX_FAILS+2}`)
+          // Solo desloguear si MUCHOS intentos seguidos sin sesión Y sin storage
+          if(consecutiveFails>=MAX_FAILS+2){
+            try{localStorage.clear();sessionStorage.clear()}catch{}
+            if(window.location.pathname!=='/'){window.location.replace('/')}
+            else{setUser(null);setChecking(false)}
+          }
         }else{
+          // Sesión OK
+          if(consecutiveFails>0)console.debug('[auth-watchdog] recuperado tras fallos')
           consecutiveFails=0
           lastOkAt=now
         }
@@ -3283,17 +3763,14 @@ export default function App(){
     }
     // Verificar cada 60s
     const watchdog=setInterval(()=>checkSession('interval'),60000)
-    // Verificar al volver al foreground (tabs visible, focus de ventana PWA)
+    // Verificar al volver al foreground (NO usamos focus listener: muy ruidoso con DevTools)
     const onVisibility=()=>{if(document.visibilityState==='visible')checkSession('visibility')}
-    const onFocus=()=>checkSession('focus')
     document.addEventListener('visibilitychange',onVisibility)
-    window.addEventListener('focus',onFocus)
 
     return()=>{
       subscription.unsubscribe()
       clearInterval(watchdog)
       document.removeEventListener('visibilitychange',onVisibility)
-      window.removeEventListener('focus',onFocus)
     }
   },[])
 
@@ -3303,8 +3780,12 @@ export default function App(){
     const load=async()=>{
       setLoading(true)
       try{
+        // SA → contact_submissions (formularios web); asesor → crm_contacts (sus propios contactos)
+        const contactsQuery=isSuperAdmin
+          ?supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200)
+          :supabase.from('crm_contacts').select('id,full_name,email,phone,address,notes,status,source,created_at,user_id').eq('user_id',user.id).order('created_at',{ascending:false})
         const[r1,r2,r3,r4]=await Promise.all([
-          supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200),
+          contactsQuery,
           supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,campaign_id,advisor_referral_code').order('created_at',{ascending:false}),
           supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
@@ -3317,7 +3798,7 @@ export default function App(){
       finally{setLoading(false)}
     }
     load()
-  },[user?.id])
+  },[user?.id,isSuperAdmin])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -3574,6 +4055,7 @@ export default function App(){
 
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
+  if(noStaffError)return<NoStaffScreen onBackToLogin={()=>{setNoStaffError(false)}}/>
   if(!user)return<Login onLogin={setUser}/>
 
   // Logout robusto: funciona aunque supabase.auth.signOut() falle (token expirado)
@@ -3774,7 +4256,7 @@ export default function App(){
         <ErrorBoundary key={currentMod}>{(()=>{
           if(loading&&currentMod==='dashboard') return <Spinner/>
           if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
@@ -3794,6 +4276,7 @@ export default function App(){
         onView={()=>{setModule('mensajes');setWaUnread(0);setWaNavPhone({phone:t.phone,name:t.name});setWaToasts(p=>p.filter(x=>x.id!==t.id))}}
       />)}
     </div>}
+    <NotifPermBanner onGranted={()=>console.log('[notif-banner] permission granted, push subscribe se activará automáticamente')}/>
   </div>
   </>
 }
