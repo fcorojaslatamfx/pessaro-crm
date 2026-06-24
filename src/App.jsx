@@ -631,7 +631,16 @@ function NoStaffScreen({onBackToLogin}){
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({contacts,leads,onNav,isSuperAdmin}){
+function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile}){
+  // Asesor ve solo SUS leads (por advisor_assigned o por referral_code)
+  const leads=isSuperAdmin?allLeads:(()=>{
+    const emailPrefix=(user?.email||'').split('@')[0].toLowerCase()
+    const refCode=staffProfile?.referral_code||''
+    return allLeads.filter(l=>
+      (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(emailPrefix))
+      ||(refCode&&l.advisor_referral_code&&l.advisor_referral_code===refCode)
+    )
+  })()
   const closed=leads.filter(l=>l.etapa===5).length
   const newC=isSuperAdmin?contacts.filter(c=>c.status==='new').length:0
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
@@ -4256,7 +4265,7 @@ export default function App(){
         <ErrorBoundary key={currentMod}>{(()=>{
           if(loading&&currentMod==='dashboard') return <Spinner/>
           if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
           if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
