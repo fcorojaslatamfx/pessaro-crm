@@ -3800,8 +3800,20 @@ export default function App(){
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
         setContacts(r1.data||[])
-        setLeads(r2.data||[])
-        setSP(r3.data||null)
+        const allLeads=r2.data||[]
+        const sp=r3.data||null
+        // SA ve todos los leads; asesor ve solo SUS leads (por advisor_assigned o referral_code)
+        if(isSuperAdmin){
+          setLeads(allLeads)
+        }else{
+          const emailPrefix=(user.email||'').split('@')[0].toLowerCase()
+          const refCode=sp?.referral_code||''
+          setLeads(allLeads.filter(l=>
+            (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(emailPrefix))
+            ||(refCode&&l.advisor_referral_code&&l.advisor_referral_code===refCode)
+          ))
+        }
+        setSP(sp)
         setCampaigns(r4.data||[])
       }catch(e){console.error('data load:',e)}
       finally{setLoading(false)}
