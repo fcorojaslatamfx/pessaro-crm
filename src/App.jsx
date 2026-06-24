@@ -631,16 +631,29 @@ function NoStaffScreen({onBackToLogin}){
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
-function Dashboard({contacts,leads,onNav}){
+function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile}){
+  // Asesor ve solo SUS leads (por advisor_assigned o por referral_code)
+  const leads=isSuperAdmin?allLeads:(()=>{
+    const emailPrefix=(user?.email||'').split('@')[0].toLowerCase()
+    const refCode=staffProfile?.referral_code||''
+    return allLeads.filter(l=>
+      (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(emailPrefix))
+      ||(refCode&&l.advisor_referral_code&&l.advisor_referral_code===refCode)
+    )
+  })()
   const closed=leads.filter(l=>l.etapa===5).length
-  const newC=contacts.filter(c=>c.status==='new').length
-  const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital)||0),0)
+  const newC=isSuperAdmin?contacts.filter(c=>c.status==='new').length:0
+  const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const isMob=useWindowSize()<768
+  // Status breakdown adapts to SA (form statuses) vs asesor (contact statuses)
+  const statusRows=isSuperAdmin
+    ?[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados / Spam',P.muted]]
+    :[['activo','Activos',P.green],['prospecto','Prospectos',P.orange],['cliente','Clientes',P.purple],['inactivo','Inactivos',P.muted]]
   return <div>
     <SHdr title="Dashboard" sub="Datos en tiempo real desde Supabase"/>
     <div style={{display:'grid',gridTemplateColumns:isMob?'1fr 1fr':'repeat(4,1fr)',gap:14,marginBottom:22}}>
-      <StatCard label="Formularios" value={contacts.length} sub={newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'} accent={newC>0?P.orange:P.purple} Icon="📋"/>
+      <StatCard label={isSuperAdmin?'Formularios':'Mis contactos'} value={contacts.length} sub={isSuperAdmin?(newC>0?`${newC} sin leer`:contacts.length>0?'Todos leídos ✓':'Sin formularios'):(contacts.length>0?`${contacts.filter(c=>c.status==='activo').length} activos`:'Sin contactos')} accent={isSuperAdmin&&newC>0?P.orange:P.purple} Icon="📋"/>
       <StatCard label="Leads pipeline" value={leads.length} sub={`${closed} cerrados`} accent={P.blue} Icon="◈"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
@@ -653,8 +666,8 @@ function Dashboard({contacts,leads,onNav}){
         </ResponsiveContainer></ErrorBoundary>
       </GlassCard>
       <GlassCard>
-        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Estado formularios</p>
-        {[['new','Sin leer',P.orange],['read','Leídos',P.blue],['replied','Respondidos',P.green],['archived','Archivados / Spam',P.muted]].map(([s,l,c])=>{
+        <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>{isSuperAdmin?'Estado formularios':'Estado contactos'}</p>
+        {statusRows.map(([s,l,c])=>{
           const cnt=contacts.filter(x=>x.status===s).length
           return <div key={s} style={{marginBottom:12}}>
             <div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{fontSize:13,color:P.textSub}}>{l}</span><span style={{fontSize:13,fontFamily:'monospace',color:c,fontWeight:600}}>{cnt}</span></div>
@@ -664,20 +677,20 @@ function Dashboard({contacts,leads,onNav}){
       </GlassCard>
     </div>
     <GlassCard>
-      <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Últimos formularios</p>
-      {contacts.filter(c=>c.status!=='archived').slice(0,6).map((c,i)=>(
+      <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>{isSuperAdmin?'Últimos formularios':'Mis contactos recientes'}</p>
+      {contacts.filter(c=>c.status!=='archived'&&c.status!=='inactivo').slice(0,6).map((c,i)=>(
         <div key={c.id} onClick={()=>onNav('contacts')} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'10px 0',borderBottom:i<5?`1px solid ${P.border}`:'none',cursor:'pointer',borderRadius:6}} onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.03)'} onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
           <div style={{display:'flex',gap:10,alignItems:'center'}}>
             <div style={{width:30,height:30,borderRadius:8,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:12,fontWeight:700,color:P.purple}}>{(c.full_name||'?')[0]}</div>
             <div><p style={{fontSize:13,fontWeight:600,color:P.text,margin:0}}>{c.full_name}</p><p style={{fontSize:11,color:P.muted,margin:0}}>{c.email}</p></div>
           </div>
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
-            {c.investment_capital>0&&<span style={{fontSize:12,fontFamily:'monospace',color:P.green}}>{fmt(c.investment_capital)}</span>}
-            <Badge label={c.status} color={STATUS_COLOR[c.status]||P.muted}/>
+            {(c.investment_capital||c._capital)>0&&<span style={{fontSize:12,fontFamily:'monospace',color:P.green}}>{fmt(c.investment_capital||c._capital)}</span>}
+            <Badge label={c.status} color={isSuperAdmin?(STATUS_COLOR[c.status]||P.muted):(SCOLOR_MAP[c.status]||P.muted)}/>
           </div>
         </div>
       ))}
-      {contacts.length===0&&<p style={{color:P.muted,fontSize:13,margin:0}}>Sin formularios aún</p>}
+      {contacts.length===0&&<p style={{color:P.muted,fontSize:13,margin:0}}>{isSuperAdmin?'Sin formularios aún':'Sin contactos aún'}</p>}
     </GlassCard>
   </div>
 }
@@ -1760,10 +1773,12 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
         {visibleCampaigns.map(c=>{
           const campVariants=getVariantsFor(c.id)
           const myVariants=campVariants.filter(v=>isMyVariant(v.id))
+          const activeMyVariants=myVariants.filter(v=>v.status==='activa')
           const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
           const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
           const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
-          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18,cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
+          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18}}>
+            <div style={{cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
             <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
               <div style={{flex:1}}>
                 <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,marginBottom:4,margin:'0 0 4px'}}>{c.status}</p>
@@ -1790,6 +1805,28 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
               ))}
               {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
             </div>
+            <p style={{fontSize:11,color:P.blue,margin:'12px 0 0',cursor:'pointer'}}>Ver detalle →</p>
+            </div>
+            {/* ── Referral links para asesores (acceso directo sin entrar al detalle) ── */}
+            {!isSuperAdmin&&myReferralCode&&activeMyVariants.length>0&&<div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
+              <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+                <span style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>🔗 Mis links de referido</span>
+                <span style={{fontSize:10,color:P.purple,background:P.purpleDim,padding:'2px 6px',borderRadius:4,fontFamily:'monospace',fontWeight:700}}>{myReferralCode}</span>
+              </div>
+              {activeMyVariants.map(v=>{
+                const link=`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`
+                return <div key={v.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                  <span style={{fontSize:11,fontWeight:600,color:v.color,minWidth:80}}>{v.label}</span>
+                  <code style={{flex:1,fontSize:10,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'4px 8px',borderRadius:4,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</code>
+                  <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(link).then(()=>{const btn=e.currentTarget;btn.textContent='✓ Copiado';btn.style.color=P.green;btn.style.borderColor=P.green+'40';setTimeout(()=>{btn.textContent='Copiar';btn.style.color=P.muted;btn.style.borderColor=P.border},1500)})}}
+                    style={{padding:'4px 10px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:5,fontSize:10,cursor:'pointer',flexShrink:0,fontWeight:600}}>
+                    Copiar
+                  </button>
+                </div>
+              })}
+            </div>}
+            {/* SA: indicador rápido de código de referido */}
+            {isSuperAdmin&&myReferralCode&&<div style={{marginTop:10,fontSize:10,color:P.muted}}>📋 Mi código: <span style={{color:P.purple,fontFamily:'monospace',fontWeight:600}}>{myReferralCode}</span></div>}
           </GlassCard>
         })}
       </div>
@@ -2257,10 +2294,15 @@ function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
 
   const loadHistory=useCallback(async()=>{
     setLoading(true)
-    try{const{data}=await supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(60);setEmails(data||[])}
+    try{
+      let q=supabase.from('email_tracking').select('*').order('sent_at',{ascending:false}).limit(60)
+      if(!isSuperAdmin)q=q.eq('sent_by',user.id)
+      const{data}=await q
+      setEmails(data||[])
+    }
     catch(e){console.error(e)}
     finally{setLoading(false)}
-  },[])
+  },[isSuperAdmin,user.id])
   useEffect(()=>{loadHistory()},[loadHistory])
 
   const sc={sent:P.blue,delivered:P.blue,opened:P.green,clicked:P.green,bounced:P.red,complained:P.red,delayed:P.orange}
@@ -2713,23 +2755,23 @@ tr:last-child td{border-bottom:none}
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
-function Reports({contacts,leads}){
+function Reports({contacts,leads,isSuperAdmin}){
   const closed=leads.filter(l=>l.etapa===5).length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)
   const pipeData=STAGES.map(s=>({name:STAGE_LABEL[s],v:leads.filter(l=>ETAPA_STAGE[l.etapa]===s).length}))
   const capData=['1k-5k','5k-20k','20k-50k','50k+'].map(r=>({name:r,v:leads.filter(l=>l.investment_range===r).length}))
   const isMobR=useWindowSize()<768
   return <div>
-    <SHdr title="Reportes" sub="Analíticas en tiempo real"
+    <SHdr title="Reportes" sub={isSuperAdmin?'Analíticas en tiempo real':'Mis analíticas'}
       action={<div style={{display:'flex',gap:8}}>
         <Btn variant="ghost" onClick={()=>exportCSV(contacts,leads)} style={{fontSize:12}}>⬇ CSV</Btn>
         <Btn variant="ghost" onClick={()=>exportExcel(contacts,leads)} style={{fontSize:12}}>⬇ Excel</Btn>
         <Btn onClick={()=>openPDF(contacts,leads)} style={{fontSize:12,background:'linear-gradient(135deg,#0a1f5c,#2563eb)',color:'#fff',border:'none',boxShadow:'0 4px 14px rgba(37,99,235,.35)'}}>🖨 PDF corporativo</Btn>
       </div>}/>
     <div style={{display:'flex',gap:14,marginBottom:22,flexWrap:'wrap'}}>
-      <StatCard label="Formularios" value={contacts.length} accent={P.purple} Icon="📋"/>
+      <StatCard label={isSuperAdmin?'Formularios':'Mis contactos'} value={contacts.length} accent={P.purple} Icon="📋"/>
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
-      <StatCard label="Leads totales" value={leads.length} accent={P.blue} Icon="◈"/>
+      <StatCard label={isSuperAdmin?'Leads totales':'Mis leads'} value={leads.length} accent={P.blue} Icon="◈"/>
       <StatCard label="Cerrados" value={closed} accent={P.orange} Icon="✓"/>
     </div>
     <div style={{display:'grid',gridTemplateColumns:isMobR?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
@@ -3747,21 +3789,37 @@ export default function App(){
     const load=async()=>{
       setLoading(true)
       try{
+        // SA → contact_submissions (formularios web); asesor → crm_contacts (sus propios contactos)
+        const contactsQuery=isSuperAdmin
+          ?supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200)
+          :supabase.from('crm_contacts').select('id,full_name,email,phone,address,notes,status,source,created_at,user_id').eq('user_id',user.id).order('created_at',{ascending:false})
         const[r1,r2,r3,r4]=await Promise.all([
-          supabase.from('contact_submissions').select('id,full_name,email,mobile,investment_capital,management_type,comments,form_type,status,submitted_at').order('submitted_at',{ascending:false}).limit(200),
+          contactsQuery,
           supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,campaign_id,advisor_referral_code').order('created_at',{ascending:false}),
           supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
         setContacts(r1.data||[])
-        setLeads(r2.data||[])
-        setSP(r3.data||null)
+        const allLeads=r2.data||[]
+        const sp=r3.data||null
+        // SA ve todos los leads; asesor ve solo SUS leads (por advisor_assigned o referral_code)
+        if(isSuperAdmin){
+          setLeads(allLeads)
+        }else{
+          const emailPrefix=(user.email||'').split('@')[0].toLowerCase()
+          const refCode=sp?.referral_code||''
+          setLeads(allLeads.filter(l=>
+            (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(emailPrefix))
+            ||(refCode&&l.advisor_referral_code&&l.advisor_referral_code===refCode)
+          ))
+        }
+        setSP(sp)
         setCampaigns(r4.data||[])
       }catch(e){console.error('data load:',e)}
       finally{setLoading(false)}
     }
     load()
-  },[user?.id])
+  },[user?.id,isSuperAdmin])
 
   // ── CSS ───────────────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -4217,19 +4275,29 @@ export default function App(){
       {/* Main content */}
       <div style={{flex:1,padding:isMobile?'16px':isTablet?'20px 24px':'28px 32px',overflowY:'auto',minHeight:0}}>
         <ErrorBoundary key={currentMod}>{(()=>{
+          // ── Filtro definitivo de leads por rol (imposible de evadir) ──
+          const myLeads=(()=>{
+            if(isSuperAdmin)return leads
+            const ep=(user?.email||'').split('@')[0].toLowerCase()
+            const rc=staffProfile?.referral_code||''
+            return leads.filter(l=>
+              (l.advisor_assigned&&l.advisor_assigned.toLowerCase().includes(ep))
+              ||(rc&&l.advisor_referral_code&&l.advisor_referral_code===rc)
+            )
+          })()
           if(loading&&currentMod==='dashboard') return <Spinner/>
-          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={leads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
           if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='pipeline')  return <Pipeline leads={leads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={leads}/>
-          if(currentMod==='emails')    return <Emails contacts={contacts} leads={leads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
-          if(currentMod==='reports')   return <Reports contacts={contacts} leads={leads}/>
+          if(currentMod==='pipeline')  return <Pipeline leads={myLeads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={myLeads}/>
+          if(currentMod==='emails')    return <Emails contacts={contacts} leads={myLeads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='reports')   return <Reports contacts={contacts} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
-          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={leads} setGlobalLeads={setLeads}/>
+          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
-          return <Dashboard contacts={contacts} leads={leads} onNav={setModule}/>
+          return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
         })()}</ErrorBoundary>
       </div>
     </div>
