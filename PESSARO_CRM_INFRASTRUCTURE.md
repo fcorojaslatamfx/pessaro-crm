@@ -39,7 +39,11 @@
 - ✅ Emails: plantillas, seguimiento
 - ✅ Análisis: reportes, KPIs, previsiones
 - ✅ **Aislamiento de datos por rol** (2026-06-24): cada asesor ve solo SUS contactos, emails, leads y KPIs
-- 🔜 **WAFinance** — Chat en vivo integrado al CRM (próxima implementación)
+- 🔜 **WAFinance** — Chat en vivo integrado al CRM con:
+  - Formulario de registro + OTP email verification (5 min expiry)
+  - Lead auto-insertado en campaign_leads (advisor_referral_code)
+  - Botón "Invitar por WhatsApp" en CRM → abre wa.me con mensaje personalizado crm.pessaro.cl/chat/:referralCode
+  - Chat Realtime con Push Notifications al asesor
 
 ---
 
@@ -781,10 +785,11 @@ Roles:
    - Icono: Logo Pessaro encerrado en smartphone
    - Propósito: Chat en vivo sin depender de Meta, cada asesor comparte su link único
    - Ruta pública: `crm.pessaro.cl/chat/:referralCode`
+   - **🆕 Botón "Invitar por WhatsApp" en CRM**: abre wa.me con mensaje personalizado + link del chat
    - Stack: Supabase Realtime + React (PWA) + Push Notifications + OTP email verification
    - Tablas nuevas: `live_chat_sessions`, `live_chat_messages`, `live_chat_otp`
    - Edge Function nueva: `wafinance_otp` (genera/verifica OTP, crea sesión + lead)
-   - Esfuerzo estimado: ~12-15 horas
+   - Esfuerzo estimado: ~15-19 horas (incluye botón WhatsApp)
    - Implementación: Claude Code + Claude Design
    - Ver sección [WAFinance](#wafinance) para arquitectura completa
 
@@ -1094,12 +1099,14 @@ wafinance_otp (nueva, verify_jwt: false):
 
 ### Componentes a implementar
 ```
-1. Página pública:     crm.pessaro.cl/chat/:referralCode (formulario + OTP + chat)
-2. Edge Function OTP:  wafinance_otp (genera/verifica OTP, crea sesión + lead)
-3. Vista CRM:          Nueva pestaña "Chat en vivo" o tab en Mensajes WA
-4. Realtime:           Supabase Realtime subscriptions (ya existe infraestructura)
-5. Push notifications: Reutiliza push_notifications_2026_02_27 v22
-6. Email template OTP: Plantilla branded para código de verificación
+1. Página pública:              crm.pessaro.cl/chat/:referralCode (formulario + OTP + chat)
+2. Edge Function OTP:           wafinance_otp (genera/verifica OTP, crea sesión + lead)
+3. Vista CRM:                   Nueva pestaña "Chat en vivo" o tab en Mensajes WA
+4. Realtime:                    Supabase Realtime subscriptions (ya existe infraestructura)
+5. Push notifications:          Reutiliza push_notifications_2026_02_27 v22
+6. Email template OTP:          Plantilla branded para código de verificación
+7. 🆕 Botón invitación WA:      Modal en CRM con link único crm.pessaro.cl/chat/:referralCode
+                                → abre wa.me con mensaje pre-redactado personalizado
 ```
 
 ### Infraestructura reutilizable
@@ -1128,7 +1135,8 @@ Edge Function OTP + template email:   3-4h
 Página pública /chat/:code + OTP UI:  4-5h
 Vista CRM (inbox del asesor):         4-5h
 Push notifications al asesor:         1-2h
-Total:                                ~15-19h
+Botón "Invitar por WhatsApp" en CRM:  1-2h
+Total:                                ~15-21h
 ```
 
 ---
@@ -1142,7 +1150,7 @@ Total:                                ~15-19h
 | 2026-04-26 | 1.2 | Inbox manager, staff management |
 | 2026-06-18 | 1.3 | Password recovery, WhatsApp webhook v12 |
 | 2026-06-24 | 1.4 | Webhook v13 (media inbound), CSV/TXT con duplicados, start_chat, referral codes auto-gen |
-| 2026-06-24 | **1.5 (ACTUAL)** | ✅ Aislamiento datos por rol (email_tracking.sent_by, RLS contact_submissions, filtro leads en render), crm_send_email v19, campañas con links referido en tarjeta, Dashboard/Pipeline/Reports aislados. 🆕 Documentación WAFinance |
+| 2026-06-24 | **1.5 (ACTUAL)** | ✅ Aislamiento datos por rol (email_tracking.sent_by, RLS contact_submissions, filtro leads en render), crm_send_email v19, campañas con links referido en tarjeta, Dashboard/Pipeline/Reports aislados. 🆕 Documentación WAFinance con OTP + botón "Invitar por WhatsApp" en CRM |
 
 ---
 
