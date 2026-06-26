@@ -1,16 +1,26 @@
 import { useState, useEffect, useRef } from 'react'
-import { supabase } from '../lib/supabase'
+import { createClient } from '@supabase/supabase-js'
 
 const NAVY   = '#0a1628'
 const ACCENT = '#6c5ce7'
 const GOLD   = '#f0a500'
 const SUCCESS = '#10b981'
-const ERROR   = '#ef4444'
+const ERROR_C = '#ef4444'
+
+// Separate Supabase client for public chat - NO auth persistence
+// This prevents the CRM auth watchdog from redirecting visitors
+const chatSupabase = createClient(
+  import.meta.env.VITE_SUPABASE_URL,
+  import.meta.env.VITE_SUPABASE_ANON_KEY,
+  { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } }
+)
+
+const SESSION_KEY = 'waf_session'
 
 export default function WAFinanceChat() {
   const referralCode = window.location.pathname.split('/')[2] || ''
 
-  const [step, setStep]       = useState('form') // 'form' | 'otp' | 'chat'
+  const [step, setStep]       = useState('form')
   const [form, setForm]       = useState({ name: '', email: '', phone: '' })
   const [otpId, setOtpId]     = useState('')
   const [otp, setOtp]         = useState('')
@@ -19,9 +29,45 @@ export default function WAFinanceChat() {
   const [newMsg, setNewMsg]   = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
+  const [pwaPrompt, setPwaPrompt] = useState(null)
+  const [showPwaBanner, setShowPwaBanner] = useState(false)
   const bottomRef = useRef(null)
 
   const OTP_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/wafinance_otp`
+
+  // Restore session from sessionStorage on mount
+  useEffect(() => {
+    const saved = sessionStorage.getItem(SESSION_KEY)
+    if (saved) {
+      try {
+        const { sid, name } = JSON.parse(saved)
+        if (sid) {
+          setSessionId(sid)
+          setForm(p => ({ ...p, name: name || '' }))
+          setStep('chat')
+        }
+      } catch (_) { /* ignore */ }
+    }
+  }, [])
+
+  // PWA install prompt
+  useEffect(() => {
+    const handler = (e) => {
+      e.preventDefault()
+      setPwaPrompt(e)
+      setShowPwaBanner(true)
+    }
+    window.addEventListener('beforeinstallprompt', handler)
+    return () => window.removeEventListener('beforeinstallprompt', handler)
+  }, [])
+
+  async function installPWA() {
+    if (!pwaPrompt) return
+    pwaPrompt.prompt()
+    const result = await pwaPrompt.userChoice
+    if (result.outcome === 'accepted') setShowPwaBanner(false)
+    setPwaPrompt(null)
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -30,7 +76,7 @@ export default function WAFinanceChat() {
   useEffect(() => {
     if (!sessionId) return
     ;(async () => {
-      const { data } = await supabase
+      const { data } = await chatSupabase
         .from('live_chat_messages')
         .select('*')
         .eq('session_id', sessionId)
@@ -38,7 +84,7 @@ export default function WAFinanceChat() {
       setMessages(data || [])
     })()
 
-    const channel = supabase
+    const channel = chatSupabase
       .channel(`waf:${sessionId}`)
       .on('postgres_changes', {
         event: 'INSERT',
@@ -97,6 +143,7 @@ export default function WAFinanceChat() {
       const data = await res.json()
       if (!res.ok || !data.session_id) throw new Error(data.error || 'Código incorrecto')
       setSessionId(data.session_id)
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ sid: data.session_id, name: form.name }))
       setStep('chat')
     } catch (err) {
       setError(err.message)
@@ -110,7 +157,7 @@ export default function WAFinanceChat() {
     if (!newMsg.trim() || !sessionId) return
     const text = newMsg.trim()
     setNewMsg('')
-    const { error: insertError } = await supabase.from('live_chat_messages').insert({
+    const { error: insertError } = await chatSupabase.from('live_chat_messages').insert({
       session_id: sessionId,
       direction: 'inbound',
       content: text,
@@ -140,6 +187,20 @@ export default function WAFinanceChat() {
     <div style={{ position: 'fixed', inset: 0, background: NAVY, overflowY: 'auto', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
       <div style={{ maxWidth: 460, margin: '0 auto', padding: '40px 20px' }}>
 
+        {/* PWA Install Banner */}
+        {showPwaBanner && (
+          <div style={{ marginBottom: 16, padding: '12px 16px', borderRadius: 12, background: `${GOLD}22`, border: `1px solid ${GOLD}50`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+            <div>
+              <p style={{ fontSize: 13, fontWeight: 600, color: '#fff', margin: 0 }}>Instalar WAFinance</p>
+              <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.6)', margin: '2px 0 0' }}>Accede más rápido desde tu pantalla de inicio</p>
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <button onClick={installPWA} style={{ padding: '6px 14px', borderRadius: 8, background: GOLD, border: 'none', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>Instalar</button>
+              <button onClick={() => setShowPwaBanner(false)} style={{ padding: '6px 10px', borderRadius: 8, background: 'transparent', border: '1px solid rgba(255,255,255,0.2)', color: 'rgba(255,255,255,0.5)', fontSize: 12, cursor: 'pointer' }}>✕</button>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
           <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg,${ACCENT},${GOLD})`, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 26, marginBottom: 12 }}>
@@ -152,11 +213,9 @@ export default function WAFinanceChat() {
         {/* Card */}
         <div style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 20, padding: 28 }}>
 
-          {/* ── Step 1: Form ── */}
           {step === 'form' && (
-            <form onSubmit={submitForm}>
+            <div>
               <h2 style={{ fontSize: 15, fontWeight: 700, color: '#fff', margin: '0 0 18px' }}>Conectar con un asesor</h2>
-
               {[
                 ['name',  'Nombre completo',       'Juan García',       'text'],
                 ['email', 'Correo electrónico',     'juan@email.com',    'email'],
@@ -167,86 +226,56 @@ export default function WAFinanceChat() {
                     {label}
                   </label>
                   <input
-                    type={type}
-                    id={`waf-${field}`}
-                    name={field}
+                    type={type} id={`waf-${field}`} name={field}
                     value={form[field]}
                     onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
-                    placeholder={placeholder}
-                    required
-                    style={inputStyle}
+                    placeholder={placeholder} required style={inputStyle}
                   />
                 </div>
               ))}
-
               {error && (
-                <p style={{ fontSize: 12, color: ERROR, margin: '0 0 12px', background: `${ERROR}18`, border: `1px solid ${ERROR}30`, borderRadius: 8, padding: '8px 12px' }}>
-                  {error}
-                </p>
+                <p style={{ fontSize: 12, color: ERROR_C, margin: '0 0 12px', background: `${ERROR_C}18`, border: `1px solid ${ERROR_C}30`, borderRadius: 8, padding: '8px 12px' }}>{error}</p>
               )}
-
-              <button type="submit" disabled={loading} style={btnPrimary(loading)}>
+              <button type="button" onClick={submitForm} disabled={loading} style={btnPrimary(loading)}>
                 {loading ? 'Enviando...' : 'Recibir código →'}
               </button>
               <p style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', textAlign: 'center', margin: '12px 0 0' }}>
                 Te enviaremos un código de verificación por email
               </p>
-            </form>
+            </div>
           )}
 
-          {/* ── Step 2: OTP ── */}
           {step === 'otp' && (
-            <form onSubmit={verifyOtp}>
+            <div>
               <div style={{ textAlign: 'center', marginBottom: 20 }}>
                 <div style={{ fontSize: 32, marginBottom: 8 }}>📧</div>
                 <h2 style={{ fontSize: 15, fontWeight: 700, color: '#fff', margin: '0 0 8px' }}>Verifica tu email</h2>
                 <p style={{ fontSize: 13, color: 'rgba(255,255,255,0.5)', margin: 0, lineHeight: 1.5 }}>
-                  Código enviado a{' '}
-                  <strong style={{ color: 'rgba(255,255,255,0.85)' }}>{form.email}</strong>
+                  Código enviado a <strong style={{ color: 'rgba(255,255,255,0.85)' }}>{form.email}</strong>
                 </p>
               </div>
-
-              <input
-                type="text"
-                id="waf-otp"
-                name="otp"
-                value={otp}
+              <input type="text" id="waf-otp" name="otp" value={otp}
                 onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                placeholder="000000"
-                maxLength={6}
-                autoFocus
-                style={{
-                  ...inputStyle,
-                  fontSize: 28, fontWeight: 700, textAlign: 'center',
-                  letterSpacing: '0.5em', fontFamily: 'monospace',
-                  borderColor: otp.length === 6 ? ACCENT : 'rgba(255,255,255,0.12)',
-                  marginBottom: 14,
-                }}
+                placeholder="000000" maxLength={6} autoFocus
+                style={{ ...inputStyle, fontSize: 28, fontWeight: 700, textAlign: 'center', letterSpacing: '0.5em', fontFamily: 'monospace', borderColor: otp.length === 6 ? ACCENT : 'rgba(255,255,255,0.12)', marginBottom: 14 }}
               />
-
               {error && (
-                <p style={{ fontSize: 12, color: ERROR, margin: '0 0 12px', background: `${ERROR}18`, border: `1px solid ${ERROR}30`, borderRadius: 8, padding: '8px 12px' }}>
-                  {error}
-                </p>
+                <p style={{ fontSize: 12, color: ERROR_C, margin: '0 0 12px', background: `${ERROR_C}18`, border: `1px solid ${ERROR_C}30`, borderRadius: 8, padding: '8px 12px' }}>{error}</p>
               )}
-
-              <button type="submit" disabled={loading || otp.length !== 6} style={btnPrimary(loading || otp.length !== 6)}>
+              <button type="button" onClick={verifyOtp} disabled={loading || otp.length !== 6} style={btnPrimary(loading || otp.length !== 6)}>
                 {loading ? 'Verificando...' : 'Iniciar chat →'}
               </button>
               <button type="button" onClick={() => { setStep('form'); setOtp(''); setError('') }}
                 style={{ width: '100%', padding: '10px 0', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: 'rgba(255,255,255,0.5)', fontSize: 13, cursor: 'pointer', marginTop: 8, fontFamily: 'inherit' }}>
                 ← Volver
               </button>
-            </form>
+            </div>
           )}
 
-          {/* ── Step 3: Chat ── */}
           {step === 'chat' && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                <div style={{ width: 36, height: 36, borderRadius: 10, background: `${SUCCESS}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>
-                  💬
-                </div>
+                <div style={{ width: 36, height: 36, borderRadius: 10, background: `${SUCCESS}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>💬</div>
                 <div>
                   <p style={{ fontSize: 13, fontWeight: 700, color: '#fff', margin: 0 }}>Chat en vivo</p>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginTop: 2 }}>
@@ -270,14 +299,10 @@ export default function WAFinanceChat() {
                       <div style={{
                         maxWidth: '80%', padding: '10px 14px', lineHeight: 1.55, fontSize: 13, color: '#fff',
                         borderRadius: isVisitor ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                        background: isVisitor
-                          ? `linear-gradient(135deg,${ACCENT},${GOLD})`
-                          : 'rgba(255,255,255,0.1)',
+                        background: isVisitor ? `linear-gradient(135deg,${ACCENT},${GOLD})` : 'rgba(255,255,255,0.1)',
                       }}>
                         {!isVisitor && (
-                          <p style={{ fontSize: 10, fontWeight: 700, color: GOLD, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                            Asesor
-                          </p>
+                          <p style={{ fontSize: 10, fontWeight: 700, color: GOLD, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Asesor</p>
                         )}
                         {m.content}
                       </div>
@@ -287,20 +312,17 @@ export default function WAFinanceChat() {
                 <div ref={bottomRef} />
               </div>
 
-              <form onSubmit={sendMessage} style={{ display: 'flex', gap: 8 }}>
-                <input
-                  type="text"
-                  id="waf-message"
-                  name="message"
-                  value={newMsg}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input type="text" id="waf-message" name="message" value={newMsg}
                   onChange={e => setNewMsg(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(e) } }}
                   placeholder="Escribe un mensaje..."
                   style={{ flex: 1, padding: '11px 14px', borderRadius: 12, background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', color: '#fff', fontSize: 13, outline: 'none', fontFamily: 'inherit' }}
                 />
-                <button type="submit" disabled={!newMsg.trim()} style={{ padding: '11px 18px', borderRadius: 12, background: `linear-gradient(135deg,${ACCENT},${GOLD})`, border: 'none', color: '#fff', fontSize: 18, cursor: newMsg.trim() ? 'pointer' : 'not-allowed', opacity: newMsg.trim() ? 1 : 0.5 }}>
+                <button type="button" onClick={sendMessage} disabled={!newMsg.trim()} style={{ padding: '11px 18px', borderRadius: 12, background: `linear-gradient(135deg,${ACCENT},${GOLD})`, border: 'none', color: '#fff', fontSize: 18, cursor: newMsg.trim() ? 'pointer' : 'not-allowed', opacity: newMsg.trim() ? 1 : 0.5 }}>
                   ➤
                 </button>
-              </form>
+              </div>
             </div>
           )}
         </div>
