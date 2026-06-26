@@ -998,6 +998,49 @@ Responsabilidades:     Git, Vercel, Supabase, comunicación con Meta/Resend
 
 ---
 
+---
+
+## 🏗️ Estrategia de arquitectura: Híbrido Supabase + LLM (vs Rocket.Chat / MoneyChat)
+
+### ¿Por qué NO replicamos Rocket.Chat?
+
+Rocket.Chat es una plataforma empresarial robusta con arquitectura de microservicios, compliance GDPR/HIPAA/FINRA y marketplace de 180+ integraciones, pero:
+- **Overhead innecesario**: +180KB bundle, MongoDB + Redis vs tu Supabase
+- **Overkill**: canales, threads, call center, video conferencing → features que WAFinance no necesita
+- **Stack incompatible**: Meteor + TypeScript vs tu React + Supabase
+
+**Conclusión:** Para chat 1-a-1 simple, Rocket.Chat es 10x más complejo de lo requerido.
+
+---
+
+### ¿Por qué NO usamos MoneyChat?
+
+MoneyChat es un chatbot LLM (GPT-4) para gestionar dinero: conecta APIs bancarias (Chase, BoA), analiza transacciones, genera budgets automáticos, pero:
+- **No es chat en vivo real-time**: es chatbot conversacional, no mensajería sincrónica
+- **Stack Python**: incompatible con tu Supabase/React
+- **Standalone**: no integrado a CRM, sin RLS, sin roles/permisos
+- **Enfoque personal finance**: no asesoría profesional
+
+**Conclusión:** MoneyChat enseña **conceptos de contexto IA** que sí usaremos (LLM + datos financieros), pero no la base técnica.
+
+---
+
+### ✅ Enfoque elegido: Híbrido Supabase + LLM
+
+**Lo mejor de ambos mundos:**
+
+| Aspecto | Rocket.Chat | MoneyChat | **WAFinance (elegido)** |
+|---------|-------------|-----------|------------------------|
+| Realtime | ✅ Websocket | ❌ HTTP polling | ✅ Supabase Realtime |
+| LLM Context | ❌ No | ✅ GPT-4 | ✅ Claude API |
+| Chat 1-a-1 | ✅ (+ overkill) | ❌ | ✅ Minimalista |
+| RLS / Roles | ✅ 180+ permisos | ❌ | ✅ Postgres RLS |
+| Stack compatible | ❌ Meteor | ❌ Python | ✅ Supabase/React |
+| Banco integrado | ❌ | ✅ Chase/BoA | ✅ Plaid (Fase 2) |
+| Costo operacional | 💰💰💰 | 💰 LLM | 💰 Supabase + Claude |
+
+---
+
 ## 📱 WAFinance — Chat en vivo (próxima implementación)
 
 ### Concepto
@@ -1012,7 +1055,7 @@ Tipografía: Inter (misma del CRM)
 Dominio:   crm.pessaro.cl/chat/:referralCode
 ```
 
-### Arquitectura con verificación OTP
+### Arquitectura con verificación OTP + LLM Asesor
 ```
 Visitante abre crm.pessaro.cl/chat/ALE7P
                 ↓
@@ -1027,9 +1070,15 @@ Visitante ingresa código → verificación <5 min (expira)
 ✅ Verificado:
 ├─ Se crea live_chat_session
 ├─ Se inserta lead en campaign_leads (advisor_referral_code = código del asesor)
+├─ Capa IA (nuevo): Edge Function wafinance_advisor
+│  ├─ Captura contexto: perfil inversión, capital, tolerancia riesgo
+│  ├─ Cada mensaje → Claude API con contexto del lead
+│  └─ Asesor ve sugerencias IA + recomendaciones
 └─ Chat en vivo activo via Supabase Realtime
                 ↓
 Asesor recibe push notification → responde desde el CRM
+                ↓
+Opcional (Fase 2): Lead conecta su banco (Plaid) → análisis automático
 ```
 
 ### Tablas requeridas
@@ -1066,10 +1115,22 @@ live_chat_otp:
 ├─ expires_at (TIMESTAMPTZ, created_at + 5 min)
 └─ created_at (TIMESTAMPTZ DEFAULT now())
 
+lead_advisor_context: (NUEVO — para LLM asesor)
+├─ id (UUID PK)
+├─ session_id (UUID FK live_chat_sessions)
+├─ investment_profile (TEXT: conservador, moderado, agresivo)
+├─ investment_capital (INT)
+├─ risk_tolerance (TEXT)
+├─ previous_portfolio (JSONB)
+├─ advisor_notes (TEXT)
+├─ updated_at (TIMESTAMPTZ)
+└─ created_at (TIMESTAMPTZ)
+
 RLS:
 ├─ Sessions: asesor ve solo sus sesiones (advisor_staff_id), SA ve todas
 ├─ Messages: acceso via session_id → hereda permisos de la sesión
 ├─ OTP: INSERT anon (visitante crea), SELECT/UPDATE via Edge Function (service_role)
+├─ Advisor Context: asesor ve solo su contexto, SA ve todas
 └─ INSERT público (anon): visitante puede insertar mensajes inbound post-verificación
 ```
 
@@ -1092,21 +1153,39 @@ wafinance_otp (nueva, verify_jwt: false):
     │   ├─ Marca OTP como verified
     │   ├─ Crea live_chat_session
     │   ├─ Inserta lead en campaign_leads (advisor_referral_code = advisor_code)
+    │   ├─ Crea lead_advisor_context (vacío, asesor completa después)
     │   ├─ Dispara push notification al asesor
     │   └─ Retorna: { session_id, verified: true }
     └─ Si falla: incrementa intentos, retorna error
+
+wafinance_advisor (NUEVA, verify_jwt: true): LLM Context para asesor
+├─ Proveedor: Anthropic Claude API (o OpenAI GPT-4)
+├─ Recibe: session_id, user_message, action=suggest_response
+├─ Proceso:
+│   ├─ Fetch lead_advisor_context (perfil, capital, tolerancia riesgo)
+│   ├─ Fetch últimos 5 mensajes (contexto de conversación)
+│   ├─ Llamar Claude con system prompt contextualizado:
+│   │   "Eres asesor de Pessaro Capital para lead con perfil [X],
+│   │    capital $[Y], tolerancia riesgo [Z]. El lead acaba de decir: [msg]
+│   │    Proporciona respuesta profesional + 2 recomendaciones de portafolio"
+│   └─ Retorna: { suggested_response, recommendations: [...] }
+├─ Costo: ~$0.02-0.05 por sugerencia (Claude Opus)
+└─ Usado por: Asesor en CRM, botón "💡 Generar respuesta IA"
 ```
 
 ### Componentes a implementar
 ```
 1. Página pública:              crm.pessaro.cl/chat/:referralCode (formulario + OTP + chat)
 2. Edge Function OTP:           wafinance_otp (genera/verifica OTP, crea sesión + lead)
-3. Vista CRM:                   Nueva pestaña "Chat en vivo" o tab en Mensajes WA
-4. Realtime:                    Supabase Realtime subscriptions (ya existe infraestructura)
-5. Push notifications:          Reutiliza push_notifications_2026_02_27 v22
-6. Email template OTP:          Plantilla branded para código de verificación
-7. 🆕 Botón invitación WA:      Modal en CRM con link único crm.pessaro.cl/chat/:referralCode
-                                → abre wa.me con mensaje pre-redactado personalizado
+3. Edge Function LLM Asesor:    wafinance_advisor (Claude API context) 🆕
+4. Vista CRM:                   Nueva pestaña "Chat en vivo" con botón "💡 Asesoría IA"
+5. Realtime:                    Supabase Realtime subscriptions (ya existe infraestructura)
+6. Push notifications:          Reutiliza push_notifications_2026_02_27 v22
+7. Email template OTP:          Plantilla branded para código de verificación
+8. Botón invitación WA:         Modal en CRM con link único crm.pessaro.cl/chat/:referralCode
+
+FASE 2 (Opcional):
+9. Integración bancaria:        Plaid API para conexión de cuentas + análisis automático
 ```
 
 ### Infraestructura reutilizable
@@ -1119,6 +1198,7 @@ wafinance_otp (nueva, verify_jwt: false):
 ✅ Dominio crm.pessaro.cl    → ruta /chat/:code
 ✅ Paleta y componentes CRM  → GlassCard, Btn, Badge, etc.
 ✅ campaign_leads            → auto-inserción de lead verificado
+🆕 Claude API (o GPT-4)      → LLM para asesoría contextualizada + sugerencias IA
 ```
 
 ### Herramientas de implementación
@@ -1130,13 +1210,184 @@ Staging first  → Validar en staging antes de merge a master
 
 ### Esfuerzo estimado
 ```
+FASE 1 (Chat en vivo + LLM Asesor):
 Tablas + RLS + Realtime:              2-3h
 Edge Function OTP + template email:   3-4h
 Página pública /chat/:code + OTP UI:  4-5h
 Vista CRM (inbox del asesor):         4-5h
 Push notifications al asesor:         1-2h
 Botón "Invitar por WhatsApp" en CRM:  1-2h
-Total:                                ~15-21h
+Edge Function wafinance_advisor (IA): 2-3h
+Total FASE 1:                         ~17-24h
+
+FASE 2 (MetaTrader 4/5 - Trading Integration):
+Edge Function MT4/MT5 connector:       5-6h (REST API to MT4/MT5 bridge)
+Live trading data sync:                3-4h (account balance, positions, profit/loss realtime)
+Dashboard trading analytics:           4-5h (equity curve, performance metrics, drawdown tracking)
+Risk management advisories:            3-4h (IA alerts: "drawdown 15%, consider closing position X")
+Account linking + auth:                2-3h (secure OAuth para MT4/MT5)
+Total FASE 2:                          ~17-22h
+```
+
+### FASE 2: Integración MetaTrader 4/5 (Trading Integration)
+
+**Objetivo:** Conectar las cuentas de trading MT4/MT5 de los clientes → datos en vivo en el chat con WAFinance → asesor puede ver equity, posiciones, P&L en tiempo real durante la conversación.
+
+#### Arquitectura MT4/MT5
+
+```
+Cliente abre cuenta MT4/MT5 (ej: IC Markets, Deriv, OANDA)
+                ↓
+WAFinance pide conectar su broker (OAuth-style con credenciales)
+                ↓
+Edge Function mt4_connector:
+├─ Valida credenciales (email MT4 + password)
+├─ Conecta a MetaQuotes API o broker REST API
+├─ Guarda token en Supabase (encriptado)
+├─ Sync inicial: descarga histórico de posiciones + estadísticas
+└─ Webhook: MetaTrader → Supabase Realtime (cada tick de mercado)
+                ↓
+Dashboard en WAFinance:
+├─ Equity curve (gráfico de balance histórico)
+├─ Posiciones abiertas en vivo (symbol, size, entry, current P&L)
+├─ Estadísticas: total profit, win rate, max drawdown, risk per trade
+└─ Alertas IA: "riesgo alto detected", "drawdown 20%", "considerar cierre"
+                ↓
+Chat contexto: "Tu EURUSD está +250 pips, ganancias de hoy $2,400"
+Asesor responde con Claude: "Excelente. Próximo target $2,800, stop loss ajustado a breakeven"
+```
+
+#### Tablas requeridas (FASE 2)
+
+```sql
+mt4_accounts:
+├─ id (UUID PK)
+├─ session_id (UUID FK live_chat_sessions)
+├─ broker_name (TEXT: IC Markets, Deriv, OANDA, etc.)
+├─ mt4_login (INT - número de cuenta MT4)
+├─ account_email (TEXT)
+├─ token (TEXT ENCRYPTED - credencial de API)
+├─ token_expires_at (TIMESTAMPTZ)
+├─ verified_at (TIMESTAMPTZ)
+├─ synced_at (TIMESTAMPTZ)
+└─ created_at (TIMESTAMPTZ)
+
+mt4_positions:
+├─ id (UUID PK)
+├─ account_id (UUID FK mt4_accounts)
+├─ ticket (INT - MT4 position ID)
+├─ symbol (TEXT: EURUSD, GOLD, etc.)
+├─ position_type (TEXT: BUY, SELL)
+├─ volume (DECIMAL)
+├─ entry_price (DECIMAL)
+├─ current_price (DECIMAL)
+├─ current_pnl (DECIMAL)
+├─ pnl_percent (DECIMAL)
+├─ opened_at (TIMESTAMPTZ)
+├─ closed_at (TIMESTAMPTZ)
+└─ updated_at (TIMESTAMPTZ)
+
+mt4_account_stats:
+├─ id (UUID PK)
+├─ account_id (UUID FK mt4_accounts)
+├─ balance (DECIMAL)
+├─ equity (DECIMAL)
+├─ margin_used (DECIMAL)
+├─ margin_free (DECIMAL)
+├─ margin_level (DECIMAL)
+├─ total_profit (DECIMAL)
+├─ today_profit (DECIMAL)
+├─ win_rate (DECIMAL, %)
+├─ max_drawdown (DECIMAL)
+├─ max_drawdown_pct (DECIMAL)
+├─ total_trades (INT)
+├─ winning_trades (INT)
+├─ losing_trades (INT)
+├─ updated_at (TIMESTAMPTZ)
+└─ created_at (TIMESTAMPTZ)
+
+RLS:
+├─ mt4_accounts: solo el asesor y SA ven la cuenta del cliente
+├─ mt4_positions: acceso via account_id + session_id
+├─ mt4_account_stats: mismos permisos que positions
+```
+
+#### Edge Functions (FASE 2)
+
+```
+mt4_connector (NEW, verify_jwt: true):
+├─ Action: link_account
+│   ├─ Recibe: session_id, broker_name, mt4_login, account_email, password
+│   ├─ Valida credenciales en el broker (o API oficial)
+│   ├─ Si OK:
+│   │   ├─ Guarda credenciales encriptadas en mt4_accounts
+│   │   ├─ Sync inicial de histórico (últimas 100 posiciones cerradas)
+│   │   ├─ Descarga stats actuales (balance, equity, drawdown, etc.)
+│   │   ├─ Crea webhook en el broker para sync realtime
+│   │   └─ Retorna: { account_id, verified: true, balance: $X }
+│   └─ Si error: { verified: false, reason: "invalid credentials" }
+│
+├─ Action: get_account_summary
+│   ├─ Recibe: session_id
+│   ├─ Fetch mt4_account_stats + mt4_positions abiertas
+│   └─ Retorna: { balance, equity, positions: [...], win_rate, drawdown }
+│
+└─ Action: get_position_details
+    ├─ Recibe: position_id
+    ├─ Fetch detalles completos + histórico de precios
+    └─ Retorna: { entry_price, current_price, pnl, risk_reward_ratio, ...}
+
+mt4_realtime_sync (webhook handler, verify_jwt: false):
+├─ Recibe POST desde broker webhook (MT4 price tick, position change, etc.)
+├─ Actualiza mt4_positions y mt4_account_stats
+├─ Dispara push notification al asesor: "Position EURUSD now +300 pips"
+└─ Emite evento Realtime → chat refrescar datos en vivo
+
+mt4_risk_advisor (NEW, verify_jwt: true):
+├─ Action: analyze_risk
+│   ├─ Recibe: session_id
+│   ├─ Fetch todas las posiciones abiertas + histórico
+│   ├─ Llama Claude con contexto:
+│   │   "Analiza estas posiciones de forex.
+│   │    EURUSD +200 pips, GBPUSD -150 pips, XAUUSD flat
+│   │    Drawdown actual 12%, max histórico 25%
+│   │    Risk: ¿qué recomendaciones de gestión de riesgo?"
+│   ├─ Claude responde con recomendaciones
+│   └─ Retorna: { recommendations: [...], risk_level: "medium" }
+│
+└─ Action: alert_if_critical
+    ├─ Si drawdown > 20%: "⚠️ DRAWDOWN CRÍTICO 22%, considera revisar tu estrategia"
+    ├─ Si margin_level < 150%: "⚠️ MARGEN BAJO, riesgo de margin call"
+    └─ Emite push notification + alert en chat
+```
+
+#### Componentes CRM (FASE 2)
+
+```
+1. Modal "Conectar MT4/MT5": formulario broker + credenciales
+2. Dashboard trading: equity curve, positions table, stats cards
+3. Tab "Trading Analytics" en Chat: 
+   ├─ Resumen de cuenta actual
+   ├─ Posiciones abiertas con P&L en vivo
+   ├─ Historial de últimas 20 posiciones cerradas
+   └─ Recomendaciones IA de riesgo
+4. Alerts en tiempo real: posición abierta, drawdown, margin level
+5. Chatbot contexto: Claude puede referirse a "tu EURUSD está en ganancia de $xxx"
+```
+
+#### Integraciones soportadas (FASE 2)
+
+```
+Brokers con APIs disponibles:
+├─ ✅ IC Markets (MT4/MT5 REST API)
+├─ ✅ Deriv (MT5 WebSocket API)
+├─ ✅ OANDA (REST API)
+├─ ✅ Exness (MT4/MT5)
+├─ ✅ XM Global (MT4/MT5)
+└─ Otros brokers vía MetaQuotes cloud (si disponible)
+
+Nota: Cada broker requiere wrapper API diferente. 
+Esfuerzo estimado: +2-3h por nuevo broker después del primero.
 ```
 
 ---
