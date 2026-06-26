@@ -5,7 +5,7 @@ const GOLD   = '#f0a500'
 const WA     = '#25D366'
 const BORDER = 'rgba(255,255,255,0.1)'
 
-export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone }) {
+export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
 
@@ -38,16 +38,19 @@ ${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin co
     <>
       <button
         onClick={() => setOpen(true)}
-        title="Invitar por WhatsApp (WAFinance)"
-        style={{
+        title="Invitar a WAFinance"
+        style={compact ? {
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: GOLD, fontSize: 16, padding: '2px 4px',
+          display: 'inline-flex', alignItems: 'center', lineHeight: 1,
+        } : {
           display: 'inline-flex', alignItems: 'center', gap: 6,
           padding: '5px 12px', borderRadius: 8,
           background: `${WA}18`, border: `1px solid ${WA}40`,
           color: WA, fontSize: 12, fontWeight: 600, cursor: 'pointer',
           fontFamily: 'inherit',
         }}>
-        <span>📲</span>
-        <span>Invitar WAFinance</span>
+        {compact ? '💹' : <><span>📲</span><span>Invitar WAFinance</span></>}
       </button>
 
       {open && (

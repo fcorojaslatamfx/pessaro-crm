@@ -1165,7 +1165,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
               <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.phone}</td>
               <td style={{padding:'12px 18px'}}><Badge label={c.status} color={SCOLOR_MAP[c.status]||P.muted}/></td>
               <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/>{c._origStatus==='new'&&<Badge label="nuevo" color={P.orange}/>}</div></td>
-              <td style={{padding:'12px 18px'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn></td>
+              <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,alignItems:'center'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn>{staffProfile?.referral_code&&<span onClick={e=>e.stopPropagation()}><WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={c.full_name||''} leadPhone={c.phone||''} compact/></span>}</div></td>
             </tr>
           ))}
         </tbody>
@@ -4136,6 +4136,7 @@ export default function App(){
     ...(canAccess('campaigns')?['campaigns']:[]),
     ...(isSuperAdmin          ?['admin_campaigns']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
+    ...(canAccess('mensajes') ?['wafinance']:[]),
   ]
 
   // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
@@ -4150,6 +4151,7 @@ export default function App(){
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
+    canAccess('mensajes')?{id:'wafinance',label:'WAFinance',icon:'💹',color:'#f0a500'}:null,
   ].filter(Boolean)
 
   const currentMod=validMods.includes(module)?module:'dashboard'
@@ -4308,6 +4310,7 @@ export default function App(){
           if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
+          if(currentMod==='wafinance') return <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
           return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
         })()}</ErrorBoundary>
       </div>
