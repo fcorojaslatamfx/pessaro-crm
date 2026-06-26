@@ -128,11 +128,16 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
     if (!newMsg.trim() || !activeId) return
     const text = newMsg.trim()
     setNewMsg('')
-    await supabase.from('live_chat_messages').insert({
+    const { error } = await supabase.from('live_chat_messages').insert({
       session_id: activeId,
-      role: 'advisor',
+      direction: 'outbound',
       content: text,
+      sender_name: staffProfile?.display_name || 'Asesor',
     })
+    if (error) {
+      console.error('Error enviando mensaje:', error)
+      setNewMsg(text)
+    }
   }
 
   async function fetchSuggestion() {
@@ -144,7 +149,7 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
       const jwt = authSession?.access_token
       if (!jwt) throw new Error('Sin autenticación')
 
-      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
+      const lastUserMsg = [...messages].reverse().find(m => m.direction === 'inbound')
       const res = await fetch(ADVISOR_URL, {
         method: 'POST',
         headers: {
@@ -154,7 +159,7 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
         body: JSON.stringify({
           action: 'suggest_response',
           session_id: activeId,
-          user_message: lastUserMsg?.content || '',
+          user_message: lastUserMsg?.content || '(sin mensaje del cliente aún)',
         }),
       })
       const data = await res.json()
@@ -220,17 +225,17 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
               <button key={s.id} onClick={() => setActiveId(s.id)}
                 style={{ width: '100%', padding: '12px 16px', display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer', textAlign: 'left', background: active ? `${P.accent}12` : 'transparent', borderBottom: `1px solid ${P.border}`, border: 'none', borderLeft: active ? `3px solid ${P.accent}` : '3px solid transparent' }}>
                 <div style={{ width: 34, height: 34, borderRadius: 10, background: active ? P.accent : `${P.navy}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, color: active ? '#fff' : P.navy, flexShrink: 0 }}>
-                  {(s.lead_name || '?')[0].toUpperCase()}
+                  {(s.visitor_name || '?')[0].toUpperCase()}
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: 13, fontWeight: 600, color: P.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.lead_name || 'Visitante'}
+                      {s.visitor_name || 'Visitante'}
                     </span>
                     <span style={{ fontSize: 10, color: P.muted, flexShrink: 0, marginLeft: 4 }}>{fmt(s.updated_at)}</span>
                   </div>
                   <p style={{ fontSize: 11, color: P.muted, margin: '2px 0 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {s.lead_email || s.lead_phone || '—'}
+                    {s.visitor_email || s.visitor_phone || '—'}
                   </p>
                   <div style={{ marginTop: 4 }}>
                     <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: s.status === 'active' ? `${P.success}18` : `${P.muted}18`, color: s.status === 'active' ? P.success : P.muted, fontWeight: 600 }}>
@@ -257,8 +262,8 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
           {/* Chat header */}
           <div style={{ padding: '12px 18px', borderBottom: `1px solid ${P.border}`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: P.surface, flexShrink: 0 }}>
             <div>
-              <p style={{ fontSize: 14, fontWeight: 700, color: P.navy, margin: 0 }}>{activeSession?.lead_name || 'Visitante'}</p>
-              <p style={{ fontSize: 11, color: P.muted, margin: 0 }}>{activeSession?.lead_email} · {activeSession?.lead_phone}</p>
+              <p style={{ fontSize: 14, fontWeight: 700, color: P.navy, margin: 0 }}>{activeSession?.visitor_name || 'Visitante'}</p>
+              <p style={{ fontSize: 11, color: P.muted, margin: 0 }}>{activeSession?.visitor_email} · {activeSession?.visitor_phone}</p>
             </div>
             <button onClick={() => setShowProfile(p => !p)}
               style={{ padding: '6px 12px', borderRadius: 8, background: showProfile ? `${P.accent}18` : 'transparent', border: `1px solid ${showProfile ? P.accent : P.border}`, color: showProfile ? P.accent : P.muted, fontSize: 12, cursor: 'pointer', fontWeight: 600, fontFamily: 'inherit' }}>
@@ -274,23 +279,26 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
                 {messages.length === 0 && (
                   <div style={{ textAlign: 'center', padding: '48px 0', color: P.muted, fontSize: 13 }}>Sin mensajes aún</div>
                 )}
-                {messages.map(m => (
-                  <div key={m.id} style={{ display: 'flex', justifyContent: m.role === 'advisor' ? 'flex-end' : 'flex-start' }}>
-                    <div style={{
-                      maxWidth: '75%', padding: '10px 14px', borderRadius: m.role === 'advisor' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                      background: m.role === 'advisor' ? P.accent : `${P.navy}0e`,
-                      color: m.role === 'advisor' ? '#fff' : P.text, fontSize: 13, lineHeight: 1.55,
-                    }}>
-                      {m.role !== 'advisor' && (
-                        <p style={{ fontSize: 10, fontWeight: 700, color: P.gold, margin: '0 0 3px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                          Cliente
-                        </p>
-                      )}
-                      {m.content}
-                      <p style={{ fontSize: 10, margin: '4px 0 0', opacity: 0.55, textAlign: 'right' }}>{fmt(m.created_at)}</p>
+                {messages.map(m => {
+                  const isOutbound = m.direction === 'outbound'
+                  return (
+                    <div key={m.id} style={{ display: 'flex', justifyContent: isOutbound ? 'flex-end' : 'flex-start' }}>
+                      <div style={{
+                        maxWidth: '75%', padding: '10px 14px', borderRadius: isOutbound ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        background: isOutbound ? P.accent : `${P.navy}0e`,
+                        color: isOutbound ? '#fff' : P.text, fontSize: 13, lineHeight: 1.55,
+                      }}>
+                        {!isOutbound && (
+                          <p style={{ fontSize: 10, fontWeight: 700, color: P.gold, margin: '0 0 3px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                            Cliente
+                          </p>
+                        )}
+                        {m.content}
+                        <p style={{ fontSize: 10, margin: '4px 0 0', opacity: 0.55, textAlign: 'right' }}>{fmt(m.created_at)}</p>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
                 <div ref={bottomRef} />
               </div>
 
@@ -309,12 +317,14 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
               {/* Input row */}
               <form onSubmit={sendMessage} style={{ display: 'flex', gap: 8, padding: '12px 18px', borderTop: `1px solid ${P.border}`, background: P.surface, flexShrink: 0 }}>
                 <button type="button" onClick={fetchSuggestion} disabled={loadingSug}
-                  style={{ padding: '9px 12px', borderRadius: 10, background: `${P.gold}15`, border: `1px solid ${P.gold}50`, color: P.gold, fontSize: 16, cursor: loadingSug ? 'wait' : 'pointer', flexShrink: 0, title: 'Sugerencia IA', fontFamily: 'inherit' }}
+                  style={{ padding: '9px 12px', borderRadius: 10, background: `${P.gold}15`, border: `1px solid ${P.gold}50`, color: P.gold, fontSize: 16, cursor: loadingSug ? 'wait' : 'pointer', flexShrink: 0, fontFamily: 'inherit' }}
                   title="Obtener sugerencia de IA">
                   {loadingSug ? '⏳' : '💡'}
                 </button>
                 <input
                   type="text"
+                  id="waf-advisor-msg"
+                  name="advisor-message"
                   value={newMsg}
                   onChange={e => setNewMsg(e.target.value)}
                   placeholder="Responder al cliente..."
@@ -376,9 +386,9 @@ export default function WAFinanceChatInbox({ user, staffProfile, isSuperAdmin })
                   <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${P.border}` }}>
                     <p style={{ fontSize: 10, fontWeight: 700, color: P.muted, textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>Datos de sesión</p>
                     {[
-                      ['Nombre', activeSession.lead_name],
-                      ['Email', activeSession.lead_email],
-                      ['Teléfono', activeSession.lead_phone],
+                      ['Nombre', activeSession.visitor_name],
+                      ['Email', activeSession.visitor_email],
+                      ['Teléfono', activeSession.visitor_phone],
                       ['Código asesor', activeSession.advisor_code],
                     ].map(([k, v]) => v ? (
                       <div key={k} style={{ marginBottom: 6 }}>

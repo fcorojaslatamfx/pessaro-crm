@@ -107,14 +107,19 @@ export default function WAFinanceChat() {
 
   async function sendMessage(e) {
     e.preventDefault()
-    if (!newMsg.trim()) return
+    if (!newMsg.trim() || !sessionId) return
     const text = newMsg.trim()
     setNewMsg('')
-    await supabase.from('live_chat_messages').insert({
+    const { error: insertError } = await supabase.from('live_chat_messages').insert({
       session_id: sessionId,
-      role: 'user',
+      direction: 'inbound',
       content: text,
+      sender_name: form.name || 'Visitante',
     })
+    if (insertError) {
+      console.error('Error enviando mensaje:', insertError)
+      setNewMsg(text)
+    }
   }
 
   const inputStyle = {
@@ -163,6 +168,8 @@ export default function WAFinanceChat() {
                   </label>
                   <input
                     type={type}
+                    id={`waf-${field}`}
+                    name={field}
                     value={form[field]}
                     onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
                     placeholder={placeholder}
@@ -201,6 +208,8 @@ export default function WAFinanceChat() {
 
               <input
                 type="text"
+                id="waf-otp"
+                name="otp"
                 value={otp}
                 onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                 placeholder="000000"
@@ -254,30 +263,35 @@ export default function WAFinanceChat() {
                     Tu asesor responderá en breve...
                   </div>
                 )}
-                {messages.map(m => (
-                  <div key={m.id} style={{ display: 'flex', justifyContent: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
-                    <div style={{
-                      maxWidth: '80%', padding: '10px 14px', lineHeight: 1.55, fontSize: 13, color: '#fff',
-                      borderRadius: m.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                      background: m.role === 'user'
-                        ? `linear-gradient(135deg,${ACCENT},${GOLD})`
-                        : 'rgba(255,255,255,0.1)',
-                    }}>
-                      {m.role !== 'user' && (
-                        <p style={{ fontSize: 10, fontWeight: 700, color: GOLD, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                          Asesor
-                        </p>
-                      )}
-                      {m.content}
+                {messages.map(m => {
+                  const isVisitor = m.direction === 'inbound'
+                  return (
+                    <div key={m.id} style={{ display: 'flex', justifyContent: isVisitor ? 'flex-end' : 'flex-start' }}>
+                      <div style={{
+                        maxWidth: '80%', padding: '10px 14px', lineHeight: 1.55, fontSize: 13, color: '#fff',
+                        borderRadius: isVisitor ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        background: isVisitor
+                          ? `linear-gradient(135deg,${ACCENT},${GOLD})`
+                          : 'rgba(255,255,255,0.1)',
+                      }}>
+                        {!isVisitor && (
+                          <p style={{ fontSize: 10, fontWeight: 700, color: GOLD, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                            Asesor
+                          </p>
+                        )}
+                        {m.content}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
                 <div ref={bottomRef} />
               </div>
 
               <form onSubmit={sendMessage} style={{ display: 'flex', gap: 8 }}>
                 <input
                   type="text"
+                  id="waf-message"
+                  name="message"
                   value={newMsg}
                   onChange={e => setNewMsg(e.target.value)}
                   placeholder="Escribe un mensaje..."
