@@ -4,6 +4,9 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, A
 import WhatsAppInbox from './components/whatsapp/WhatsAppInbox.jsx'
 import ChatWindow from './components/whatsapp/ChatWindow.jsx'
 import CampaignSender from './components/whatsapp/CampaignSender.jsx'
+import WAFinanceChat from './pages/WAFinanceChat.jsx'
+import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
+import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -696,7 +699,7 @@ function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile
 }
 
 // ─── CONTACTS (SUPER ADMIN = todos, asesor = propios) ─────────────────────────
-function Contacts({user,isSuperAdmin}){
+function Contacts({user,isSuperAdmin,staffProfile}){
   const isSARef=useRef(isSuperAdmin)
   useEffect(()=>{isSARef.current=isSuperAdmin},[isSuperAdmin])
   const[contacts,setContacts]=useState([])
@@ -1173,10 +1176,11 @@ function Contacts({user,isSuperAdmin}){
 
     {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)}>
       <div>
-        <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
+        <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap',alignItems:'center'}}>
           <Badge label={selected.status} color={SCOLOR_MAP[selected.status]||P.muted}/>
           <Badge label={selected.source||'crm'} color={selected.source==='formulario'?P.orange:selected.source==='csv'?P.blue:P.muted}/>
           {selected._capital>0&&<span style={{fontSize:13,color:P.green,fontFamily:'monospace',fontWeight:700}}>{fmt(selected._capital)}</span>}
+          {staffProfile?.referral_code&&<WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={selected.full_name||''} leadPhone={selected.phone||''}/>}
         </div>
         {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
           <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
@@ -3507,14 +3511,14 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
           <p style={{ fontSize:13, color:P.muted, margin:0 }}>Bandeja de mensajes y campañas masivas</p>
         </div>
         <div style={{ display:'flex', gap:4 }}>
-          {[['chat','💬 Mensajes'],['campaigns','🚀 Campañas']].map(([id, label]) => (
+          {[['chat','💬 Mensajes'],['wafinance','💹 WAFinance'],['campaigns','🚀 Campañas']].map(([id, label]) => (
             <button key={id} onClick={() => setSubTab(id)}
               style={{
                 padding:'7px 14px', borderRadius:8, fontSize:12, cursor:'pointer',
                 fontWeight: subTab === id ? 700 : 400,
-                background: subTab === id ? P.greenDim : 'rgba(255,255,255,0.03)',
-                color: subTab === id ? P.green : P.muted,
-                border: subTab === id ? `1px solid ${P.green}40` : `1px solid ${P.border}`,
+                background: subTab === id ? (id==='wafinance'?'rgba(108,92,231,0.15)':P.greenDim) : 'rgba(255,255,255,0.03)',
+                color: subTab === id ? (id==='wafinance'?P.purple:P.green) : P.muted,
+                border: subTab === id ? `1px solid ${id==='wafinance'?P.purple+'40':P.green+'40'}` : `1px solid ${P.border}`,
               }}>
               {label}
             </button>
@@ -3559,6 +3563,10 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
             </div>
           )}
         </div>
+      )}
+
+      {subTab === 'wafinance' && (
+        <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} />
       )}
 
       {subTab === 'campaigns' && (
@@ -4074,6 +4082,9 @@ export default function App(){
     return()=>window.removeEventListener('beforeinstallprompt',handler)
   },[])
 
+  // Public route: /chat/:referralCode — render without CRM shell
+  if(window.location.pathname.startsWith('/chat/'))return<WAFinanceChat/>
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(noStaffError)return<NoStaffScreen onBackToLogin={()=>{setNoStaffError(false)}}/>
@@ -4288,7 +4299,7 @@ export default function App(){
           if(loading&&currentMod==='dashboard') return <Spinner/>
           if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
-          if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile}/>
           if(currentMod==='pipeline')  return <Pipeline leads={myLeads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={myLeads}/>
           if(currentMod==='emails')    return <Emails contacts={contacts} leads={myLeads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
