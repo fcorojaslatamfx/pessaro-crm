@@ -3,7 +3,6 @@ import { useState } from 'react'
 const ACCENT = '#6c5ce7'
 const GOLD   = '#f0a500'
 const WA     = '#25D366'
-const BORDER = 'rgba(255,255,255,0.1)'
 
 export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
@@ -12,14 +11,29 @@ export default function WAFinanceInviteButton({ advisorCode, advisorName, leadNa
   if (!advisorCode) return null
 
   const chatLink = `https://crm.pessaro.cl/chat/${advisorCode}`
+  const firstName = leadName ? leadName.split(' ')[0] : ''
 
-  const defaultMsg = `Hola${leadName ? ` ${leadName}` : ''}! 👋
+  const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}! 👋
 
-Te invito a conectarte con un asesor especializado de Pessaro Capital a través de nuestro chat seguro.
+Te escribo porque tu perfil ha sido seleccionado para acceder a una *sesión exclusiva de asesoría financiera* con Pessaro Capital.
 
-🔗 ${chatLink}
+💼 *¿Qué es?*
+Un chat privado y seguro donde podrás explorar nuevas formas de inversión con un asesor profesional certificado y nuestro asistente inteligente especializado en mercados financieros.
 
-${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin compromiso. ¡Hablamos pronto!`
+✅ *¿Qué incluye?*
+• Análisis personalizado de oportunidades de inversión
+• Asesoría en Forex, Commodities, Índices y Criptomonedas
+• Recomendaciones según tu perfil de riesgo
+• Acceso a herramientas exclusivas de análisis
+
+🎯 *Sin compromisos · 100% Gratuito*
+Esta invitación es exclusiva para usuarios referidos. No requiere registro previo ni compromiso alguno.
+
+${advisorName ? `👤 *Tu asesor personal:* ${advisorName}\n` : ''}
+🔗 *Ingresa aquí para comenzar:*
+${chatLink}
+
+¡Espero que aproveches esta oportunidad! 🚀`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
@@ -35,11 +49,16 @@ ${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin co
     if (onSend) onSend()
   }
 
+  function copyLink() {
+    navigator.clipboard.writeText(chatLink).then(() => {
+      const el = document.getElementById('waf-copy-feedback')
+      if (el) { el.textContent = '✓ Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
+    })
+  }
+
   return (
     <>
-      <button
-        onClick={() => setOpen(true)}
-        title="Invitar a WAFinance"
+      <button onClick={() => setOpen(true)} title="Invitar a WAFinance"
         style={compact ? {
           background: 'none', border: 'none', cursor: 'pointer',
           color: GOLD, fontSize: 16, padding: '2px 4px',
@@ -57,13 +76,14 @@ ${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin co
       {open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
           onClick={e => { if (e.target === e.currentTarget) { setOpen(false); setCustom('') } }}>
-          <div style={{ background: '#0a1628', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 28, maxWidth: 440, width: '100%', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+          <div style={{ background: '#0a1628', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 28, maxWidth: 480, width: '100%', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
 
+            {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
               <div>
-                <h3 style={{ fontSize: 16, fontWeight: 700, color: '#fff', margin: 0 }}>Invitar por WhatsApp</h3>
+                <h3 style={{ fontSize: 16, fontWeight: 700, color: '#fff', margin: 0 }}>Invitar a WAFinance</h3>
                 <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', margin: '4px 0 0' }}>
-                  Chat WAFinance para {leadName || 'el cliente'}
+                  Sesión exclusiva para {leadName || 'el cliente'}
                 </p>
               </div>
               <button onClick={() => { setOpen(false); setCustom('') }}
@@ -72,41 +92,58 @@ ${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin co
               </button>
             </div>
 
-            {/* Link preview */}
-            <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', marginBottom: 16 }}>
-              <p style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 4px' }}>Link del chat</p>
-              <p style={{ fontSize: 12, color: ACCENT, margin: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}>{chatLink}</p>
+            {/* Link + Copy */}
+            <div style={{ padding: '10px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', marginBottom: 16, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 10, fontWeight: 700, color: 'rgba(255,255,255,0.4)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 4px' }}>Link del chat</p>
+                <p style={{ fontSize: 12, color: ACCENT, margin: 0, fontFamily: 'monospace', wordBreak: 'break-all' }}>{chatLink}</p>
+              </div>
+              <button onClick={copyLink} id="waf-copy-feedback"
+                style={{ padding: '5px 12px', borderRadius: 6, background: `${ACCENT}22`, border: `1px solid ${ACCENT}40`, color: ACCENT, fontSize: 11, fontWeight: 600, cursor: 'pointer', flexShrink: 0, whiteSpace: 'nowrap' }}>
+                Copiar link
+              </button>
+            </div>
+
+            {/* Preview badges */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: 'rgba(16,185,129,0.12)', color: '#10b981', fontWeight: 600, border: '1px solid rgba(16,185,129,0.2)' }}>
+                100% Gratuito
+              </span>
+              <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: `${GOLD}15`, color: GOLD, fontWeight: 600, border: `1px solid ${GOLD}30` }}>
+                Sin compromisos
+              </span>
+              <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: `${ACCENT}15`, color: ACCENT, fontWeight: 600, border: `1px solid ${ACCENT}30` }}>
+                Chat exclusivo
+              </span>
             </div>
 
             {/* Message preview */}
             <div style={{ marginBottom: 14 }}>
               <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>
-                Mensaje predeterminado
+                Vista previa del mensaje
               </p>
-              <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', maxHeight: 160, overflowY: 'auto' }}>
+              <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', maxHeight: 180, overflowY: 'auto' }}>
                 <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{defaultMsg}</p>
               </div>
             </div>
 
-            {/* Custom addition */}
+            {/* Custom message */}
             <div style={{ marginBottom: 20 }}>
               <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>
-                Agregar mensaje personalizado (opcional)
+                Mensaje adicional (opcional)
               </p>
-              <textarea
-                value={custom}
-                onChange={e => setCustom(e.target.value)}
-                placeholder="Escribe algo adicional..."
+              <textarea value={custom} onChange={e => setCustom(e.target.value)}
+                placeholder="Ej: Te recomiendo revisar las oportunidades en Forex..."
                 rows={2}
                 style={{
                   width: '100%', padding: '10px 12px', borderRadius: 10, resize: 'vertical',
                   background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)',
                   color: '#fff', fontSize: 13, outline: 'none', boxSizing: 'border-box',
                   fontFamily: 'inherit', minHeight: 60,
-                }}
-              />
+                }} />
             </div>
 
+            {/* Actions */}
             <div style={{ display: 'flex', gap: 10 }}>
               <button onClick={() => { setOpen(false); setCustom('') }}
                 style={{ flex: 1, padding: '11px 0', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
