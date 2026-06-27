@@ -29,6 +29,7 @@ export default function WAFinanceChat() {
   const [newMsg, setNewMsg]   = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState('')
+  const [advisorName, setAdvisorName] = useState('')
   const [pwaPrompt, setPwaPrompt] = useState(null)
   const [showPwaBanner, setShowPwaBanner] = useState(false)
   const bottomRef = useRef(null)
@@ -40,10 +41,11 @@ export default function WAFinanceChat() {
     const saved = sessionStorage.getItem(SESSION_KEY)
     if (saved) {
       try {
-        const { sid, name } = JSON.parse(saved)
+        const { sid, name, advisorName: savedAdvisor } = JSON.parse(saved)
         if (sid) {
           setSessionId(sid)
           setForm(p => ({ ...p, name: name || '' }))
+          if (savedAdvisor) setAdvisorName(savedAdvisor)
           setStep('chat')
         }
       } catch (_) { /* ignore */ }
@@ -122,6 +124,7 @@ export default function WAFinanceChat() {
       const data = await res.json()
       if (!res.ok || !data.otp_id) throw new Error(data.error || 'Error al enviar OTP')
       setOtpId(data.otp_id)
+      if (data.advisor_name) setAdvisorName(data.advisor_name)
       setStep('otp')
     } catch (err) {
       setError(err.message)
@@ -143,7 +146,9 @@ export default function WAFinanceChat() {
       const data = await res.json()
       if (!res.ok || !data.session_id) throw new Error(data.error || 'Código incorrecto')
       setSessionId(data.session_id)
-      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ sid: data.session_id, name: form.name }))
+      const verifiedAdvisor = data.advisor_name || advisorName
+      if (verifiedAdvisor) setAdvisorName(verifiedAdvisor)
+      sessionStorage.setItem(SESSION_KEY, JSON.stringify({ sid: data.session_id, name: form.name, advisorName: verifiedAdvisor }))
       setStep('chat')
     } catch (err) {
       setError(err.message)
@@ -274,6 +279,21 @@ export default function WAFinanceChat() {
 
           {step === 'chat' && (
             <div>
+              {/* Session bar */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 14px', marginBottom: 16, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12 }}>
+                <div>
+                  <p style={{ fontSize: 11, fontWeight: 700, color: GOLD, margin: 0, textTransform: 'uppercase', letterSpacing: '0.08em' }}>💹 WAFinance</p>
+                  <p style={{ fontSize: 13, fontWeight: 600, color: '#fff', margin: '2px 0 0' }}>
+                    {form.name || 'Visitante'} <span style={{ fontSize: 11, color: SUCCESS }}>· ● Conectado</span>
+                  </p>
+                </div>
+                {advisorName && (
+                  <div style={{ textAlign: 'right' }}>
+                    <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.45)', margin: 0 }}>Tu asesor</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: '#e2e8f0', margin: '2px 0 0' }}>{advisorName}</p>
+                  </div>
+                )}
+              </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 16, paddingBottom: 16, borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
                 <div style={{ width: 36, height: 36, borderRadius: 10, background: `${SUCCESS}22`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>💬</div>
                 <div>

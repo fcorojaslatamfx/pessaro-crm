@@ -5,7 +5,7 @@ const GOLD   = '#f0a500'
 const WA     = '#25D366'
 const BORDER = 'rgba(255,255,255,0.1)'
 
-export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact }) {
+export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
 
@@ -32,6 +32,7 @@ ${advisorName ? `Tu asesor: ${advisorName}\n` : ''}Es rápido, gratuito y sin co
     window.open(url, '_blank', 'noopener,noreferrer')
     setOpen(false)
     setCustom('')
+    if (onSend) onSend()
   }
 
   return (
