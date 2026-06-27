@@ -12,28 +12,18 @@ export default function WAFinanceInviteButton({ advisorCode, advisorName, leadNa
 
   const chatLink = `https://crm.pessaro.cl/chat/${advisorCode}`
   const firstName = leadName ? leadName.split(' ')[0] : ''
+  const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
 
-  const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}! 👋
+  const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}!
 
-Te escribo porque tu perfil ha sido seleccionado para acceder a una *sesión exclusiva de asesoría financiera* con Pessaro Capital.
+Tu perfil ha sido seleccionado para una *asesor\u00eda financiera exclusiva y gratuita* con Pessaro Capital.
 
-💼 *¿Qué es?*
-Un chat privado y seguro donde podrás explorar nuevas formas de inversión con un asesor profesional certificado y nuestro asistente inteligente especializado en mercados financieros.
-
-✅ *¿Qué incluye?*
-• Análisis personalizado de oportunidades de inversión
-• Asesoría en Forex, Commodities, Índices y Criptomonedas
-• Recomendaciones según tu perfil de riesgo
-• Acceso a herramientas exclusivas de análisis
-
-🎯 *Sin compromisos · 100% Gratuito*
-Esta invitación es exclusiva para usuarios referidos. No requiere registro previo ni compromiso alguno.
-
-${advisorName ? `👤 *Tu asesor personal:* ${advisorName}\n` : ''}
-🔗 *Ingresa aquí para comenzar:*
-${chatLink}
-
-¡Espero que aproveches esta oportunidad! 🚀`
+\u2713 Forex, Commodities, \u00cdndices y Crypto
+\u2713 Asesor profesional + asistente inteligente
+\u2713 100% gratuito, sin compromisos
+${advisorName ? `\nTu asesor: *${advisorName}*\n` : ''}
+*Comienza aqu\u00ed:*
+${chatLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
@@ -52,7 +42,7 @@ ${chatLink}
   function copyLink() {
     navigator.clipboard.writeText(chatLink).then(() => {
       const el = document.getElementById('waf-copy-feedback')
-      if (el) { el.textContent = '✓ Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
+      if (el) { el.textContent = '\u2713 Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
     })
   }
 
@@ -70,25 +60,25 @@ ${chatLink}
           color: WA, fontSize: 12, fontWeight: 600, cursor: 'pointer',
           fontFamily: 'inherit',
         }}>
-        {compact ? '💹' : <><span>📲</span><span>Invitar WAFinance</span></>}
+        {compact ? '\ud83d\udcb9' : <><span>{'\ud83d\udcf2'}</span><span>Invitar WAFinance</span></>}
       </button>
 
       {open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
           onClick={e => { if (e.target === e.currentTarget) { setOpen(false); setCustom('') } }}>
-          <div style={{ background: '#0a1628', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 28, maxWidth: 480, width: '100%', fontFamily: 'system-ui,-apple-system,sans-serif' }}>
+          <div style={{ background: '#0a1628', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 28, maxWidth: 480, width: '100%', fontFamily: 'system-ui,-apple-system,sans-serif', maxHeight: '90vh', overflowY: 'auto' }}>
 
             {/* Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 700, color: '#fff', margin: 0 }}>Invitar a WAFinance</h3>
                 <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', margin: '4px 0 0' }}>
-                  Sesión exclusiva para {leadName || 'el cliente'}
+                  Sesi{'\u00f3'}n exclusiva para {leadName || 'el cliente'}
                 </p>
               </div>
               <button onClick={() => { setOpen(false); setCustom('') }}
                 style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: 20, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>
-                ✕
+                {'\u2715'}
               </button>
             </div>
 
@@ -104,7 +94,7 @@ ${chatLink}
               </button>
             </div>
 
-            {/* Preview badges */}
+            {/* Badges */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: 'rgba(16,185,129,0.12)', color: '#10b981', fontWeight: 600, border: '1px solid rgba(16,185,129,0.2)' }}>
                 100% Gratuito
@@ -117,12 +107,19 @@ ${chatLink}
               </span>
             </div>
 
+            {/* OG Image Preview */}
+            <div style={{ borderRadius: 12, overflow: 'hidden', marginBottom: 14, border: '1px solid rgba(255,255,255,0.08)' }}>
+              <img src={ogImageUrl} alt="WAFinance Preview"
+                style={{ width: '100%', height: 'auto', display: 'block' }}
+                onError={e => { e.target.parentElement.style.display = 'none' }} />
+            </div>
+
             {/* Message preview */}
             <div style={{ marginBottom: 14 }}>
               <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>
                 Vista previa del mensaje
               </p>
-              <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', maxHeight: 180, overflowY: 'auto' }}>
+              <div style={{ padding: '12px 14px', borderRadius: 10, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', maxHeight: 150, overflowY: 'auto' }}>
                 <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.75)', margin: 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{defaultMsg}</p>
               </div>
             </div>
@@ -151,7 +148,6 @@ ${chatLink}
               </button>
               <button onClick={openWhatsApp}
                 style={{ flex: 2, padding: '11px 0', borderRadius: 12, background: WA, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-                <span style={{ fontSize: 16 }}>💬</span>
                 Enviar por WhatsApp
               </button>
             </div>
