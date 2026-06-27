@@ -1246,18 +1246,27 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         </div>
         {!selected.id.startsWith('sub_')&&(
           <div style={{marginTop:18,borderTop:`1px solid ${P.border}`,paddingTop:16}}>
-            <p style={{fontSize:10,fontWeight:700,color:P.purple,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 12px'}}>Historial de Actividades</p>
+            <p style={{fontSize:10,fontWeight:700,color:'#f0a500',textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 12px'}}>Historial de Actividades ({activities.length})</p>
             {loadingActivities?<Spinner/>:activities.length===0?(
-              <p style={{fontSize:12,color:P.muted,textAlign:'center',padding:'12px 0'}}>Sin actividad registrada</p>
-            ):activities.map(a=>(
-              <div key={a.id} style={{display:'flex',gap:10,marginBottom:10,paddingBottom:10,borderBottom:`1px solid ${P.border}`}}>
-                <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{ACTIVITY_ICONS[a.activity_type]||'📎'}</span>
-                <div style={{flex:1,minWidth:0}}>
-                  <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.5}}>{a.description}</p>
-                  <p style={{fontSize:10,color:P.muted,margin:0}}>{fmtDate(a.created_at)}</p>
-                </div>
+              <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'12px 0',margin:0}}>Sin actividades registradas aún</p>
+            ):(
+              <div style={{maxHeight:220,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+                {activities.map(a=>(
+                  <div key={a.id} style={{display:'flex',gap:10,padding:'8px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:'1px solid rgba(255,255,255,0.05)'}}>
+                    <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{ACTIVITY_ICONS[a.activity_type]||'📎'}</span>
+                    <div style={{flex:1,minWidth:0}}>
+                      <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.4}}>{a.description}</p>
+                      {a.metadata?.source&&<p style={{fontSize:10,color:P.purple,margin:'2px 0 0'}}>Fuente: {a.metadata.source}</p>}
+                      <p style={{fontSize:10,color:P.muted,margin:'3px 0 0'}}>
+                        {new Date(a.created_at).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})}
+                        {' · '}
+                        {new Date(a.created_at).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}
+                      </p>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+            )}
           </div>
         )}
       </div>
@@ -2288,6 +2297,7 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
       case 'hoy':return tasks.filter(t=>isToday(t))
       case 'vencidas':return tasks.filter(t=>isOverdue(t))
       case 'completadas':return tasks.filter(t=>isDone(t))
+      case 'todas':return tasks
       default:return tasks.filter(t=>isPending(t))
     }
   })()
@@ -2336,6 +2346,10 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
     await supabase.from('crm_tasks').update({done:true,status:'completada',completed_at:new Date().toISOString()}).eq('id',id)
     setTasks(p=>p.map(t=>t.id===id?{...t,done:true,status:'completada',completed_at:new Date().toISOString()}:t))
   }
+  const cancelTask=async id=>{
+    await supabase.from('crm_tasks').update({status:'cancelada'}).eq('id',id)
+    setTasks(p=>p.map(t=>t.id===id?{...t,status:'cancelada'}:t))
+  }
   const deleteTask=async id=>{await supabase.from('crm_tasks').delete().eq('id',id);setTasks(p=>p.filter(t=>t.id!==id))}
   const getContactName=t=>{
     if(t.contact_id)return contacts.find(c=>c.id===t.contact_id)?.full_name||''
@@ -2357,6 +2371,7 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
       <FilterBtn id="hoy" label="Hoy" count={todayCount} color={P.purple}/>
       <FilterBtn id="vencidas" label="Vencidas" count={overdueCount} color={P.red}/>
       <FilterBtn id="completadas" label="Completadas" count={doneCount} color={P.green}/>
+      <FilterBtn id="todas" label="Todas" count={tasks.length} color={P.muted}/>
     </div>
     {loading?<Spinner/>:<div>
       {filtered.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:P.muted,fontSize:13}}>
@@ -2382,8 +2397,9 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
             {t.description&&<p style={{fontSize:11,color:P.muted,margin:'4px 0 0',lineHeight:1.5}}>{t.description}</p>}
           </div>
           <div style={{display:'flex',gap:4,flexShrink:0}}>
-            {!done&&<Btn variant="ghost" style={{padding:'3px 8px',fontSize:11}} onClick={()=>completeTask(t.id)}>✓</Btn>}
-            <button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:14,padding:'2px 4px'}}>✕</button>
+            {!done&&t.status!=='cancelada'&&<Btn variant="ghost" style={{padding:'3px 8px',fontSize:11}} onClick={()=>completeTask(t.id)}>✓</Btn>}
+            {!done&&t.status!=='cancelada'&&<button onClick={()=>cancelTask(t.id)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:14,padding:'2px 4px'}} title="Cancelar">✕</button>}
+            {(done||t.status==='cancelada')&&<button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:12,padding:'2px 4px'}} title="Eliminar">🗑</button>}
           </div>
         </GlassCard>
       })}
