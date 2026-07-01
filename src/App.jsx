@@ -736,6 +736,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[dragOver,setDragOver]=useState(false)
   const[activities,setActivities]=useState([])
   const[loadingActivities,setLoadingActivities]=useState(false)
+  const[editingAssignee,setEditingAssignee]=useState(null)
+  const[assigneeValue,setAssigneeValue]=useState('')
+  const[editingContact,setEditingContact]=useState(null)
+  const[editForm,setEditForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo'})
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -851,6 +855,31 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         if(selected?.id===id)setActivities(p=>[{id:Date.now().toString(),activity_type:'estado_cambiado',description:`Estado cambiado a: ${status}`,created_at:new Date().toISOString()},...p])
       }
     }catch(e){console.error('updateStatus:',e)}
+  }
+
+  const handleAssigneeChange=async(contactId,newAdvisorId)=>{
+    try{
+      await supabase.from('crm_contacts').update({user_id:newAdvisorId||null}).eq('id',contactId)
+      const advisorName=newAdvisorId?staffList.find(s=>s.user_id===newAdvisorId)?.display_name:'sin asesor'
+      logActivity(user.id,contactId,'asignacion',`Contacto asignado a ${advisorName}`,{})
+      load()
+    }catch(e){console.error('handleAssigneeChange:',e)}
+    setEditingAssignee(null)
+  }
+
+  const saveContactEdit=async(contactId)=>{
+    try{
+      await supabase.from('crm_contacts').update(editForm).eq('id',contactId)
+      logActivity(user.id,contactId,'nota_agregada','Datos del contacto actualizados',{})
+      load()
+      setEditingContact(null)
+      if(selected?.id===contactId)setSelected(p=>({...p,...editForm}))
+    }catch(e){console.error('saveContactEdit:',e)}
+  }
+
+  const openEditContact=(c)=>{
+    setEditingContact(c.id)
+    setEditForm({full_name:c.full_name||'',email:c.email||'',phone:c.phone||'',address:c.address||'',status:c.status||'activo'})
   }
 
   // Parser mejorado: detecta separador automáticamente (coma, tab, punto y coma),
@@ -1184,7 +1213,20 @@ function Contacts({user,isSuperAdmin,staffProfile}){
               onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
               onMouseLeave={e=>e.currentTarget.style.background='transparent'}
               onClick={()=>openContact(c)}>
-              {isSuperAdmin&&<td style={{padding:'12px 18px'}}><span style={{fontSize:11,color:P.purple,background:P.purpleDim,borderRadius:4,padding:'2px 8px'}}>{c.user_id?getAdvisorName(c.user_id):'Web'}</span></td>}
+              {isSuperAdmin&&<td style={{padding:'12px 18px'}} onClick={e=>e.stopPropagation()}>
+                {editingAssignee===c.id?(
+                  <select value={assigneeValue} onChange={e=>handleAssigneeChange(c.id,e.target.value)} onBlur={()=>setEditingAssignee(null)} autoFocus
+                    style={{padding:'5px 8px',borderRadius:6,background:'rgba(255,255,255,0.1)',border:`1px solid ${P.purpleBorder}`,color:P.text,fontSize:11,fontFamily:'inherit',maxWidth:140}}>
+                    <option value="">Sin asignar</option>
+                    {staffList.map(s=><option key={s.user_id} value={s.user_id}>{s.display_name}</option>)}
+                  </select>
+                ):(
+                  <span onClick={()=>{setEditingAssignee(c.id);setAssigneeValue(c.user_id||'')}}
+                    style={{fontSize:11,color:P.purple,background:P.purpleDim,borderRadius:4,padding:'2px 8px',cursor:'pointer',textDecoration:'underline dotted',textUnderlineOffset:2}}>
+                    {c.user_id?getAdvisorName(c.user_id):'Web'}
+                  </span>
+                )}
+              </td>}
               {isSuperAdmin&&<td style={{padding:'12px 18px',fontSize:12,color:P.green,fontFamily:'monospace',fontWeight:600}}>{c._capital>0?fmt(c._capital):'—'}</td>}
               <td style={{padding:'12px 18px'}}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
@@ -1212,6 +1254,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
           <Badge label={selected.source||'crm'} color={selected.source==='formulario'?P.orange:selected.source==='csv'?P.blue:P.muted}/>
           {selected._capital>0&&<span style={{fontSize:13,color:P.green,fontFamily:'monospace',fontWeight:700}}>{fmt(selected._capital)}</span>}
           {staffProfile?.referral_code&&<WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={selected.full_name||''} leadPhone={selected.phone||''} onSend={()=>{if(!selected.id.startsWith('sub_')){logActivity(user.id,selected.id,'wafinance_invitacion','Invitación WAFinance enviada por WhatsApp',{advisor_code:staffProfile.referral_code});setActivities(p=>[{id:Date.now().toString(),activity_type:'wafinance_invitacion',description:'Invitación WAFinance enviada por WhatsApp',created_at:new Date().toISOString()},...p])}}}/>}
+          {!selected.id.startsWith('sub_')&&<button onClick={()=>openEditContact(selected)}
+            style={{padding:'5px 12px',borderRadius:8,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple,fontSize:12,fontWeight:600,cursor:'pointer'}}>
+            ✏️ Editar
+          </button>}
         </div>
         {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
           <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
@@ -1270,6 +1316,42 @@ function Contacts({user,isSuperAdmin,staffProfile}){
           </div>
         )}
       </div>
+      {editingContact===selected?.id&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}
+          onClick={e=>{if(e.target===e.currentTarget)setEditingContact(null)}}>
+          <div style={{background:'#0a1628',border:`1px solid ${P.border}`,borderRadius:16,padding:24,maxWidth:420,width:'100%',fontFamily:'inherit',maxHeight:'80vh',overflowY:'auto'}}
+            onClick={e=>e.stopPropagation()}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <h3 style={{fontSize:15,fontWeight:700,color:'#fff',margin:0}}>Editar contacto</h3>
+              <button onClick={()=>setEditingContact(null)} style={{background:'none',border:'none',color:P.muted,fontSize:18,cursor:'pointer'}}>✕</button>
+            </div>
+            {[['full_name','Nombre completo','text'],['email','Email','email'],['phone','Teléfono','tel'],['address','Dirección','text']].map(([field,label,type])=>(
+              <div key={field} style={{marginBottom:12}}>
+                <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>{label}</label>
+                <input type={type} value={editForm[field]} onChange={e=>setEditForm(p=>({...p,[field]:e.target.value}))}
+                  style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+              </div>
+            ))}
+            <div style={{marginBottom:16}}>
+              <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Estado</label>
+              <select value={editForm.status} onChange={e=>setEditForm(p=>({...p,status:e.target.value}))}
+                style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',fontFamily:'inherit'}}>
+                {STATUS_OPT.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+              </select>
+            </div>
+            <div style={{display:'flex',gap:8}}>
+              <button onClick={()=>setEditingContact(null)}
+                style={{flex:1,padding:'10px 0',borderRadius:8,background:'transparent',border:`1px solid ${P.border}`,color:P.muted,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                Cancelar
+              </button>
+              <button onClick={()=>saveContactEdit(selected.id)}
+                style={{flex:1,padding:'10px 0',borderRadius:8,background:P.purple,border:'none',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                Guardar cambios
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Modal>}
   </div>
 }
