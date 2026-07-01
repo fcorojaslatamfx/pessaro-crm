@@ -862,6 +862,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       await supabase.from('crm_contacts').update({user_id:newAdvisorId||null}).eq('id',contactId)
       const advisorName=newAdvisorId?staffList.find(s=>s.user_id===newAdvisorId)?.display_name:'sin asesor'
       logActivity(user.id,contactId,'asignacion',`Contacto asignado a ${advisorName}`,{})
+      if(selected?.id===contactId){
+        setSelected(p=>({...p,user_id:newAdvisorId||null}))
+        setActivities(p=>[{id:Date.now().toString(),activity_type:'asignacion',description:`Contacto asignado a ${advisorName}`,created_at:new Date().toISOString()},...p])
+      }
       load()
     }catch(e){console.error('handleAssigneeChange:',e)}
     setEditingAssignee(null)
@@ -1279,6 +1283,14 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             ))}
           </div>
         </div>
+        {isSuperAdmin&&!selected.id.startsWith('sub_')&&<div style={{marginBottom:18}}>
+          <Lbl>Asesor asignado</Lbl>
+          <select value={selected.user_id||''} onChange={e=>handleAssigneeChange(selected.id,e.target.value)}
+            style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.purpleBorder}`,color:P.text,fontSize:13,outline:'none',fontFamily:'inherit',cursor:'pointer'}}>
+            <option value="">Sin asignar (Web)</option>
+            {staffList.map(s=><option key={s.user_id} value={s.user_id}>{s.display_name}</option>)}
+          </select>
+        </div>}
         <div>
           <p style={{fontSize:10,fontWeight:700,color:P.purple,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:10,margin:'0 0 10px'}}>Notas ({notes.length})</p>
           {notes.map(n=><div key={n.id} style={{padding:'10px 12px',marginBottom:8,background:'rgba(108,92,231,0.08)',borderRadius:8,borderLeft:`3px solid ${P.purple}`}}>
