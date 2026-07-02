@@ -2550,6 +2550,14 @@ function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
   useEffect(()=>{loadHistory()},[loadHistory])
 
   const sc={sent:P.blue,delivered:P.blue,opened:P.green,clicked:P.green,bounced:P.red,complained:P.red,delayed:P.orange}
+  const teamName=staffProfile?.crm_teams?.name||''
+  // Invitación Radex/Tradeview: visible solo para su equipo (o Pessaro Capital, que ve todo). El resto de plantillas queda libre.
+  const visibleTemplates=TEMPLATES.filter(t=>{
+    if(t.id==='accesos_crm')return isSuperAdmin
+    if(t.id==='invitacion_radex')return isSuperAdmin||teamName==='Pessaro Capital'||teamName==='Radex'
+    if(t.id==='invitacion_tradeview')return isSuperAdmin||teamName==='Pessaro Capital'||teamName==='Tradeview'
+    return true
+  })
   const allRecipients=[
     ...contacts.map(c=>({id:c.id,name:c.full_name,email:c.email,type:'contact'})),
     ...leads.filter(l=>!contacts.find(c=>c.email===l.email)).map(l=>({id:l.id,name:l.full_name,email:l.email,type:'lead'}))
@@ -2614,7 +2622,7 @@ function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
       {emails.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>Sin emails enviados</div>}
     </GlassCard>)}
     {tab==='plantillas'&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))',gap:14}}>
-      {TEMPLATES.filter(t=>t.id!=='accesos_crm'||isSuperAdmin).map(t=><GlassCard key={t.id} style={{borderLeft:`3px solid ${t.color}`}}>
+      {visibleTemplates.map(t=><GlassCard key={t.id} style={{borderLeft:`3px solid ${t.color}`}}>
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}><div style={{width:8,height:8,borderRadius:'50%',background:t.color}}/><span style={{fontSize:14,fontWeight:600,color:P.text}}>{t.label}</span></div>
         <p style={{fontSize:12,color:P.muted,margin:'0 0 12px'}}>{t.desc}</p>
         <button onClick={()=>openModal(t.id)} style={{width:'100%',padding:'7px',borderRadius:6,fontSize:12,cursor:'pointer',background:t.color+'18',color:t.color,border:`1px solid ${t.color}30`,fontWeight:600}}>Usar plantilla →</button>
@@ -2633,7 +2641,7 @@ function Emails({contacts,leads,staffProfile,user,isSuperAdmin}){
           <div>
             <Lbl>Plantilla</Lbl>
             <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-              {TEMPLATES.filter(t=>t.id!=='accesos_crm'||isSuperAdmin).map(t=><button key={t.id} onClick={()=>setForm(p=>({...p,template:t.id}))}
+              {visibleTemplates.map(t=><button key={t.id} onClick={()=>setForm(p=>({...p,template:t.id}))}
                 style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,background:form.template===t.id?t.color+'25':'rgba(255,255,255,0.04)',color:form.template===t.id?t.color:P.muted,border:`1px solid ${form.template===t.id?t.color+'60':P.border}`}}>{t.label}</button>)}
             </div>
           </div>
@@ -4045,7 +4053,7 @@ export default function App(){
         const[r1,r2,r3,r4]=await Promise.all([
           contactsQuery,
           supabase.from('campaign_leads').select('id,full_name,email,phone,investment_range,etapa,advisor_assigned,advisor_contacted,account_created,kyc_verified,deposit_confirmed,score,team,created_at,variant,perfil,campaign_id,advisor_referral_code').order('created_at',{ascending:false}),
-          supabase.from('crm_staff_profiles').select('*').eq('user_id',user.id).maybeSingle(),
+          supabase.from('crm_staff_profiles').select('*,crm_teams(id,name)').eq('user_id',user.id).maybeSingle(),
           supabase.from('campaigns').select('*').eq('status','activa').order('created_at'),
         ])
         setContacts(r1.data||[])
