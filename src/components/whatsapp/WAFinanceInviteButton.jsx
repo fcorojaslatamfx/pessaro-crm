@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 const ACCENT = '#6c5ce7'
 const GOLD   = '#f0a500'
@@ -7,12 +7,27 @@ const WA     = '#25D366'
 export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
+  const [sending, setSending] = useState(false)
+  const ogFileRef = useRef(null) // File precargado en background; nunca se espera (await) dentro del click handler
 
   if (!advisorCode) return null
 
   const chatLink = `https://crm.pessaro.cl/chat/${advisorCode}`
   const firstName = leadName ? leadName.split(' ')[0] : ''
   const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
+
+  // Precarga la imagen en cuanto se abre el modal (NO en el click de enviar) para que el envío final
+  // sea 100% síncrono dentro del gesto del usuario: los navegadores bloquean window.open()/navigator.share()
+  // si hay un `await` (fetch, etc.) antes de la llamada.
+  useEffect(() => {
+    if (!open || ogFileRef.current) return
+    fetch(ogImageUrl)
+      .then(res => res.blob())
+      .then(blob => {
+        ogFileRef.current = new File([blob], 'wafinance-pessaro.jpg', { type: blob.type || 'image/jpeg' })
+      })
+      .catch(() => { ogFileRef.current = null })
+  }, [open])
 
   const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}!
 
@@ -27,9 +42,6 @@ ${chatLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
-  const [sending, setSending] = useState(false)
-  const [shareMode, setShareMode] = useState(null) // 'image' | 'link' | null (se detecta al montar)
-
   function openWhatsAppLink() {
     const phone = (leadPhone || '').replace(/\D/g, '')
     const encoded = encodeURIComponent(finalMsg)
@@ -42,30 +54,24 @@ ${chatLink}`
     if (onSend) onSend()
   }
 
-  async function sendInvite() {
-    // Intenta compartir la imagen real (no un link-preview recortado) via Web Share API — solo soportado en navegadores mobile.
-    try {
-      const canTryFileShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function'
-      if (canTryFileShare) {
-        setSending(true)
-        const res = await fetch(ogImageUrl)
-        const blob = await res.blob()
-        const file = new File([blob], 'wafinance-pessaro.jpg', { type: blob.type || 'image/jpeg' })
-        if (navigator.canShare({ files: [file] })) {
-          await navigator.share({ files: [file], text: finalMsg })
-          setSending(false)
-          setOpen(false)
-          setCustom('')
-          if (onSend) onSend()
-          return
-        }
-      }
-    } catch (err) {
-      // Usuario canceló el share sheet, o el navegador no soporta adjuntar archivos: seguimos al fallback de link.
-      setSending(false)
-      if (err?.name === 'AbortError') return // canceló manualmente, no forzar fallback
+  // Handler 100% síncrono: decide de inmediato (sin await previo) si comparte archivo o abre wa.me,
+  // preservando el "user activation" que exigen los navegadores para ambas APIs.
+  function sendInvite() {
+    const file = ogFileRef.current
+    const canFileShare = !!file && typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })
+
+    if (canFileShare) {
+      setSending(true)
+      navigator.share({ files: [file], text: finalMsg })
+        .then(() => { if (onSend) onSend() })
+        .catch(err => {
+          // Si el usuario cancela el share sheet no forzamos nada más.
+          if (err?.name !== 'AbortError') openWhatsAppLink()
+        })
+        .finally(() => { setSending(false); setOpen(false); setCustom('') })
+      return
     }
-    setSending(false)
+    // Imagen aún no cargó o el navegador no soporta compartir archivos (desktop): fallback directo e inmediato.
     openWhatsAppLink()
   }
 
