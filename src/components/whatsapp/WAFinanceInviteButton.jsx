@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 
 const ACCENT = '#6c5ce7'
 const GOLD   = '#f0a500'
@@ -7,27 +7,12 @@ const WA     = '#25D366'
 export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
-  const [sending, setSending] = useState(false)
-  const ogFileRef = useRef(null) // File precargado en background; nunca se espera (await) dentro del click handler
 
   if (!advisorCode) return null
 
   const chatLink = `https://crm.pessaro.cl/chat/${advisorCode}`
   const firstName = leadName ? leadName.split(' ')[0] : ''
   const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
-
-  // Precarga la imagen en cuanto se abre el modal (NO en el click de enviar) para que el envío final
-  // sea 100% síncrono dentro del gesto del usuario: los navegadores bloquean window.open()/navigator.share()
-  // si hay un `await` (fetch, etc.) antes de la llamada.
-  useEffect(() => {
-    if (!open || ogFileRef.current) return
-    fetch(ogImageUrl)
-      .then(res => res.blob())
-      .then(blob => {
-        ogFileRef.current = new File([blob], 'wafinance-pessaro.jpg', { type: blob.type || 'image/jpeg' })
-      })
-      .catch(() => { ogFileRef.current = null })
-  }, [open])
 
   const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}!
 
@@ -42,7 +27,9 @@ ${chatLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
-  function openWhatsAppLink() {
+  // Envío directo por wa.me — abre WhatsApp con el nuevo chat, no requiere que el asesor tenga
+  // el contacto guardado en su celular. Es el mecanismo correcto para contactar leads en frío.
+  function openWhatsApp() {
     const phone = (leadPhone || '').replace(/\D/g, '')
     const encoded = encodeURIComponent(finalMsg)
     const url = phone
@@ -52,27 +39,6 @@ ${chatLink}`
     setOpen(false)
     setCustom('')
     if (onSend) onSend()
-  }
-
-  // Handler 100% síncrono: decide de inmediato (sin await previo) si comparte archivo o abre wa.me,
-  // preservando el "user activation" que exigen los navegadores para ambas APIs.
-  function sendInvite() {
-    const file = ogFileRef.current
-    const canFileShare = !!file && typeof navigator.share === 'function' && typeof navigator.canShare === 'function' && navigator.canShare({ files: [file] })
-
-    if (canFileShare) {
-      setSending(true)
-      navigator.share({ files: [file], text: finalMsg })
-        .then(() => { if (onSend) onSend() })
-        .catch(err => {
-          // Si el usuario cancela el share sheet no forzamos nada más.
-          if (err?.name !== 'AbortError') openWhatsAppLink()
-        })
-        .finally(() => { setSending(false); setOpen(false); setCustom('') })
-      return
-    }
-    // Imagen aún no cargó o el navegador no soporta compartir archivos (desktop): fallback directo e inmediato.
-    openWhatsAppLink()
   }
 
   function copyLink() {
@@ -182,13 +148,13 @@ ${chatLink}`
                 style={{ flex: 1, padding: '11px 0', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
                 Cancelar
               </button>
-              <button onClick={sendInvite} disabled={sending}
-                style={{ flex: 2, padding: '11px 0', borderRadius: 12, background: WA, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-                {sending ? 'Preparando imagen...' : 'Enviar por WhatsApp'}
+              <button onClick={openWhatsApp}
+                style={{ flex: 2, padding: '11px 0', borderRadius: 12, background: WA, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+                Enviar por WhatsApp
               </button>
             </div>
             <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', margin: '10px 0 0', lineHeight: 1.5, textAlign: 'center' }}>
-              En celular se adjunta la imagen completa. En computador, WhatsApp Web solo permite enviar el link (la vista previa aparece recortada por WhatsApp).
+              Abre WhatsApp con el chat listo. No necesitas tener el contacto guardado.
             </p>
           </div>
         </div>
