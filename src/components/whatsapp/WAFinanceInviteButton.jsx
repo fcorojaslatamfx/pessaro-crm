@@ -27,7 +27,10 @@ ${chatLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
-  function openWhatsApp() {
+  const [sending, setSending] = useState(false)
+  const [shareMode, setShareMode] = useState(null) // 'image' | 'link' | null (se detecta al montar)
+
+  function openWhatsAppLink() {
     const phone = (leadPhone || '').replace(/\D/g, '')
     const encoded = encodeURIComponent(finalMsg)
     const url = phone
@@ -37,6 +40,33 @@ ${chatLink}`
     setOpen(false)
     setCustom('')
     if (onSend) onSend()
+  }
+
+  async function sendInvite() {
+    // Intenta compartir la imagen real (no un link-preview recortado) via Web Share API — solo soportado en navegadores mobile.
+    try {
+      const canTryFileShare = typeof navigator.share === 'function' && typeof navigator.canShare === 'function'
+      if (canTryFileShare) {
+        setSending(true)
+        const res = await fetch(ogImageUrl)
+        const blob = await res.blob()
+        const file = new File([blob], 'wafinance-pessaro.jpg', { type: blob.type || 'image/jpeg' })
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file], text: finalMsg })
+          setSending(false)
+          setOpen(false)
+          setCustom('')
+          if (onSend) onSend()
+          return
+        }
+      }
+    } catch (err) {
+      // Usuario canceló el share sheet, o el navegador no soporta adjuntar archivos: seguimos al fallback de link.
+      setSending(false)
+      if (err?.name === 'AbortError') return // canceló manualmente, no forzar fallback
+    }
+    setSending(false)
+    openWhatsAppLink()
   }
 
   function copyLink() {
@@ -146,11 +176,14 @@ ${chatLink}`
                 style={{ flex: 1, padding: '11px 0', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
                 Cancelar
               </button>
-              <button onClick={openWhatsApp}
-                style={{ flex: 2, padding: '11px 0', borderRadius: 12, background: WA, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
-                Enviar por WhatsApp
+              <button onClick={sendInvite} disabled={sending}
+                style={{ flex: 2, padding: '11px 0', borderRadius: 12, background: WA, border: 'none', color: '#fff', fontSize: 13, fontWeight: 700, cursor: sending ? 'default' : 'pointer', opacity: sending ? 0.7 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, fontFamily: 'inherit' }}>
+                {sending ? 'Preparando imagen...' : 'Enviar por WhatsApp'}
               </button>
             </div>
+            <p style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', margin: '10px 0 0', lineHeight: 1.5, textAlign: 'center' }}>
+              En celular se adjunta la imagen completa. En computador, WhatsApp Web solo permite enviar el link (la vista previa aparece recortada por WhatsApp).
+            </p>
           </div>
         </div>
       )}
