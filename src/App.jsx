@@ -2365,8 +2365,16 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
   const[loading,setLoading]=useState(true)
   const[showAdd,setShowAdd]=useState(false)
   const[filter,setFilter]=useState('pendientes')
+  const[staffFilter,setStaffFilter]=useState('todos')
   const[staffList,setStaffList]=useState([])
   const[form,setForm]=useState({title:'',priority:'media',due_date:'',contact_id:'',task_type:'otro',description:'',assigned_to:'',reminder:false})
+  const[continueTask,setContinueTask]=useState(null)
+  const[updates,setUpdates]=useState([])
+  const[loadingUpdates,setLoadingUpdates]=useState(false)
+  const[updateNote,setUpdateNote]=useState('')
+  const[updateStatus,setUpdateStatus]=useState('')
+  const[savingUpdate,setSavingUpdate]=useState(false)
+  const[namesByUid,setNamesByUid]=useState({})
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -2386,19 +2394,24 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
   const isPending=t=>!t.done&&t.status!=='completada'&&t.status!=='cancelada'
   const isDone=t=>t.done||t.status==='completada'
 
+  const byStaff=(()=>{
+    if(!isSuperAdmin||staffFilter==='todos')return tasks
+    return tasks.filter(t=>t.assigned_to===staffFilter)
+  })()
+
   const filtered=(()=>{
     switch(filter){
-      case 'hoy':return tasks.filter(t=>isToday(t))
-      case 'vencidas':return tasks.filter(t=>isOverdue(t))
-      case 'completadas':return tasks.filter(t=>isDone(t))
-      case 'todas':return tasks
-      default:return tasks.filter(t=>isPending(t))
+      case 'hoy':return byStaff.filter(t=>isToday(t))
+      case 'vencidas':return byStaff.filter(t=>isOverdue(t))
+      case 'completadas':return byStaff.filter(t=>isDone(t))
+      case 'todas':return byStaff
+      default:return byStaff.filter(t=>isPending(t))
     }
   })()
-  const pendingCount=tasks.filter(t=>isPending(t)&&!isOverdue(t)).length
-  const todayCount=tasks.filter(t=>isToday(t)).length
-  const overdueCount=tasks.filter(t=>isOverdue(t)).length
-  const doneCount=tasks.filter(t=>isDone(t)).length
+  const pendingCount=byStaff.filter(t=>isPending(t)&&!isOverdue(t)).length
+  const todayCount=byStaff.filter(t=>isToday(t)).length
+  const overdueCount=byStaff.filter(t=>isOverdue(t)).length
+  const doneCount=byStaff.filter(t=>isDone(t)).length
 
   const TASK_TYPE_ICONS={enviar_invitacion_wafinance:'💹',llamar_cliente:'📞',enviar_correo:'📧',seguimiento_whatsapp:'💬',reunion:'📅',revisar_documentos:'📄',otro:'📌'}
   const TASK_TYPE_OPT=[
@@ -2409,6 +2422,13 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
     {value:'reunion',label:'Reunión'},
     {value:'revisar_documentos',label:'Revisar documentos'},
     {value:'otro',label:'Otro'},
+  ]
+  const STATUS_OPT=[
+    {value:'',label:'Sin cambio de estado'},
+    {value:'en_progreso',label:'Marcar en progreso'},
+    {value:'completada',label:'Marcar completada'},
+    {value:'cancelada',label:'Marcar cancelada'},
+    {value:'pendiente',label:'Reabrir como pendiente'},
   ]
 
   const addTask=async()=>{
@@ -2451,6 +2471,50 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
     if(t.campaign_lead_id)return leads.find(l=>l.id===t.campaign_lead_id)?.full_name||''
     return''
   }
+  const getAdvisorName=uid=>staffList.find(s=>s.user_id===uid)?.display_name||''
+  const taskCode=t=>t.task_number?`TSK-${String(t.task_number).padStart(5,'0')}`:`TSK-${t.id.slice(0,5).toUpperCase()}`
+
+  // ── Bitácora / continuación de tarea ──────────────────────────────────────
+  const openContinue=async t=>{
+    setContinueTask(t)
+    setUpdateNote('')
+    setUpdateStatus('')
+    setLoadingUpdates(true)
+    try{
+      const{data}=await supabase.from('crm_task_updates').select('*').eq('task_id',t.id).order('created_at',{ascending:false})
+      setUpdates(data||[])
+      const uids=[...new Set((data||[]).map(u=>u.created_by).filter(Boolean))]
+      const missing=uids.filter(uid=>!namesByUid[uid])
+      if(missing.length){
+        const{data:profiles}=await supabase.from('crm_staff_profiles').select('user_id,display_name').in('user_id',missing)
+        if(profiles?.length)setNamesByUid(p=>({...p,...Object.fromEntries(profiles.map(pr=>[pr.user_id,pr.display_name]))}))
+      }
+    }catch(e){console.error(e)}
+    finally{setLoadingUpdates(false)}
+  }
+  const closeContinue=()=>{setContinueTask(null);setUpdates([]);setUpdateNote('');setUpdateStatus('')}
+
+  const saveUpdate=async()=>{
+    if(!continueTask||!updateNote.trim())return
+    setSavingUpdate(true)
+    try{
+      const payload={task_id:continueTask.id,note:updateNote.trim(),status_change:updateStatus||null,created_by:user?.id}
+      const{data,error}=await supabase.from('crm_task_updates').insert(payload).select().single()
+      if(error)throw error
+      setUpdates(p=>[data,...p])
+      setUpdateNote('')
+      if(updateStatus){
+        const patch=updateStatus==='completada'
+          ?{status:'completada',done:true,completed_at:new Date().toISOString()}
+          :{status:updateStatus,done:false,completed_at:null}
+        await supabase.from('crm_tasks').update(patch).eq('id',continueTask.id)
+        setTasks(p=>p.map(t=>t.id===continueTask.id?{...t,...patch}:t))
+        setContinueTask(p=>p?{...p,...patch}:p)
+      }
+      setUpdateStatus('')
+    }catch(e){console.error(e);alert('No se pudo guardar la actualización')}
+    finally{setSavingUpdate(false)}
+  }
 
   const FilterBtn=({id,label,count,color})=>(
     <button onClick={()=>setFilter(id)} style={{padding:'6px 14px',borderRadius:8,fontSize:12,cursor:'pointer',fontWeight:filter===id?700:400,background:filter===id?(color||P.purple)+'22':'rgba(255,255,255,0.04)',color:filter===id?(color||P.purple):P.muted,border:`1px solid ${filter===id?(color||P.purple)+'50':P.border}`}}>
@@ -2460,37 +2524,42 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
 
   return <div>
     <SHdr title="Tareas" sub={`${pendingCount} pendientes · ${overdueCount} vencidas`} action={<Btn onClick={()=>setShowAdd(true)}>+ Nueva tarea</Btn>}/>
-    <div style={{display:'flex',gap:8,marginBottom:20,flexWrap:'wrap'}}>
+    <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
       <FilterBtn id="pendientes" label="Pendientes" count={pendingCount} color={P.orange}/>
       <FilterBtn id="hoy" label="Hoy" count={todayCount} color={P.purple}/>
       <FilterBtn id="vencidas" label="Vencidas" count={overdueCount} color={P.red}/>
       <FilterBtn id="completadas" label="Completadas" count={doneCount} color={P.green}/>
-      <FilterBtn id="todas" label="Todas" count={tasks.length} color={P.muted}/>
+      <FilterBtn id="todas" label="Todas" count={byStaff.length} color={P.muted}/>
+      {isSuperAdmin&&staffList.length>0&&<Sel value={staffFilter} onChange={setStaffFilter} style={{maxWidth:200,marginLeft:'auto'}}
+        options={[{value:'todos',label:'Ver por asesor: Todos'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
     </div>
     {loading?<Spinner/>:<div>
       {filtered.length===0&&<div style={{textAlign:'center',padding:'40px 0',color:P.muted,fontSize:13}}>
         {filter==='pendientes'?'¡Todo al día! No hay tareas pendientes.':filter==='hoy'?'No hay tareas para hoy.':filter==='vencidas'?'Sin tareas vencidas.':'Sin tareas completadas.'}
       </div>}
       {filtered.map(t=>{
-        const overdue=isOverdue(t),done=isDone(t),icon=TASK_TYPE_ICONS[t.task_type]||'📌',cName=getContactName(t)
+        const overdue=isOverdue(t),done=isDone(t),icon=TASK_TYPE_ICONS[t.task_type]||'📌',cName=getContactName(t),advisorName=isSuperAdmin?getAdvisorName(t.assigned_to):''
         return <GlassCard key={t.id} style={{marginBottom:10,display:'flex',gap:12,alignItems:'flex-start',borderLeft:`3px solid ${done?P.green:overdue?P.red:PRIO_COLOR[t.priority]||P.orange}`,opacity:done?0.5:1}}>
           <div style={{paddingTop:2,flexShrink:0}}>
             {done?<div style={{width:20,height:20,borderRadius:6,background:P.green,display:'flex',alignItems:'center',justifyContent:'center',color:'#000',fontSize:10,fontWeight:700}}>✓</div>
             :<button onClick={()=>completeTask(t.id)} style={{width:20,height:20,borderRadius:6,border:`2px solid ${PRIO_COLOR[t.priority]||P.orange}`,background:'transparent',cursor:'pointer'}} title="Completar"/>}
           </div>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4,flexWrap:'wrap'}}>
               <span style={{fontSize:13}}>{icon}</span>
+              <span style={{fontSize:10,color:P.muted,fontFamily:'monospace',background:'rgba(255,255,255,0.05)',borderRadius:4,padding:'1px 6px'}}>{taskCode(t)}</span>
               <p style={{fontSize:14,fontWeight:500,color:done?P.muted:P.text,margin:0,textDecoration:done?'line-through':'none'}}>{t.title}</p>
             </div>
             <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
               {cName&&<span style={{fontSize:11,color:P.purple,background:P.purpleDim,borderRadius:4,padding:'1px 6px'}}>{cName}</span>}
+              {advisorName&&<span style={{fontSize:11,color:P.blue,background:P.blue+'1a',borderRadius:4,padding:'1px 6px'}}>👤 {advisorName}</span>}
               <Badge label={t.priority||'media'} color={PRIO_COLOR[t.priority]||P.orange}/>
               {t.due_date&&<span style={{fontSize:11,color:overdue?P.red:P.muted,fontWeight:overdue?600:400}}>{overdue?'⚠ ':''}{fmtDate(t.due_date)}</span>}
             </div>
             {t.description&&<p style={{fontSize:11,color:P.muted,margin:'4px 0 0',lineHeight:1.5}}>{t.description}</p>}
           </div>
-          <div style={{display:'flex',gap:4,flexShrink:0}}>
+          <div style={{display:'flex',gap:4,flexShrink:0,alignItems:'center'}}>
+            <Btn variant="ghost" style={{padding:'3px 8px',fontSize:11}} onClick={()=>openContinue(t)}>Continuar →</Btn>
             {!done&&t.status!=='cancelada'&&<Btn variant="ghost" style={{padding:'3px 8px',fontSize:11}} onClick={()=>completeTask(t.id)}>✓</Btn>}
             {!done&&t.status!=='cancelada'&&<button onClick={()=>cancelTask(t.id)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:14,padding:'2px 4px'}} title="Cancelar">✕</button>}
             {(done||t.status==='cancelada')&&<button onClick={()=>deleteTask(t.id)} style={{background:'none',border:'none',color:P.muted,cursor:'pointer',fontSize:12,padding:'2px 4px'}} title="Eliminar">🗑</button>}
@@ -2516,6 +2585,41 @@ function Tasks({contacts,leads,user,isSuperAdmin}){
         <div style={{display:'flex',gap:10,justifyContent:'flex-end',paddingTop:8}}>
           <Btn variant="ghost" onClick={()=>setShowAdd(false)}>Cancelar</Btn>
           <Btn onClick={addTask} disabled={!form.title}>Crear Tarea</Btn>
+        </div>
+      </div>
+    </Modal>}
+    {continueTask&&<Modal title={`${taskCode(continueTask)} · ${continueTask.title}`} onClose={closeContinue} accent={P.blue}>
+      <div style={{display:'flex',flexDirection:'column',gap:16}}>
+        <div style={{display:'flex',gap:6,flexWrap:'wrap',alignItems:'center'}}>
+          <Badge label={continueTask.status||'pendiente'} color={continueTask.status==='completada'?P.green:continueTask.status==='cancelada'?P.red:P.orange}/>
+          {isSuperAdmin&&getAdvisorName(continueTask.assigned_to)&&<span style={{fontSize:11,color:P.blue,background:P.blue+'1a',borderRadius:4,padding:'1px 6px'}}>👤 {getAdvisorName(continueTask.assigned_to)}</span>}
+          {getContactName(continueTask)&&<span style={{fontSize:11,color:P.purple,background:P.purpleDim,borderRadius:4,padding:'1px 6px'}}>{getContactName(continueTask)}</span>}
+        </div>
+
+        <div>
+          <Lbl>Agregar actualización</Lbl>
+          <textarea value={updateNote} onChange={e=>setUpdateNote(e.target.value)} placeholder="Ej: Contacté al cliente, quedó de confirmar el jueves..."
+            rows={3} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',resize:'vertical'}}/>
+        </div>
+        <div><Lbl>Cambio de estado (opcional)</Lbl><Sel value={updateStatus} onChange={setUpdateStatus} options={STATUS_OPT}/></div>
+        <div style={{display:'flex',justifyContent:'flex-end'}}>
+          <Btn onClick={saveUpdate} disabled={!updateNote.trim()||savingUpdate}>{savingUpdate?'Guardando...':'Guardar actualización'}</Btn>
+        </div>
+
+        <div style={{borderTop:`1px solid ${P.border}`,paddingTop:14}}>
+          <Lbl>Bitácora</Lbl>
+          {loadingUpdates?<Spinner/>:updates.length===0?
+            <p style={{fontSize:12,color:P.muted}}>Sin actualizaciones todavía.</p>:
+            <div style={{display:'flex',flexDirection:'column',gap:10,maxHeight:280,overflowY:'auto'}}>
+              {updates.map(u=><div key={u.id} style={{background:'rgba(255,255,255,0.03)',borderRadius:8,padding:'10px 12px'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                  <span style={{fontSize:12,fontWeight:600,color:P.text}}>{namesByUid[u.created_by]||(u.created_by===user?.id?'Tú':'Asesor')}</span>
+                  <span style={{fontSize:10,color:P.muted}}>{new Date(u.created_at).toLocaleString('es-CL')}</span>
+                </div>
+                {u.status_change&&<Badge label={`→ ${u.status_change}`} color={P.blue}/>}
+                <p style={{fontSize:12,color:P.textSub,margin:'6px 0 0',lineHeight:1.5,whiteSpace:'pre-wrap'}}>{u.note}</p>
+              </div>)}
+            </div>}
         </div>
       </div>
     </Modal>}
