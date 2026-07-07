@@ -109,8 +109,26 @@ function StatCard({label,value,sub,Icon,accent=P.purple}){
   </GlassCard>
 }
 function Input({value,onChange,placeholder,type='text',style={}}){
-  return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
-    style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',...style}}/>
+  const[showPwd,setShowPwd]=useState(false)
+  const isPwd=type==='password'
+  if(!isPwd){
+    return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+      style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',...style}}/>
+  }
+  return <div style={{position:'relative',width:'100%'}}>
+    <input type={showPwd?'text':'password'} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
+      style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 40px 9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',boxSizing:'border-box',...style}}/>
+    <button type="button" onClick={()=>setShowPwd(v=>!v)} tabIndex={-1}
+      aria-label={showPwd?'Ocultar contraseña':'Mostrar contraseña'}
+      style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',padding:6,display:'flex',alignItems:'center',justifyContent:'center',color:P.muted,opacity:0.75}}
+      onMouseEnter={e=>e.currentTarget.style.opacity=1}
+      onMouseLeave={e=>e.currentTarget.style.opacity=0.75}>
+      {showPwd
+        ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+      }
+    </button>
+  </div>
 }
 function Sel({value,onChange,options,style={}}){
   return <select value={value} onChange={e=>onChange(e.target.value)}
@@ -271,6 +289,7 @@ function Login({onLogin}){
 
   const[email,setEmail]=useState('')
   const[pass,setPass]=useState('')
+  const[showPass,setShowPass]=useState(false)
   const[error,setError]=useState('')
   const[loading,setLoading]=useState(false)
   const[view,setView]=useState('login')
@@ -450,7 +469,16 @@ function Login({onLogin}){
                 </div>
                 <div>
                   <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
-                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+                  <div style={{position:'relative'}}>
+                    <input type={showPass?'text':'password'} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,paddingRight:44}}/>
+                    <button type="button" onClick={()=>setShowPass(v=>!v)} tabIndex={-1} aria-label={showPass?'Ocultar contraseña':'Mostrar contraseña'}
+                      style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',padding:6,display:'flex',alignItems:'center',color:'#6b6b75'}}>
+                      {showPass
+                        ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                      }
+                    </button>
+                  </div>
                 </div>
                 {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
                 <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
@@ -493,7 +521,16 @@ function Login({onLogin}){
                 </div>
                 <div>
                   <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
-                  <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,padding:'11px 14px',fontSize:'0.875rem'}}/>
+                  <div style={{position:'relative'}}>
+                    <input type={showPass?'text':'password'} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,padding:'11px 44px 11px 14px',fontSize:'0.875rem'}}/>
+                    <button type="button" onClick={()=>setShowPass(v=>!v)} tabIndex={-1} aria-label={showPass?'Ocultar contraseña':'Mostrar contraseña'}
+                      style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',padding:6,display:'flex',alignItems:'center',color:'#6b6b75'}}>
+                      {showPass
+                        ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                      }
+                    </button>
+                  </div>
                 </div>
                 {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center'}}>{error}</div>}
                 <button onClick={handle} disabled={loading} onMouseEnter={e=>{if(!loading)e.currentTarget.style.backgroundColor='#6b4ce0'}} onMouseLeave={e=>{if(!loading)e.currentTarget.style.backgroundColor='#7c5cff'}} style={{width:'100%',padding:'11px 16px',borderRadius:8,fontSize:'0.875rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
@@ -526,7 +563,16 @@ function Login({onLogin}){
             </div>
             <div>
               <label style={{display:'block',fontSize:'0.6875rem',fontWeight:700,color:'rgba(255,255,255,0.5)',marginBottom:6,letterSpacing:'1.5px',textTransform:'uppercase'}}>CONTRASEÑA</label>
-              <input type="password" value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle}}/>
+              <div style={{position:'relative'}}>
+                <input type={showPass?'text':'password'} value={pass} onChange={e=>setPass(e.target.value)} placeholder="••••••••" onFocus={onFocusIn} onBlur={onFocusOut} onKeyDown={e=>e.key==='Enter'&&handle()} style={{...inputStyle,paddingRight:44}}/>
+                <button type="button" onClick={()=>setShowPass(v=>!v)} tabIndex={-1} aria-label={showPass?'Ocultar contraseña':'Mostrar contraseña'}
+                      style={{position:'absolute',right:6,top:'50%',transform:'translateY(-50%)',background:'none',border:'none',cursor:'pointer',padding:6,display:'flex',alignItems:'center',color:'#6b6b75'}}>
+                      {showPass
+                        ? <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8Z"/><circle cx="12" cy="12" r="3"/></svg>
+                      }
+                    </button>
+              </div>
             </div>
             {error&&<div style={{padding:'10px 12px',backgroundColor:'rgba(239,68,68,0.1)',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,color:'#fca5a5',fontSize:'0.8125rem',textAlign:'center',marginTop:12}}>{error}</div>}
             <button onClick={handle} disabled={loading} style={{width:'100%',padding:'12px 16px',borderRadius:8,fontSize:'0.9375rem',fontWeight:600,backgroundColor:loading?'rgba(124,92,255,0.5)':'#7c5cff',color:'#ffffff',border:'none',cursor:loading?'not-allowed':'pointer',transition:'all 0.2s ease',marginTop:4,WebkitTapHighlightColor:'transparent'}}>{loading?'Iniciando...':'Entrar al CRM'}</button>
