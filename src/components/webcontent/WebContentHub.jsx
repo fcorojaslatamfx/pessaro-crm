@@ -1,5 +1,5 @@
 // ─── CONTENIDO WEB · Hub (solo super_admin) ──────────────────────────────────
-// Módulo de unificación CMS→CRM. Lotes 1-2 activos. Lote 3: Páginas + Ajustes.
+// Módulo de unificación CMS→CRM. Lotes 1-3 completos: los 8 gestores activos.
 import { useState } from 'react'
 import { P } from './ui.jsx'
 import BlogManager from './BlogManager.jsx'
@@ -8,6 +8,8 @@ import FAQManager from './FAQManager.jsx'
 import ServicesManager from './ServicesManager.jsx'
 import InstrumentsManager from './InstrumentsManager.jsx'
 import TeamWebManager from './TeamWebManager.jsx'
+import PageContentManager from './PageContentManager.jsx'
+import SiteSettings from './SiteSettings.jsx'
 
 const TABS=[
   {id:'blog', label:'Blog',        icon:'📰', ready:true},
@@ -16,8 +18,8 @@ const TABS=[
   {id:'services',label:'Servicios',icon:'🧭', ready:true},
   {id:'instruments',label:'Instrumentos',icon:'📈', ready:true},
   {id:'teamweb',label:'Equipo Web',icon:'👥', ready:true},
-  {id:'pages',label:'Páginas',     icon:'📄', ready:false},
-  {id:'settings',label:'Ajustes',  icon:'⚙', ready:false},
+  {id:'pages',label:'Páginas',     icon:'📄', ready:true},
+  {id:'settings',label:'Ajustes',  icon:'⚙', ready:true},
 ]
 
 export default function WebContentHub({isSuperAdmin}){
@@ -46,5 +48,7 @@ export default function WebContentHub({isSuperAdmin}){
     {tab==='services'&&<ServicesManager/>}
     {tab==='instruments'&&<InstrumentsManager/>}
     {tab==='teamweb'&&<TeamWebManager/>}
+    {tab==='pages'&&<PageContentManager/>}
+    {tab==='settings'&&<SiteSettings/>}
   </div>
 }
