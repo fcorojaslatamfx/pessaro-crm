@@ -1,17 +1,21 @@
 // ─── CONTENIDO WEB · Hub (solo super_admin) ──────────────────────────────────
-// Módulo de unificación CMS→CRM. Lote 1: Blog + Media. Lotes 2-3: resto de gestores.
+// Módulo de unificación CMS→CRM. Lotes 1-2 activos. Lote 3: Páginas + Ajustes.
 import { useState } from 'react'
 import { P } from './ui.jsx'
 import BlogManager from './BlogManager.jsx'
 import MediaLibrary from './MediaLibrary.jsx'
+import FAQManager from './FAQManager.jsx'
+import ServicesManager from './ServicesManager.jsx'
+import InstrumentsManager from './InstrumentsManager.jsx'
+import TeamWebManager from './TeamWebManager.jsx'
 
 const TABS=[
   {id:'blog', label:'Blog',        icon:'📰', ready:true},
   {id:'media',label:'Media',       icon:'🖼', ready:true},
-  {id:'faqs', label:'FAQs',        icon:'❓', ready:false},
-  {id:'services',label:'Servicios',icon:'🧭', ready:false},
-  {id:'instruments',label:'Instrumentos',icon:'📈', ready:false},
-  {id:'teamweb',label:'Equipo Web',icon:'👥', ready:false},
+  {id:'faqs', label:'FAQs',        icon:'❓', ready:true},
+  {id:'services',label:'Servicios',icon:'🧭', ready:true},
+  {id:'instruments',label:'Instrumentos',icon:'📈', ready:true},
+  {id:'teamweb',label:'Equipo Web',icon:'👥', ready:true},
   {id:'pages',label:'Páginas',     icon:'📄', ready:false},
   {id:'settings',label:'Ajustes',  icon:'⚙', ready:false},
 ]
@@ -38,5 +42,9 @@ export default function WebContentHub({isSuperAdmin}){
     </div>
     {tab==='blog'&&<BlogManager/>}
     {tab==='media'&&<MediaLibrary/>}
+    {tab==='faqs'&&<FAQManager/>}
+    {tab==='services'&&<ServicesManager/>}
+    {tab==='instruments'&&<InstrumentsManager/>}
+    {tab==='teamweb'&&<TeamWebManager/>}
   </div>
 }
