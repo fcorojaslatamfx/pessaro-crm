@@ -8,6 +8,7 @@ import WAFinanceChat from './pages/WAFinanceChat.jsx'
 import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
 import WebContentHub from './components/webcontent/WebContentHub.jsx'
+import ContactsHub from './components/clients/ClientsPortalKYC.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -4671,7 +4672,7 @@ export default function App(){
           if(loading&&currentMod==='dashboard') return <Spinner/>
           if(isBroker) return <BrokerView user={user} campaigns={campaigns} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='dashboard') return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule} isSuperAdmin={isSuperAdmin} user={user} staffProfile={staffProfile}/>
-          if(currentMod==='contacts')  return <Contacts user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile}/>
+          if(currentMod==='contacts')  return <ContactsHub user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} Contacts={Contacts}/>
           if(currentMod==='pipeline')  return <Pipeline leads={myLeads} setLeads={setLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='tasks')     return <Tasks contacts={contacts} leads={myLeads} user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='emails')    return <Emails contacts={contacts} leads={myLeads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
