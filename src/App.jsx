@@ -7,6 +7,7 @@ import CampaignSender from './components/whatsapp/CampaignSender.jsx'
 import WAFinanceChat from './pages/WAFinanceChat.jsx'
 import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
+import WebContentHub from './components/webcontent/WebContentHub.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -4499,6 +4500,7 @@ export default function App(){
     ...(canAccess('equipo')   ?['equipo']:[]),
     ...(canAccess('campaigns')?['campaigns']:[]),
     ...(isSuperAdmin          ?['admin_campaigns']:[]),
+    ...(isSuperAdmin          ?['webcontent']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
     ...(canAccess('mensajes') ?['wafinance']:[]),
   ]
@@ -4514,6 +4516,7 @@ export default function App(){
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
+    ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
     canAccess('mensajes')?{id:'wafinance',label:'WAFinance',icon:'💹',color:'#f0a500'}:null,
   ].filter(Boolean)
@@ -4676,6 +4679,7 @@ export default function App(){
           if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
           if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+          if(currentMod==='webcontent'&&isSuperAdmin) return <WebContentHub isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
           if(currentMod==='wafinance') return <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
           return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
