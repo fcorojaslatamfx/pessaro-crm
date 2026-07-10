@@ -9,6 +9,7 @@ import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
 import WebContentHub from './components/webcontent/WebContentHub.jsx'
 import ContactsHub from './components/clients/ClientsPortalKYC.jsx'
+import EducationAdmin from './components/education/EducationAdmin.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -4548,6 +4549,7 @@ export default function App(){
     ...(canAccess('campaigns')?['campaigns']:[]),
     ...(isSuperAdmin          ?['admin_campaigns']:[]),
     ...(isSuperAdmin          ?['webcontent']:[]),
+    ...((isSuperAdmin||staffProfile?.role==='admin')?['education']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
     ...(canAccess('mensajes') ?['wafinance']:[]),
   ]
@@ -4564,6 +4566,7 @@ export default function App(){
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
     ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
+    ...((isSuperAdmin||staffProfile?.role==='admin')?[{id:'education',label:'Educación',icon:'🎓',color:P.green}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
     canAccess('mensajes')?{id:'wafinance',label:'WAFinance',icon:'💹',color:'#f0a500'}:null,
   ].filter(Boolean)
@@ -4727,6 +4730,7 @@ export default function App(){
           if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
           if(currentMod==='webcontent'&&isSuperAdmin) return <WebContentHub isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='education'&&(isSuperAdmin||staffProfile?.role==='admin')) return <EducationAdmin user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
           if(currentMod==='wafinance') return <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
           return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
