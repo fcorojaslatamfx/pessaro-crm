@@ -4566,6 +4566,7 @@ export default function App(){
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
     ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
+    ...((isSuperAdmin||staffProfile?.role==='admin')?[{id:'education',label:'Educación',icon:'🎓',color:P.green}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
     canAccess('mensajes')?{id:'wafinance',label:'WAFinance',icon:'💹',color:'#f0a500'}:null,
   ].filter(Boolean)
