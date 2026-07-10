@@ -35,8 +35,20 @@ function AssignCourse(){
   const submit=async()=>{
     setSubmitting(true);setMsg(null)
     try{
+      // Paso 1: resolver contacto → cuenta auth del portal (crm_contacts.id ≠ auth.uid())
+      const contact=contacts.find(c=>c.id===form.assigned_to_user_id)
+      if(!contact?.email)throw new Error('El contacto seleccionado no tiene email registrado — agrégalo en Contactos primero.')
+      const{data:resolved,error:resErr}=await supabase.functions.invoke('resolve-client-account',{
+        body:{email:contact.email}
+      })
+      if(resErr)throw resErr
+      if(!resolved?.found||!resolved?.auth_user_id){
+        setMsg({type:'err',text:`${contact.full_name||contact.email} aún no tiene cuenta registrada en el portal. Pídele que se registre en pessaro.cl antes de asignarle un curso.`})
+        return
+      }
+      // Paso 2: asignar usando el auth_user_id real
       const{error}=await supabase.functions.invoke('assign-course-to-client',{
-        body:{assigned_to_user_id:form.assigned_to_user_id,module_id:form.module_id,reason_note:form.reason_note}
+        body:{assigned_to_user_id:resolved.auth_user_id,module_id:form.module_id,reason_note:form.reason_note}
       })
       if(error)throw error
       setMsg({type:'ok',text:'Curso asignado correctamente. Queda pendiente de aprobación.'})
