@@ -1,8 +1,9 @@
+
 import { useState } from 'react'
 
 const ACCENT = '#6c5ce7'
-const GOLD   = '#f0a500'
-const WA     = '#25D366'
+const GOLD = '#f0a500'
+const WA = '#25D366'
 
 export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
@@ -14,15 +15,18 @@ export default function WAFinanceInviteButton({ advisorCode, advisorName, leadNa
   const firstName = leadName ? leadName.split(' ')[0] : ''
   const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
 
+  // Texto acotado, foco en beneficios + asesoría integral. Sin emojis: se corrompen ( ) al pasar por wa.me.
   const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}!
 
-Tu perfil ha sido seleccionado para una *asesor\u00eda financiera exclusiva y gratuita* con Pessaro Capital.
+Te invitamos a una *asesoría financiera integral y sin compromiso* con Pessaro Capital: un chat privado y seguro con tu asesor personal.
 
-\u2713 Forex, Commodities, \u00cdndices y Crypto
-\u2713 Asesor profesional + asistente inteligente
-\u2713 100% gratuito, sin compromisos
-${advisorName ? `\nTu asesor: *${advisorName}*\n` : ''}
-*Comienza aqu\u00ed:*
+Beneficios para ti:
+✓ Oportunidades en Forex, Índices, Commodities y Crypto
+✓ Recomendaciones según tu perfil de riesgo
+✓ Asesor profesional + asistente inteligente
+✓ Sin compromiso alguno: tú siempre decides
+${advisorName ? `\nTu asesor personal: *${advisorName}*\n` : ''}
+*Comienza aquí:*
 ${chatLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
@@ -44,7 +48,7 @@ ${chatLink}`
   function copyLink() {
     navigator.clipboard.writeText(chatLink).then(() => {
       const el = document.getElementById('waf-copy-feedback')
-      if (el) { el.textContent = '\u2713 Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
+      if (el) { el.textContent = '✓ Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
     })
   }
 
@@ -62,7 +66,7 @@ ${chatLink}`
           color: WA, fontSize: 12, fontWeight: 600, cursor: 'pointer',
           fontFamily: 'inherit',
         }}>
-        {compact ? '\ud83d\udcb9' : <><span>{'\ud83d\udcf2'}</span><span>Invitar WAFinance</span></>}
+        {compact ? '💹' : <><span>{'📲'}</span><span>Invitar WAFinance</span></>}
       </button>
 
       {open && (
@@ -75,12 +79,12 @@ ${chatLink}`
               <div>
                 <h3 style={{ fontSize: 16, fontWeight: 700, color: '#fff', margin: 0 }}>Invitar a WAFinance</h3>
                 <p style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', margin: '4px 0 0' }}>
-                  Sesi{'\u00f3'}n exclusiva para {leadName || 'el cliente'}
+                  Sesi{'ó'}n exclusiva para {leadName || 'el cliente'}
                 </p>
               </div>
               <button onClick={() => { setOpen(false); setCustom('') }}
                 style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: 20, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>
-                {'\u2715'}
+                {'✕'}
               </button>
             </div>
 
