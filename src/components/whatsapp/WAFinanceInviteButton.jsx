@@ -102,14 +102,14 @@ ${chatLink}`
 
             {/* Badges */}
             <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
-              <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: 'rgba(16,185,129,0.12)', color: '#10b981', fontWeight: 600, border: '1px solid rgba(16,185,129,0.2)' }}>
-                100% Gratuito
-              </span>
               <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: `${GOLD}15`, color: GOLD, fontWeight: 600, border: `1px solid ${GOLD}30` }}>
                 Sin compromisos
               </span>
               <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: `${ACCENT}15`, color: ACCENT, fontWeight: 600, border: `1px solid ${ACCENT}30` }}>
                 Chat exclusivo
+              </span>
+              <span style={{ fontSize: 10, padding: '3px 10px', borderRadius: 20, background: `${GOLD}15`, color: GOLD, fontWeight: 600, border: `1px solid ${GOLD}30` }}>
+                Resultados auditados
               </span>
             </div>
 
