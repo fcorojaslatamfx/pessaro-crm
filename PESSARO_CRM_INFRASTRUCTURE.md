@@ -1,8 +1,8 @@
 # 📋 Pessaro Capital CRM — Infraestructura Definitiva
 
 **Creado:** 2026-02-25  
-**Última actualización:** 2026-06-24  
-**Estado general:** 🟢 Operativo (WhatsApp + Campañas + Contactos + Emails)
+**Última actualización:** 2026-07-21  
+**Estado general:** 🟢 Operativo (WhatsApp + Campañas + Contactos + Emails + Soporte)
 
 ---
 
@@ -19,6 +19,7 @@
 9. [Instrucciones críticas](#instrucciones-críticas)
 10. [Contactos del equipo](#contactos-del-equipo)
 11. [WAFinance — Chat en vivo](#wafinance)
+12. [Soporte — Tickets OTP](#soporte-tickets-otp)
 
 ---
 
@@ -39,6 +40,7 @@
 - ✅ Emails: plantillas, seguimiento
 - ✅ Análisis: reportes, KPIs, previsiones
 - ✅ **Aislamiento de datos por rol** (2026-06-24): cada asesor ve solo SUS contactos, emails, leads y KPIs
+- ✅ **Soporte (Tickets OTP)** (2026-07-21): portal público `/soporte` para clientes (verificación OTP email) + inbox de staff en el CRM, aislado por asesor asignado
 - 🔜 **WAFinance** — Chat en vivo integrado al CRM con:
   - Formulario de registro + OTP email verification (5 min expiry)
   - Lead auto-insertado en campaign_leads (advisor_referral_code)
@@ -105,6 +107,13 @@ ldlflxujrjihiybrcree
 | `cms_email_queue` | id, recipient, template_name, variables, status, sent_at | Cola de emails enviados |
 | `cms_blog_posts_2026_02_23_17_38` | id, title, slug, content, tags, featured_image, status, published_at | Posts del blog |
 
+#### Soporte (Tickets OTP) — 🆕 2026-07-21
+| Tabla | Columnas clave | Propósito |
+|-------|---|---|
+| `support_tickets` | id, ticket_number (PSR-#####), contact_id, client_email, client_phone, client_name, subject, category, priority, status, assigned_to (FK crm_staff_profiles.id), team_id, otp_verified | Tickets de soporte creados por clientes vía portal público |
+| `support_ticket_messages` | id, ticket_id, sender_type (client/staff/system), sender_staff_id, content, attachment_path | Hilo de mensajes por ticket |
+| `support_otp_sessions` | id, client_email, client_phone, channel (email/sms), code_hash (SHA-256), attempts, expires_at, verified_at, session_token | Sesiones OTP del portal de soporte (patrón WAFinance) |
+
 #### Otros
 | Tabla | Columnas clave | Propósito |
 |-------|---|---|
@@ -123,6 +132,17 @@ Policies:
 ├─ SELECT:   is_crm_staff()  [super_admin + admin + asesor]
 ├─ UPDATE:   is_super_admin()
 └─ DELETE:   is_super_admin()
+```
+
+#### Bucket `support-attachments` (privado, 5MB) — ⏳ PENDIENTE DE CREACIÓN
+```
+MIMEs permitidos (planeado): image/jpeg, image/png, image/webp, application/pdf
+
+Estado: columna support_ticket_messages.attachment_path ya existe en el schema,
+pero el bucket no se ha creado (ningún flujo de adjuntos implementado aún en
+support_otp/support_tickets/SupportPortal/SupportTicketView/SupportInbox).
+Crear vía Dashboard/API de Storage cuando se implemente la subida de adjuntos,
+siguiendo el patrón de whatsapp-attachments.
 ```
 
 #### Tablas SQL críticas
@@ -149,6 +169,17 @@ variant_advisors:
 
 whatsapp_messages:
 ├─ SELECT:  role = 'super_admin' OR (assigned_to en whatsapp_assignments)
+
+support_tickets: (NUEVO 2026-07-21)
+├─ SELECT/UPDATE:  is_super_admin() OR (is_crm_staff() AND assigned_to = mi perfil)
+└─ Efecto:  Cada asesor ve/edita solo los tickets asignados a él. SA ve todos.
+
+support_ticket_messages: (NUEVO 2026-07-21)
+├─ SELECT/INSERT:  is_super_admin() OR (is_crm_staff() AND EXISTS ticket asignado al staff)
+└─ Efecto:  Aislamiento por ticket asignado (join a support_tickets, no recursivo — tabla distinta)
+
+support_otp_sessions: (NUEVO 2026-07-21)
+└─ Sin policies para authenticated/anon → solo accesible via service_role (Edge Functions)
 ```
 
 ### 🔧 Funciones SQL críticas
@@ -252,6 +283,28 @@ Actions:
     ├─ Validación: caller = staff CRM, cliente en crm_contacts del caller
     ├─ Propósito: Iniciar chat con plantilla cuando cliente nunca ha escrito
     └─ Auto-asignación: Asigna chat al caller si no estaba asignado
+```
+
+#### Soporte (Tickets OTP) — 🆕 2026-07-21
+```
+support_otp (v2):
+├─ verify_jwt: false (público, sin Supabase Auth — patrón wafinance_otp)
+├─ Action request: código 6 dígitos, hash SHA-256, envío vía Resend, rate limit 3/10min
+└─ Action verify: máx 5 intentos, emite session_token (TTL 24h)
+
+support_tickets (v1):
+├─ verify_jwt: false (público, valida session_token server-side en cada action)
+├─ Actions: create_ticket, list_my_tickets, get_ticket, add_message
+└─ Resuelve contact_id por email contra crm_contacts; hereda asesor/equipo o asigna a super_admin
+
+support_notify (v1):
+├─ verify_jwt: true (solo invocación server-to-server desde support_tickets)
+├─ Notifica por email (Resend) al asesor asignado al crear ticket / nuevo mensaje de cliente
+└─ Fan-out opcional vía push_notifications_2026_02_27 (contrato de payload asumido, no verificado end-to-end)
+
+Rutas frontend: /soporte (portal cliente), /soporte/ticket/:ticketNumber (hilo), módulo "Soporte" en sidebar CRM (SupportInbox)
+
+⏳ Pendiente Fase 2: mensatek_send (SMS OTP + avisos vía Mensatek, verify_jwt: true) — ver §Mejoras pendientes
 ```
 
 #### Otros Edge Functions críticos
@@ -544,6 +597,23 @@ Función:            market_prices_2026_06_02 (v25)
 Nota: Solo daily bar (dailyBar.c) — no real-time
 ```
 
+### Mensatek (SMS) — Fase 2, diferida
+
+```
+Status:              ⏳ NO INICIADO (diseño documentado en SPEC, sin cuenta ni secret)
+Alcance planeado:     OTP por SMS (channel='sms' en support_otp_sessions, columna ya prevista)
+                      + avisos SMS de respuesta de ticket
+NO reemplaza:         Meta WhatsApp Cloud API sigue siendo el canal WA oficial (+56 9 2207 1511)
+
+Requisitos previos:
+├─ Cuenta Mensatek + evaluación de costo por SMS a Chile
+├─ Secret MENSATEK_API_KEY en Supabase Vault (⚠️ requiere redeploy de functions tras agregarse)
+└─ Registrar como proveedor SMS en push_notifications_2026_02_27 (hoy declara fan-out
+   SMS sin proveedor real — hueco documental a cerrar cuando se implemente)
+
+Edge Function planeada: mensatek_send v1 (verify_jwt: true)
+```
+
 ---
 
 ## ✅ Funcionalidad operativa
@@ -762,6 +832,34 @@ Roles:
 └─ asesor: acceso a su asignaciones (Daniel, Iván, JP, Mario, Jose)
 ```
 
+### 🎫 Soporte (Tickets OTP)
+
+```
+Status:      ✅ OPERATIVO (Fase 1 — desplegado 2026-07-21)
+Portal público: crm.pessaro.cl/soporte
+
+Flujo cliente:
+1. Form (nombre, email, teléfono opcional, categoría, asunto, mensaje)
+2. Verificación OTP por email (Resend, código 6 dígitos, TTL 10 min, rate limit 3/10min)
+3. Ticket creado (PSR-#####), asignado automáticamente:
+   ├─ Si el email matchea un crm_contacts con asesor → hereda asesor/equipo
+   └─ Si no → asignado a super_admin (patrón whatsapp-webhook)
+4. Hilo en /soporte/ticket/:ticketNumber (requiere re-OTP si expiró session_token, TTL 24h)
+
+Inbox de staff (módulo "Soporte" en sidebar CRM):
+├─ Filtros: Abiertos / En proceso / Cerrados / Míos
+├─ Respuesta inline + cambio de estado
+├─ Asignación de asesor (solo super_admin)
+└─ RLS: asesor ve/responde solo tickets asignados a él; SA ve todos
+
+Edge Functions: support_otp (v2), support_tickets (v1), support_notify (v1)
+Tablas: support_tickets, support_ticket_messages, support_otp_sessions
+
+⏳ Pendiente:
+├─ Bucket support-attachments (adjuntos aún no implementados en frontend/edge functions)
+└─ Fase 2: OTP y avisos por SMS vía Mensatek (ver §Mejoras pendientes)
+```
+
 ---
 
 ## 📈 Mejoras pendientes
@@ -810,6 +908,12 @@ Roles:
    - Mostrar disponibilidad de asesores
    - Enlace directo a booking
    - Esfuerzo: 4-6 horas
+
+4. **Fase 2 Mensatek SMS** 🆕
+   - OTP + avisos de tickets de soporte por SMS (`support_otp_sessions.channel = 'sms'`)
+   - Requiere: cuenta Mensatek, `MENSATEK_API_KEY` en Vault, Edge Function `mensatek_send`
+   - NO reemplaza WhatsApp (Meta Cloud API sigue siendo el canal oficial)
+   - Esfuerzo: ver SPEC_SOPORTE_TICKETS_OTP_2026_07_19.md §6
 
 ### 🟢 Nice-to-have (enhancements)
 
@@ -1401,7 +1505,8 @@ Esfuerzo estimado: +2-3h por nuevo broker después del primero.
 | 2026-04-26 | 1.2 | Inbox manager, staff management |
 | 2026-06-18 | 1.3 | Password recovery, WhatsApp webhook v12 |
 | 2026-06-24 | 1.4 | Webhook v13 (media inbound), CSV/TXT con duplicados, start_chat, referral codes auto-gen |
-| 2026-06-24 | **1.5 (ACTUAL)** | ✅ Aislamiento datos por rol (email_tracking.sent_by, RLS contact_submissions, filtro leads en render), crm_send_email v19, campañas con links referido en tarjeta, Dashboard/Pipeline/Reports aislados. 🆕 Documentación WAFinance con OTP + botón "Invitar por WhatsApp" en CRM |
+| 2026-06-24 | 1.5 | ✅ Aislamiento datos por rol (email_tracking.sent_by, RLS contact_submissions, filtro leads en render), crm_send_email v19, campañas con links referido en tarjeta, Dashboard/Pipeline/Reports aislados. 🆕 Documentación WAFinance con OTP + botón "Invitar por WhatsApp" en CRM |
+| 2026-07-21 | **1.6 (ACTUAL)** | 🆕 Módulo Soporte (Tickets OTP): tablas support_tickets/support_ticket_messages/support_otp_sessions, RLS aislada por asesor asignado, Edge Functions support_otp/support_tickets/support_notify, portal público /soporte + inbox staff. Bucket support-attachments y Fase 2 Mensatek SMS quedan pendientes. |
 
 ---
 
