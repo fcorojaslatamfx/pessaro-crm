@@ -5,15 +5,27 @@ const ACCENT = '#6c5ce7'
 const GOLD = '#f0a500'
 const WA = '#25D366'
 
+const GALLERY_IMAGES = [1, 2, 3, 4, 5].map(n => ({
+  id: n,
+  url: `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/wafinance${n}.jpg`,
+}))
+
 export default function WAFinanceInviteButton({ advisorCode, advisorName, leadName, leadPhone, compact, onSend }) {
   const [open, setOpen] = useState(false)
   const [custom, setCustom] = useState('')
+  const [selectedImg, setSelectedImg] = useState(null)
 
   if (!advisorCode) return null
 
   const chatLink = `https://crm.pessaro.cl/chat/${advisorCode}`
   const firstName = leadName ? leadName.split(' ')[0] : ''
   const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
+
+  function closeModal() {
+    setOpen(false)
+    setCustom('')
+    setSelectedImg(null)
+  }
 
   // Texto acotado, foco en beneficios + asesoría integral. Sin emojis: se corrompen ( ) al pasar por wa.me.
   const defaultMsg = `Hola${firstName ? ` ${firstName}` : ''}!
@@ -40,14 +52,20 @@ ${chatLink}`
       ? `https://wa.me/${phone}?text=${encoded}`
       : `https://wa.me/?text=${encoded}`
     window.open(url, '_blank', 'noopener,noreferrer')
-    setOpen(false)
-    setCustom('')
+    closeModal()
     if (onSend) onSend()
   }
 
   function copyLink() {
     navigator.clipboard.writeText(chatLink).then(() => {
       const el = document.getElementById('waf-copy-feedback')
+      if (el) { el.textContent = '✓ Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
+    })
+  }
+
+  function copyImageLink(url) {
+    navigator.clipboard.writeText(url).then(() => {
+      const el = document.getElementById('waf-img-copy-feedback')
       if (el) { el.textContent = '✓ Copiado'; setTimeout(() => { el.textContent = 'Copiar link' }, 1500) }
     })
   }
@@ -71,7 +89,7 @@ ${chatLink}`
 
       {open && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', zIndex: 10000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}
-          onClick={e => { if (e.target === e.currentTarget) { setOpen(false); setCustom('') } }}>
+          onClick={e => { if (e.target === e.currentTarget) closeModal() }}>
           <div style={{ background: '#0a1628', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 20, padding: 28, maxWidth: 480, width: '100%', fontFamily: 'system-ui,-apple-system,sans-serif', maxHeight: '90vh', overflowY: 'auto' }}>
 
             {/* Header */}
@@ -82,7 +100,7 @@ ${chatLink}`
                   Sesi{'ó'}n exclusiva para {leadName || 'el cliente'}
                 </p>
               </div>
-              <button onClick={() => { setOpen(false); setCustom('') }}
+              <button onClick={closeModal}
                 style={{ background: 'none', border: 'none', color: 'rgba(255,255,255,0.5)', fontSize: 20, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>
                 {'✕'}
               </button>
@@ -120,6 +138,39 @@ ${chatLink}`
                 onError={e => { e.target.parentElement.style.display = 'none' }} />
             </div>
 
+            {/* Galería de imágenes para enviar (independiente de la imagen OG del link) */}
+            <div style={{ marginBottom: 14 }}>
+              <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>
+                Imagen para enviar (opcional)
+              </p>
+              <div style={{ display: 'flex', gap: 8, marginBottom: selectedImg ? 8 : 0 }}>
+                {GALLERY_IMAGES.map(img => (
+                  <button key={img.id} onClick={() => setSelectedImg(img)} title={`Imagen ${img.id}`}
+                    style={{
+                      flex: 1, padding: 0, borderRadius: 8, overflow: 'hidden', cursor: 'pointer',
+                      border: selectedImg?.id === img.id ? `2px solid ${ACCENT}` : '2px solid transparent',
+                      background: 'none', aspectRatio: '1', lineHeight: 0,
+                    }}>
+                    <img src={img.url} alt={`Opción ${img.id}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                      onError={e => { e.target.parentElement.style.display = 'none' }} />
+                  </button>
+                ))}
+              </div>
+              {selectedImg && (
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button onClick={() => copyImageLink(selectedImg.url)} id="waf-img-copy-feedback"
+                    style={{ flex: 1, padding: '6px 0', borderRadius: 6, background: `${ACCENT}22`, border: `1px solid ${ACCENT}40`, color: ACCENT, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                    Copiar link
+                  </button>
+                  <button onClick={() => window.open(selectedImg.url, '_blank', 'noopener,noreferrer')}
+                    style={{ flex: 1, padding: '6px 0', borderRadius: 6, background: `${GOLD}22`, border: `1px solid ${GOLD}40`, color: GOLD, fontSize: 11, fontWeight: 600, cursor: 'pointer' }}>
+                    Abrir imagen
+                  </button>
+                </div>
+              )}
+            </div>
+
             {/* Message preview */}
             <div style={{ marginBottom: 14 }}>
               <p style={{ fontSize: 11, fontWeight: 600, color: 'rgba(255,255,255,0.5)', textTransform: 'uppercase', letterSpacing: '0.07em', margin: '0 0 8px' }}>
@@ -148,7 +199,7 @@ ${chatLink}`
 
             {/* Actions */}
             <div style={{ display: 'flex', gap: 10 }}>
-              <button onClick={() => { setOpen(false); setCustom('') }}
+              <button onClick={closeModal}
                 style={{ flex: 1, padding: '11px 0', borderRadius: 12, background: 'transparent', border: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.6)', fontSize: 13, cursor: 'pointer', fontFamily: 'inherit' }}>
                 Cancelar
               </button>
