@@ -29,6 +29,7 @@ const FILTERS = [
 const CATEGORY_LABEL = { general: 'General', cuenta: 'Cuenta', trading: 'Trading', deposito: 'Depósito', retiro: 'Retiro', tecnico: 'Técnico' }
 const STATUS_COLOR = { abierto: P.gold, en_proceso: P.accent, cerrado: P.success }
 const STATUS_LABEL = { abierto: 'Abierto', en_proceso: 'En proceso', cerrado: 'Cerrado' }
+const EVENT_LABEL = { creado: 'Creado', estado: 'Cambio de estado', asignacion: 'Asignación', cerrado: 'Cerrado', reabierto: 'Reabierto' }
 
 function fmt(d) {
   if (!d) return ''
@@ -36,6 +37,11 @@ function fmt(d) {
   const now = new Date()
   if (dt.toDateString() === now.toDateString()) return dt.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
   return dt.toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })
+}
+
+function fmtFull(d) {
+  if (!d) return ''
+  return new Date(d).toLocaleString('es-CL', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 }
 
 export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
@@ -47,6 +53,10 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
   const [newMsg, setNewMsg]         = useState('')
   const [staffList, setStaffList]   = useState([])
   const [sending, setSending]       = useState(false)
+  const [statusNotice, setStatusNotice] = useState('')
+  const [showHistory, setShowHistory]   = useState(false)
+  const [events, setEvents]             = useState([])
+  const [loadingEvents, setLoadingEvents] = useState(false)
   const bottomRef = useRef(null)
   const channelRef = useRef(null)
 
@@ -83,15 +93,36 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
     }
     const ch = supabase
       .channel('support-tickets-watch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, () => loadTickets())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_tickets' }, p => {
+        setTickets(prev => prev.find(t => t.id === p.new.id) ? prev : [p.new, ...prev])
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'support_tickets' }, p => {
+        setTickets(prev => prev.map(t => t.id === p.new.id ? { ...t, ...p.new } : t))
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_ticket_messages' }, () => loadLastMessages())
       .subscribe()
     return () => { supabase.removeChannel(ch) }
   }, [loadTickets, loadLastMessages, isSuperAdmin])
 
+  const loadEvents = useCallback(async (ticketId) => {
+    if (!ticketId) return
+    setLoadingEvents(true)
+    const { data, error } = await supabase
+      .from('support_ticket_events')
+      .select('*, crm_staff_profiles(display_name)')
+      .eq('ticket_id', ticketId)
+      .order('created_at')
+    if (error) console.error('Error cargando historial:', error)
+    setEvents(data || [])
+    setLoadingEvents(false)
+  }, [])
+
   useEffect(() => {
     if (!activeId) return
     setMessages([])
+    setStatusNotice('')
+    setShowHistory(false)
+    setEvents([])
     ;(async () => {
       const { data } = await supabase
         .from('support_ticket_messages')
@@ -141,25 +172,45 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
       setNewMsg(content)
     } else {
       // Toca updated_at para reordenar el ticket como reciente en el inbox
-      await supabase.from('support_tickets')
+      const { data, error: statusError } = await supabase.from('support_tickets')
         .update({ status: activeTicket?.status === 'abierto' ? 'en_proceso' : activeTicket?.status })
         .eq('id', activeId)
+        .select().single()
+      if (statusError) console.error('Error actualizando estado tras respuesta:', statusError)
+      else setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
     }
     setSending(false)
   }
 
   async function assignTo(staffId) {
     if (!activeId) return
-    const staff = staffList.find(s => s.id === staffId)
-    await supabase.from('support_tickets').update({ assigned_to: staffId || null }).eq('id', activeId)
-    void staff
+    setStatusNotice('')
+    const { data, error } = await supabase
+      .from('support_tickets').update({ assigned_to: staffId || null }).eq('id', activeId)
+      .select().single()
+    if (error) { console.error('Error asignando asesor:', error); return }
+    setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
+    if (showHistory) loadEvents(activeId)
   }
 
   async function setStatus(status) {
     if (!activeId) return
-    const patch = { status }
-    if (status === 'cerrado') patch.closed_at = new Date().toISOString()
-    await supabase.from('support_tickets').update(patch).eq('id', activeId)
+    setStatusNotice('')
+    const patch = { status, closed_at: status === 'cerrado' ? new Date().toISOString() : null }
+    const { data, error } = await supabase
+      .from('support_tickets').update(patch).eq('id', activeId)
+      .select().single()
+    if (error) {
+      console.error('Error actualizando estado:', error)
+      setStatusNotice(
+        status === 'cerrado' ? 'Solo el asesor asignado puede cerrar este ticket.'
+        : status === 'abierto' && activeTicket?.status === 'cerrado' ? 'Solo un super admin puede reabrir un ticket cerrado.'
+        : 'No se pudo actualizar el estado.'
+      )
+      return
+    }
+    setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
+    if (showHistory) loadEvents(activeId)
   }
 
   return (
@@ -214,6 +265,9 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
                     <span style={{ fontSize: 10, padding: '2px 7px', borderRadius: 4, background: `${STATUS_COLOR[t.status]}18`, color: STATUS_COLOR[t.status], fontWeight: 600 }}>
                       {STATUS_LABEL[t.status] || t.status}
                     </span>
+                    {t.status === 'cerrado' && t.closed_at && (
+                      <span style={{ fontSize: 9, color: P.muted }}>{fmt(t.closed_at)}</span>
+                    )}
                     {needsReply && (
                       <span style={{ width: 7, height: 7, borderRadius: '50%', background: P.gold, flexShrink: 0 }} title="Esperando respuesta" />
                     )}
@@ -251,20 +305,31 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
             </div>
 
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              {['abierto', 'en_proceso', 'cerrado'].map(s => (
-                <button key={s} onClick={() => setStatus(s)}
-                  style={{
-                    padding: '4px 10px', borderRadius: 7, fontSize: 11, cursor: 'pointer', fontWeight: 600,
-                    background: activeTicket?.status === s ? `${STATUS_COLOR[s]}22` : 'transparent',
-                    color: activeTicket?.status === s ? STATUS_COLOR[s] : P.muted,
-                    border: `1px solid ${activeTicket?.status === s ? STATUS_COLOR[s] + '50' : P.borderL}`,
-                    fontFamily: 'inherit',
-                  }}>
-                  {STATUS_LABEL[s]}
-                </button>
-              ))}
+              {activeTicket?.status === 'cerrado' ? (
+                isSuperAdmin ? (
+                  <button onClick={() => setStatus('abierto')}
+                    style={{ padding: '4px 10px', borderRadius: 7, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: `${P.gold}22`, color: P.gold, border: `1px solid ${P.gold}50`, fontFamily: 'inherit' }}>
+                    🔓 Reabrir ticket
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 11, color: P.muted, fontStyle: 'italic' }}>Ticket cerrado — solo lectura</span>
+                )
+              ) : (
+                ['abierto', 'en_proceso', 'cerrado'].map(s => (
+                  <button key={s} onClick={() => setStatus(s)}
+                    style={{
+                      padding: '4px 10px', borderRadius: 7, fontSize: 11, cursor: 'pointer', fontWeight: 600,
+                      background: activeTicket?.status === s ? `${STATUS_COLOR[s]}22` : 'transparent',
+                      color: activeTicket?.status === s ? STATUS_COLOR[s] : P.muted,
+                      border: `1px solid ${activeTicket?.status === s ? STATUS_COLOR[s] + '50' : P.borderL}`,
+                      fontFamily: 'inherit',
+                    }}>
+                    {STATUS_LABEL[s]}
+                  </button>
+                ))
+              )}
 
-              {isSuperAdmin && (
+              {isSuperAdmin && activeTicket?.status !== 'cerrado' && (
                 <select value={activeTicket?.assigned_to || ''} onChange={e => assignTo(e.target.value)}
                   style={{ marginLeft: 'auto', padding: '5px 8px', borderRadius: 7, border: `1px solid ${P.borderL}`, background: P.dark1, color: P.text, fontSize: 11, outline: 'none' }}>
                   <option value="">Sin asignar</option>
@@ -272,6 +337,38 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
                 </select>
               )}
             </div>
+
+            {statusNotice && (
+              <p style={{ fontSize: 11, color: P.error, margin: '8px 0 0' }}>{statusNotice}</p>
+            )}
+
+            <button onClick={() => { const next = !showHistory; setShowHistory(next); if (next) loadEvents(activeId) }}
+              style={{ marginTop: 10, fontSize: 11, color: P.muted, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit', display: 'flex', alignItems: 'center', gap: 4 }}>
+              {showHistory ? '▾' : '▸'} Historial
+            </button>
+
+            {showHistory && (
+              <div style={{ marginTop: 8, maxHeight: 160, overflowY: 'auto', border: `1px solid ${P.border}`, borderRadius: 8, padding: '8px 10px', background: P.dark1 }}>
+                {loadingEvents ? (
+                  <p style={{ fontSize: 11, color: P.muted, margin: 0 }}>Cargando…</p>
+                ) : events.length === 0 ? (
+                  <p style={{ fontSize: 11, color: P.muted, margin: 0 }}>Sin eventos registrados</p>
+                ) : (
+                  events.map(ev => (
+                    <div key={ev.id} style={{ padding: '5px 0', borderBottom: `1px solid ${P.border}`, fontSize: 11 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', color: P.text, fontWeight: 600 }}>
+                        <span>{EVENT_LABEL[ev.event_type] || ev.event_type}</span>
+                        <span style={{ color: P.muted, fontWeight: 400 }}>{fmtFull(ev.created_at)}</span>
+                      </div>
+                      <p style={{ margin: '2px 0 0', color: P.muted }}>
+                        {ev.crm_staff_profiles?.display_name || 'Cliente/Sistema'}
+                        {(ev.old_value || ev.new_value) && ` · ${ev.old_value || '—'} → ${ev.new_value || '—'}`}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
           </div>
 
           {/* Messages */}
@@ -305,18 +402,24 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
             </div>
 
             {/* Input */}
-            <div style={{ display: 'flex', gap: 8, padding: '12px 18px', borderTop: `1px solid ${P.border}`, background: P.dark2, flexShrink: 0 }}>
-              <input type="text" id="support-reply" name="reply"
-                value={newMsg} onChange={e => setNewMsg(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(e) } }}
-                placeholder="Responder al cliente..."
-                style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: `1px solid ${P.borderL}`, fontSize: 13, color: P.text, outline: 'none', background: P.dark1, fontFamily: 'inherit' }}
-              />
-              <button type="button" onClick={sendReply} disabled={!newMsg.trim() || sending}
-                style={{ padding: '9px 16px', borderRadius: 10, background: P.accent, border: 'none', color: '#fff', fontSize: 16, cursor: newMsg.trim() ? 'pointer' : 'not-allowed', opacity: newMsg.trim() ? 1 : 0.5, fontFamily: 'inherit' }}>
-                ➤
-              </button>
-            </div>
+            {activeTicket?.status === 'cerrado' && !isSuperAdmin ? (
+              <div style={{ padding: '12px 18px', borderTop: `1px solid ${P.border}`, background: P.dark2, flexShrink: 0, textAlign: 'center' }}>
+                <p style={{ fontSize: 12, color: P.muted, margin: 0 }}>Ticket cerrado — solo el super admin puede reabrirlo</p>
+              </div>
+            ) : (
+              <div style={{ display: 'flex', gap: 8, padding: '12px 18px', borderTop: `1px solid ${P.border}`, background: P.dark2, flexShrink: 0 }}>
+                <input type="text" id="support-reply" name="reply"
+                  value={newMsg} onChange={e => setNewMsg(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(e) } }}
+                  placeholder="Responder al cliente..."
+                  style={{ flex: 1, padding: '10px 14px', borderRadius: 10, border: `1px solid ${P.borderL}`, fontSize: 13, color: P.text, outline: 'none', background: P.dark1, fontFamily: 'inherit' }}
+                />
+                <button type="button" onClick={sendReply} disabled={!newMsg.trim() || sending}
+                  style={{ padding: '9px 16px', borderRadius: 10, background: P.accent, border: 'none', color: '#fff', fontSize: 16, cursor: newMsg.trim() ? 'pointer' : 'not-allowed', opacity: newMsg.trim() ? 1 : 0.5, fontFamily: 'inherit' }}>
+                  ➤
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}

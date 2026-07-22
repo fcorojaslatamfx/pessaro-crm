@@ -27,6 +27,29 @@ async function resolveSession(supabase: any, session_token: string) {
   return { client_email: data.client_email as string, client_phone: data.client_phone as string | null }
 }
 
+// Resuelve la identidad del cliente en dos modos (§10.1 SPEC):
+//  (a) session_token OTP — flujo anónimo de crm.pessaro.cl/soporte
+//  (b) Authorization: Bearer <JWT> — cliente autenticado del portal (pessaro_CL),
+//      validado contra el auth server con supabase.auth.getUser(jwt)
+// deno-lint-ignore no-explicit-any
+async function resolveIdentity(req: Request, supabase: any, payload: any) {
+  if (payload.session_token) {
+    const session = await resolveSession(supabase, payload.session_token)
+    if (session) return session
+  }
+
+  const authHeader = req.headers.get('Authorization') || ''
+  const jwt = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (jwt) {
+    const { data, error } = await supabase.auth.getUser(jwt)
+    if (!error && data?.user?.email) {
+      return { client_email: data.user.email as string, client_phone: null as string | null }
+    }
+  }
+
+  return null
+}
+
 // Fire-and-forget: notifica al asesor asignado. No debe bloquear la respuesta al cliente.
 async function notifyAdvisor(ticket_id: string, event: string) {
   try {
@@ -49,7 +72,7 @@ serve(async (req) => {
     const { action, ...payload } = await req.json()
 
     if (action === 'create_ticket') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
 
       const subject = String(payload.subject || '').trim()
@@ -123,7 +146,7 @@ serve(async (req) => {
     }
 
     if (action === 'list_my_tickets') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const { data, error } = await supabase
         .from('support_tickets')
@@ -135,7 +158,7 @@ serve(async (req) => {
     }
 
     if (action === 'get_ticket') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const ticket_number = payload.ticket_number
       if (!ticket_number) return json({ error: 'ticket_number requerido' }, 400)
@@ -159,7 +182,7 @@ serve(async (req) => {
     }
 
     if (action === 'add_message') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const ticket_number = payload.ticket_number
       const content = String(payload.content || '').trim()
@@ -173,17 +196,20 @@ serve(async (req) => {
       if (!ticket || ticket.client_email !== session.client_email) {
         return json({ error: 'Ticket no encontrado' }, 404)
       }
+      // Reapertura reservada a super_admin (regla de negocio): un ticket cerrado
+      // no acepta más mensajes del cliente; debe abrir uno nuevo para continuar.
+      if (ticket.status === 'cerrado') {
+        return json({ error: 'Este ticket está cerrado. Crea un ticket nuevo para continuar la conversación.' }, 409)
+      }
 
       const { error } = await supabase.from('support_ticket_messages').insert({
         ticket_id: ticket.id, sender_type: 'client', content,
       })
       if (error) return json({ error: error.message }, 500)
 
-      // Reabre el ticket si el cliente escribe después de un cierre; también
-      // sirve para que el trigger toque updated_at y el inbox del asesor
-      // reordene la conversación como reciente.
+      // Toca updated_at para que el inbox del asesor reordene la conversación como reciente.
       await supabase.from('support_tickets')
-        .update({ status: ticket.status === 'cerrado' ? 'abierto' : ticket.status })
+        .update({ status: ticket.status })
         .eq('id', ticket.id)
 
       await notifyAdvisor(ticket.id, 'new_message')
