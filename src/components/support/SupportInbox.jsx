@@ -83,7 +83,12 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
     }
     const ch = supabase
       .channel('support-tickets-watch')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'support_tickets' }, () => loadTickets())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_tickets' }, p => {
+        setTickets(prev => prev.find(t => t.id === p.new.id) ? prev : [p.new, ...prev])
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'support_tickets' }, p => {
+        setTickets(prev => prev.map(t => t.id === p.new.id ? { ...t, ...p.new } : t))
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'support_ticket_messages' }, () => loadLastMessages())
       .subscribe()
     return () => { supabase.removeChannel(ch) }
@@ -141,25 +146,33 @@ export default function SupportInbox({ user, staffProfile, isSuperAdmin }) {
       setNewMsg(content)
     } else {
       // Toca updated_at para reordenar el ticket como reciente en el inbox
-      await supabase.from('support_tickets')
+      const { data, error: statusError } = await supabase.from('support_tickets')
         .update({ status: activeTicket?.status === 'abierto' ? 'en_proceso' : activeTicket?.status })
         .eq('id', activeId)
+        .select().single()
+      if (statusError) console.error('Error actualizando estado tras respuesta:', statusError)
+      else setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
     }
     setSending(false)
   }
 
   async function assignTo(staffId) {
     if (!activeId) return
-    const staff = staffList.find(s => s.id === staffId)
-    await supabase.from('support_tickets').update({ assigned_to: staffId || null }).eq('id', activeId)
-    void staff
+    const { data, error } = await supabase
+      .from('support_tickets').update({ assigned_to: staffId || null }).eq('id', activeId)
+      .select().single()
+    if (error) { console.error('Error asignando asesor:', error); return }
+    setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
   }
 
   async function setStatus(status) {
     if (!activeId) return
-    const patch = { status }
-    if (status === 'cerrado') patch.closed_at = new Date().toISOString()
-    await supabase.from('support_tickets').update(patch).eq('id', activeId)
+    const patch = { status, closed_at: status === 'cerrado' ? new Date().toISOString() : null }
+    const { data, error } = await supabase
+      .from('support_tickets').update(patch).eq('id', activeId)
+      .select().single()
+    if (error) { console.error('Error actualizando estado:', error); return }
+    setTickets(prev => prev.map(t => (t.id === activeId ? { ...t, ...data } : t)))
   }
 
   return (
