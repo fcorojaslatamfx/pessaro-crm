@@ -3,6 +3,7 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
+    { "source": "/invite/:code", "destination": "/api/invite?code=:code" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],
   "headers": [

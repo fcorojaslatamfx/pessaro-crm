@@ -21,6 +21,12 @@ export default function WAFinanceInviteButton({ advisorCode, advisorName, leadNa
   const firstName = leadName ? leadName.split(' ')[0] : ''
   const ogImageUrl = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/public-assets/og-wafinance.jpg`
 
+  // Link que viaja en el mensaje: si hay imagen elegida, pasa por /invite (OG dinámico
+  // según la imagen) y redirige a /chat/{code}; si no, va directo al chat.
+  const messageLink = selectedImg
+    ? `https://crm.pessaro.cl/invite/${advisorCode}?img=${selectedImg.id}`
+    : chatLink
+
   function closeModal() {
     setOpen(false)
     setCustom('')
@@ -39,7 +45,7 @@ Beneficios para ti:
 ✓ Sin compromiso alguno: tú siempre decides
 ${advisorName ? `\nTu asesor personal: *${advisorName}*\n` : ''}
 *Comienza aquí:*
-${chatLink}`
+${messageLink}`
 
   const finalMsg = custom.trim() ? `${defaultMsg}\n\n${custom.trim()}` : defaultMsg
 
@@ -131,9 +137,9 @@ ${chatLink}`
               </span>
             </div>
 
-            {/* OG Image Preview */}
+            {/* OG Image Preview — refleja la miniatura seleccionada en la galería */}
             <div style={{ borderRadius: 12, overflow: 'hidden', marginBottom: 14, border: '1px solid rgba(255,255,255,0.08)' }}>
-              <img src={ogImageUrl} alt="WAFinance Preview"
+              <img src={selectedImg ? selectedImg.url : ogImageUrl} alt="WAFinance Preview"
                 style={{ width: '100%', height: 'auto', display: 'block' }}
                 onError={e => { e.target.parentElement.style.display = 'none' }} />
             </div>
