@@ -196,17 +196,20 @@ serve(async (req) => {
       if (!ticket || ticket.client_email !== session.client_email) {
         return json({ error: 'Ticket no encontrado' }, 404)
       }
+      // Reapertura reservada a super_admin (regla de negocio): un ticket cerrado
+      // no acepta más mensajes del cliente; debe abrir uno nuevo para continuar.
+      if (ticket.status === 'cerrado') {
+        return json({ error: 'Este ticket está cerrado. Crea un ticket nuevo para continuar la conversación.' }, 409)
+      }
 
       const { error } = await supabase.from('support_ticket_messages').insert({
         ticket_id: ticket.id, sender_type: 'client', content,
       })
       if (error) return json({ error: error.message }, 500)
 
-      // Reabre el ticket si el cliente escribe después de un cierre; también
-      // sirve para que el trigger toque updated_at y el inbox del asesor
-      // reordene la conversación como reciente.
+      // Toca updated_at para que el inbox del asesor reordene la conversación como reciente.
       await supabase.from('support_tickets')
-        .update({ status: ticket.status === 'cerrado' ? 'abierto' : ticket.status })
+        .update({ status: ticket.status })
         .eq('id', ticket.id)
 
       await notifyAdvisor(ticket.id, 'new_message')
