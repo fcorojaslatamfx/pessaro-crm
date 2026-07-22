@@ -27,6 +27,29 @@ async function resolveSession(supabase: any, session_token: string) {
   return { client_email: data.client_email as string, client_phone: data.client_phone as string | null }
 }
 
+// Resuelve la identidad del cliente en dos modos (§10.1 SPEC):
+//  (a) session_token OTP — flujo anónimo de crm.pessaro.cl/soporte
+//  (b) Authorization: Bearer <JWT> — cliente autenticado del portal (pessaro_CL),
+//      validado contra el auth server con supabase.auth.getUser(jwt)
+// deno-lint-ignore no-explicit-any
+async function resolveIdentity(req: Request, supabase: any, payload: any) {
+  if (payload.session_token) {
+    const session = await resolveSession(supabase, payload.session_token)
+    if (session) return session
+  }
+
+  const authHeader = req.headers.get('Authorization') || ''
+  const jwt = authHeader.replace(/^Bearer\s+/i, '').trim()
+  if (jwt) {
+    const { data, error } = await supabase.auth.getUser(jwt)
+    if (!error && data?.user?.email) {
+      return { client_email: data.user.email as string, client_phone: null as string | null }
+    }
+  }
+
+  return null
+}
+
 // Fire-and-forget: notifica al asesor asignado. No debe bloquear la respuesta al cliente.
 async function notifyAdvisor(ticket_id: string, event: string) {
   try {
@@ -49,7 +72,7 @@ serve(async (req) => {
     const { action, ...payload } = await req.json()
 
     if (action === 'create_ticket') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
 
       const subject = String(payload.subject || '').trim()
@@ -123,7 +146,7 @@ serve(async (req) => {
     }
 
     if (action === 'list_my_tickets') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const { data, error } = await supabase
         .from('support_tickets')
@@ -135,7 +158,7 @@ serve(async (req) => {
     }
 
     if (action === 'get_ticket') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const ticket_number = payload.ticket_number
       if (!ticket_number) return json({ error: 'ticket_number requerido' }, 400)
@@ -159,7 +182,7 @@ serve(async (req) => {
     }
 
     if (action === 'add_message') {
-      const session = await resolveSession(supabase, payload.session_token)
+      const session = await resolveIdentity(req, supabase, payload)
       if (!session) return json({ error: 'Sesión inválida o expirada' }, 401)
       const ticket_number = payload.ticket_number
       const content = String(payload.content || '').trim()
