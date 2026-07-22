@@ -511,7 +511,7 @@ Documentado en backlog; no activo aún.
 - Chat realtime con presencia de asesor
 - Historial persistente
 - Media compartida (fotos, documentos)
-- Imagen OG (`og-wafinance.jpg`) para preview al compartir link
+- Imagen OG (`og-wafinance.jpg`) para preview al compartir link — **v2 (2026-07-22):** sin "100% Gratuito", destaca "Sin compromisos", "Chat exclusivo", "17 años de experiencia" y "Resultados auditados"
 
 ✅ **Fase 2 (Completa):**
 - Historial de actividades por contacto (`contact_activity_log`)
@@ -527,7 +527,8 @@ Documentado en backlog; no activo aún.
 ### Invitación WAFinance
 
 **Botón en modal:**
-- Muestra preview de imagen OG (og-wafinance.jpg)
+- Muestra preview de imagen OG (og-wafinance.jpg, v2)
+- Badges: "Sin compromisos" (gold), "Chat exclusivo" (accent), "Resultados auditados" (gold) — ya no incluye "100% Gratuito"
 - Texto corto: "Accede a tu chat exclusivo de asesoría"
 - Botón "Copiar link" → `crm.pessaro.cl/chat/{refCode}` al clipboard
 - Botón "Compartir por WhatsApp" → abre `window.open('https://wa.me/{phone}?text=...')` directamente
