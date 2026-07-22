@@ -7,6 +7,9 @@ import CampaignSender from './components/whatsapp/CampaignSender.jsx'
 import WAFinanceChat from './pages/WAFinanceChat.jsx'
 import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
+import SupportPortal from './pages/SupportPortal.jsx'
+import SupportTicketView from './pages/SupportTicketView.jsx'
+import SupportInbox from './components/support/SupportInbox.jsx'
 import WebContentHub from './components/webcontent/WebContentHub.jsx'
 import ContactsHub from './components/clients/ClientsPortalKYC.jsx'
 import EducationAdmin from './components/education/EducationAdmin.jsx'
@@ -4498,6 +4501,11 @@ export default function App(){
   // Public route: /chat/:referralCode — render without CRM shell
   if(window.location.pathname.startsWith('/chat/'))return<WAFinanceChat/>
 
+  // Public routes: /soporte — portal de tickets de soporte (sin CRM shell)
+  // Orden importa: /soporte/ticket/:n debe evaluarse antes que el genérico /soporte*
+  if(window.location.pathname.startsWith('/soporte/ticket/'))return<SupportTicketView/>
+  if(window.location.pathname==='/soporte'||window.location.pathname.startsWith('/soporte/'))return<SupportPortal/>
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(noStaffError)return<NoStaffScreen onBackToLogin={()=>{setNoStaffError(false)}}/>
@@ -4540,6 +4548,7 @@ export default function App(){
 
   const validMods=isBroker?['broker']:[
     'dashboard',
+    'soporte',
     ...(canAccess('contacts') ?['contacts']:[]),
     ...(canAccess('pipeline') ?['pipeline']:[]),
     ...(canAccess('tasks')    ?['tasks']:[]),
@@ -4557,6 +4566,7 @@ export default function App(){
   // NAV filtrado por herramientas habilitadas (canAccess) — broker ve panel propio
   const NAV=isBroker?[]:[
     {id:'dashboard',label:'Dashboard',icon:'⊞'},
+    {id:'soporte',label:'Soporte',icon:'🎫',color:P.blue},
     canAccess('contacts') ?{id:'contacts', label:'Contactos', icon:'📋'}:null,
     canAccess('pipeline') ?{id:'pipeline', label:'Pipeline',  icon:'◈'}:null,
     canAccess('campaigns')?{id:'campaigns',label:'Campañas',  icon:'🚀', color:P.green}:null,
@@ -4733,6 +4743,7 @@ export default function App(){
           if(currentMod==='education'&&(isSuperAdmin||staffProfile?.role==='admin')) return <EducationAdmin user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
           if(currentMod==='wafinance') return <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='soporte') return <SupportInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
           return <Dashboard contacts={contacts} leads={myLeads} onNav={setModule}/>
         })()}</ErrorBoundary>
       </div>
