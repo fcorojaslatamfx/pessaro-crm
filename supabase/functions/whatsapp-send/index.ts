@@ -138,10 +138,14 @@ function toWaNumber(phone: string): string {
 // Se compara normalizado porque los teléfonos entran con formatos distintos
 // según su origen (crm_contacts a mano, campaign_leads desde landing, webhook).
 async function isOptedOut(supabase: any, phone: string): Promise<boolean> {
+  // opted_in_at no nulo = el contacto escribió ALTA y volvió a suscribirse.
+  // La fila no se borra para conservar la auditoría de la baja original, así
+  // que hay que excluirla aquí; si no, un reactivado seguiría bloqueado.
   const { data } = await supabase
     .from('whatsapp_opt_outs')
     .select('client_phone')
     .eq('client_phone', normalizePhone(phone))
+    .is('opted_in_at', null)
     .maybeSingle()
   return !!data
 }
@@ -274,7 +278,9 @@ async function runCampaign(
   })
 
   // 4) Excluir bajas
-  const { data: optOuts } = await supabase.from('whatsapp_opt_outs').select('client_phone')
+  // Igual que isOptedOut(): los reactivados (opted_in_at no nulo) no bloquean
+  const { data: optOuts } = await supabase
+    .from('whatsapp_opt_outs').select('client_phone').is('opted_in_at', null)
   const blocked = new Set((optOuts || []).map((o: any) => o.client_phone))
   const recipients = unique.filter((l: any) => !blocked.has(normalizePhone(l.phone)))
   const skipped_opt_out = unique.length - recipients.length

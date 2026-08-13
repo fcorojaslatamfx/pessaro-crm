@@ -884,6 +884,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[movSaving,setMovSaving]=useState(false)
   const[movErr,setMovErr]=useState('')
   const[edu,setEdu]=useState([])            // filas de list_certificate_candidates para este contacto
+  // Bajas de WhatsApp: el teléfono va en dígitos, igual que crm_contacts.phone
+  const[optOuts,setOptOuts]=useState(new Set())
   const[issuing,setIssuing]=useState(null)
   const[certMsg,setCertMsg]=useState(null)
   // La emisión de certificados es de admin/super admin; el asesor no ve el bloque
@@ -905,6 +907,14 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   },[])
 
   useEffect(()=>{loadGroups()},[loadGroups])
+
+  // Quién pidió no recibir mensajes. Sólo cuentan las bajas sin reactivar.
+  useEffect(()=>{(async()=>{
+    try{
+      const{data}=await supabase.from('whatsapp_opt_outs').select('client_phone').is('opted_in_at',null)
+      setOptOuts(new Set((data||[]).map(o=>soloDigitos(o.client_phone))))
+    }catch(e){console.error('loadOptOuts:',e)}
+  })()},[])
 
   const saveGroup=async()=>{
     const name=groupForm.name.trim()
@@ -1572,7 +1582,12 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                 </div>
               </td>
               <td style={{padding:'12px 18px',color:P.muted,fontSize:12,fontFamily:'monospace'}}>{c.email}</td>
-              <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>{c.phone}</td>
+              <td style={{padding:'12px 18px',color:P.muted,fontSize:12}}>
+                <div style={{display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                  <span>{c.phone}</span>
+                  {optOuts.has(soloDigitos(c.phone))&&<Badge label="no contactar" color={P.red}/>}
+                </div>
+              </td>
               <td style={{padding:'12px 18px'}}><Badge label={c.status} color={SCOLOR_MAP[c.status]||P.muted}/></td>
               <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/>{c._origStatus==='new'&&<Badge label="nuevo" color={P.orange}/>}</div></td>
               <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,alignItems:'center'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn>{staffProfile?.referral_code&&<span onClick={e=>e.stopPropagation()}><WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={c.full_name||''} leadPhone={c.phone||''} compact/></span>}</div></td>
@@ -1692,6 +1707,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             <div style={{marginLeft:isMob?0:'auto',display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
               <Badge label={selected.status} color={SCOLOR_MAP[selected.status]||P.muted}/>
               <Badge label={selected.source||'crm'} color={selected.source==='formulario'?P.orange:selected.source==='csv'?P.blue:P.muted}/>
+              {optOuts.has(soloDigitos(selected.phone))&&<span title="Pidió no recibir más mensajes por WhatsApp. Queda fuera de las campañas.">
+                <Badge label="🚫 no contactar" color={P.red}/>
+              </span>}
               {selected._capital>0&&<span style={{fontSize:12.5,color:P.green,fontFamily:'monospace',fontWeight:700}}>{fmt(selected._capital)}</span>}
               {!esSub&&<button onClick={()=>openEditContact(selected)}
                 style={{padding:'6px 12px',borderRadius:8,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
