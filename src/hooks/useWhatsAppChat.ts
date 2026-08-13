@@ -88,7 +88,8 @@ export function useWhatsAppChat(clientPhone: string) {
     templateName: string,
     language: string,
     components: unknown[],
-    staffId?: string
+    staffId?: string,
+    headerImageUrl?: string
   ) => {
     const SUPABASE_URL = (import.meta as any).env.VITE_SUPABASE_URL;
     const { data: { session } } = await supabase.auth.getSession();
@@ -105,6 +106,7 @@ export function useWhatsAppChat(clientPhone: string) {
         language,
         components,
         staff_id: staffId,
+        header_image_url: headerImageUrl,
       }),
     });
     return res.json();

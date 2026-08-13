@@ -430,11 +430,26 @@ export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAd
   const [showAssign, setShowAssign] = useState(false)
   const [showAttach, setShowAttach] = useState(false)
   const [error, setError] = useState('')
+  const [optOut, setOptOut] = useState(null)
   const bottomRef = useRef(null)
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
+
+  // Baja del cliente: el backend igual bloquea el envío, pero el asesor tiene
+  // que verlo antes de escribir, no después de que le rebote.
+  useEffect(() => {
+    if (!clientPhone) { setOptOut(null); return }
+    let vigente = true
+    supabase
+      .from('whatsapp_opt_outs')
+      .select('opted_out_at, source')
+      .eq('client_phone', clientPhone)
+      .maybeSingle()
+      .then(({ data }) => { if (vigente) setOptOut(data || null) })
+    return () => { vigente = false }
+  }, [clientPhone, messages.length])
 
   async function handleSend() {
     if (!text.trim() || !clientPhone) return
@@ -449,11 +464,11 @@ export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAd
     }
   }
 
-  async function handleSendTemplate(templateName, language, components) {
+  async function handleSendTemplate(templateName, language, components, headerImageUrl) {
     if (!clientPhone) return
     setSending(true)
     setError('')
-    const result = await sendTemplate(templateName, language, components, staffId)
+    const result = await sendTemplate(templateName, language, components, staffId, headerImageUrl)
     setSending(false)
     if (!result?.success) setError(result?.error || 'Error al enviar plantilla')
   }
@@ -528,8 +543,20 @@ export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAd
         </div>
       )}
 
+      {optOut && (
+        <div style={{ padding: '10px 20px', background: 'rgba(255,71,87,0.10)', borderTop: '1px solid rgba(255,71,87,0.25)' }}>
+          <p style={{ color: '#ff4757', fontSize: 12, margin: 0, fontWeight: 600 }}>
+            🚫 Este contacto pidió no recibir más mensajes
+          </p>
+          <p style={{ color: C.muted, fontSize: 11, margin: '3px 0 0' }}>
+            Baja registrada el {new Date(optOut.opted_out_at).toLocaleDateString('es-CL')}
+            {optOut.source === 'button' ? ' desde un botón' : ' por mensaje'}. El envío está bloqueado; solo el super admin puede revertirlo.
+          </p>
+        </div>
+      )}
+
       {/* Input bar */}
-      <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.border}`, background: C.surface, display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+      <div style={{ padding: '12px 16px', borderTop: `1px solid ${C.border}`, background: C.surface, display: 'flex', gap: 8, alignItems: 'flex-end', opacity: optOut ? 0.5 : 1, pointerEvents: optOut ? 'none' : 'auto' }}>
         <button
           onClick={() => setShowPicker(true)}
           title="Enviar plantilla aprobada"
@@ -580,6 +607,7 @@ export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAd
         <TemplatePicker
           onSend={handleSendTemplate}
           onClose={() => setShowPicker(false)}
+          isSuperAdmin={isSuperAdmin}
         />
       )}
 

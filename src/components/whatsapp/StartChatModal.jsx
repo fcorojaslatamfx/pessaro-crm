@@ -124,7 +124,7 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
             <p style={{ margin: '0 0 6px', fontSize: 13, color: C.orange, fontWeight: 700 }}>⏳ Sin plantillas aprobadas aún</p>
             <p style={{ margin: 0, fontSize: 12, color: C.textSub, lineHeight: 1.5 }}>
               WhatsApp solo permite iniciar conversaciones con clientes mediante plantillas previamente aprobadas por Meta.
-              Cuando se verifique la cuenta de WhatsApp Business y se aprueben las plantillas, podrás iniciar chats desde aquí.
+              Pide al super admin que sincronice el catálogo desde Meta (botón "Sincronizar desde Meta" en el selector de plantillas de cualquier chat).
             </p>
           </div>
         )}

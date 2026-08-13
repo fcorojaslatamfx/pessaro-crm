@@ -87,7 +87,11 @@ export default function CampaignSender({ user }) {
     variant_key: '',
     etapas: [],
     scheduled_at: '',
+    header_image_url: '',
   })
+
+  const tplSeleccionada = templates.find(t => t.id === form.template_id)
+  const imagenCampanaValida = /^https:\/\/.+/i.test((form.header_image_url || '').trim())
 
   useEffect(() => {
     Promise.all([
@@ -115,6 +119,10 @@ export default function CampaignSender({ user }) {
       setError('Nombre y plantilla son obligatorios.')
       return
     }
+    if (tplSeleccionada?.header_type === 'IMAGE' && !imagenCampanaValida) {
+      setError(`La plantilla ${tplSeleccionada.template_name} tiene encabezado de imagen: indica una URL https válida.`)
+      return
+    }
     setError('')
     setSending(true)
     setResult(null)
@@ -129,6 +137,7 @@ export default function CampaignSender({ user }) {
       campaign_id: form.campaign_id || null,
       variant_key: form.variant_key || null,
       target_filter: Object.keys(targetFilter).length ? targetFilter : null,
+      header_image_url: form.header_image_url.trim() || null,
       scheduled_at: form.scheduled_at || null,
       status: form.scheduled_at ? 'scheduled' : 'draft',
       created_by: user?.id || null,
@@ -152,7 +161,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '' })
         // Reload
         const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
         setWaCampaigns(wcs || [])
@@ -210,6 +219,19 @@ export default function CampaignSender({ user }) {
                 : <Sel value={form.template_id} onChange={v => setForm(f => ({ ...f, template_id: v }))}
                     options={templates.map(t => ({ value: t.id, label: `${t.template_name} (${t.category || 'UTILITY'})` }))} />}
             </div>
+
+            {tplSeleccionada?.header_type === 'IMAGE' && (
+              <div>
+                <Lbl>Imagen del encabezado</Lbl>
+                <Input value={form.header_image_url} onChange={v => setForm(f => ({ ...f, header_image_url: v }))} placeholder="https://..." />
+                <p style={{ color: C.muted, fontSize: 11, margin: '6px 0 0', lineHeight: 1.5 }}>
+                  <strong style={{ color: C.orange }}>{tplSeleccionada.template_name}</strong> lleva encabezado de imagen: WhatsApp la exige en cada envío, así que es obligatoria. URL pública HTTPS.
+                </p>
+                {imagenCampanaValida && (
+                  <img src={form.header_image_url.trim()} alt="" style={{ marginTop: 10, maxWidth: '100%', maxHeight: 140, borderRadius: 8, display: 'block' }} />
+                )}
+              </div>
+            )}
 
             <div>
               <Lbl>Campaña CRM (opcional)</Lbl>
