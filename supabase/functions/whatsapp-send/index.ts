@@ -1,5 +1,18 @@
-// whatsapp-send v16
-// Actions: send_text, send_template, send_media, start_chat, sync_templates, send_campaign
+// whatsapp-send v17
+// Actions: send_text, send_template, send_media, start_chat, sync_templates,
+//          send_campaign, run_due_campaigns
+//
+// CAMBIOS v17:
+//  - run_due_campaigns (NUEVO): ejecuta las campañas con status 'scheduled' y
+//      scheduled_at ya vencido. Lo llama pg_cron cada 5 min con la service role
+//      key. Antes NADA despachaba las campañas programadas: se quedaban en
+//      'scheduled' indefinidamente y el mensaje nunca llegaba.
+//      Se autoriza comparando el bearer contra SUPABASE_SERVICE_ROLE_KEY porque
+//      esa clave no es un JWT de usuario y authenticate() la rechazaría.
+//  - runCampaign(): la ejecución de una campaña sale de la action send_campaign
+//      a una función propia, compartida por el disparo manual y por el cron.
+//  - Una campaña sin destinatarios pasa a 'failed' en vez de quedarse en
+//      'scheduled', que hacía que el cron la reintentara en cada tick.
 //
 // CAMBIOS v16:
 //  - send_campaign acepta target_filter.contact_group_id: los destinatarios
@@ -177,6 +190,170 @@ function flattenTemplate(t: any) {
   }
 }
 
+// ── Ejecución de una campaña ───────────────────────────────────────────────
+// Extraída de la action send_campaign para que la puedan usar los dos caminos:
+//  - send_campaign      → disparo manual del super_admin desde el CRM
+//  - run_due_campaigns  → el cron, que despacha las campañas programadas
+// Devuelve { status, body } en vez de una Response para no atar la lógica al HTTP.
+async function runCampaign(
+  supabase: any,
+  PHONE_ID: string,
+  TOKEN: string,
+  wa_campaign_id: string,
+): Promise<{ status: number; body: any }> {
+  // 1) Campaña + plantilla
+  const { data: wc, error: wcErr } = await supabase
+    .from('whatsapp_campaigns')
+    .select('*, whatsapp_templates(template_name, language, header_type, variables_count, status)')
+    .eq('id', wa_campaign_id)
+    .maybeSingle()
+  if (wcErr || !wc) return { status: 404, body: { error: 'Campaña no encontrada' } }
+
+  // Evita el doble disparo: sin esto un doble clic manda la campaña dos veces
+  if (wc.status === 'sending' || wc.status === 'completed') {
+    return { status: 409, body: { error: `La campaña ya está en estado "${wc.status}". No se reenvía.` } }
+  }
+
+  const tpl = wc.whatsapp_templates
+  if (!tpl) return { status: 400, body: { error: 'La campaña no tiene plantilla asociada' } }
+  if (tpl.status !== 'APPROVED') {
+    return { status: 400, body: { error: `La plantilla "${tpl.template_name}" está en estado ${tpl.status}, no APPROVED.` } }
+  }
+  if (tpl.header_type === 'IMAGE' && !wc.header_image_url) {
+    return { status: 400, body: { error: `La plantilla "${tpl.template_name}" tiene encabezado de imagen: falta header_image_url en la campaña.` } }
+  }
+
+  // 2) Destinatarios según target_filter
+  //    Dos orígenes posibles y excluyentes:
+  //      - contact_group_id → contactos de un grupo del CRM (crm_contacts)
+  //      - resto de filtros  → leads de campaña (campaign_leads)
+  const tf = wc.target_filter || {}
+  const fromGroup = !!tf.contact_group_id
+  let leads: any[] | null = null
+  let leadsErr: any = null
+
+  if (fromGroup) {
+    // Va con service role, así que RLS no aplica; el permiso ya se validó antes
+    const { data, error } = await supabase
+      .from('crm_contact_group_members')
+      .select('crm_contacts(id, full_name, phone)')
+      .eq('group_id', tf.contact_group_id)
+    leadsErr = error
+    leads = (data || []).map((r: any) => r.crm_contacts).filter((c: any) => c && c.phone)
+  } else {
+    let q = supabase.from('campaign_leads').select('id, full_name, phone, variant, etapa').not('phone', 'is', null)
+    if (tf.variant) q = q.eq('variant', tf.variant)
+    if (Array.isArray(tf.etapa) && tf.etapa.length) q = q.in('etapa', tf.etapa)
+    if (wc.campaign_id) q = q.eq('campaign_id', wc.campaign_id)
+    const r = await q
+    leads = r.data
+    leadsErr = r.error
+  }
+  if (leadsErr) return { status: 500, body: { error: `Error cargando destinatarios: ${leadsErr.message}` } }
+
+  // 3) Dedup por teléfono normalizado — un mismo número puede estar en
+  //    varios leads y no queremos mandarle el mismo mensaje dos veces.
+  const seen = new Set<string>()
+  const unique = (leads || []).filter((l: any) => {
+    const n = normalizePhone(l.phone || '')
+    if (!n || n.length < 8 || seen.has(n)) return false
+    seen.add(n)
+    return true
+  })
+
+  // 4) Excluir bajas
+  const { data: optOuts } = await supabase.from('whatsapp_opt_outs').select('client_phone')
+  const blocked = new Set((optOuts || []).map((o: any) => o.client_phone))
+  const recipients = unique.filter((l: any) => !blocked.has(normalizePhone(l.phone)))
+  const skipped_opt_out = unique.length - recipients.length
+
+  if (!recipients.length) {
+    // Se marca como fallida: si queda 'scheduled' el cron la reintentaría en bucle
+    await supabase.from('whatsapp_campaigns').update({
+      status: 'failed', completed_at: new Date().toISOString(), total_recipients: 0,
+    }).eq('id', wa_campaign_id)
+    return { status: 400, body: { success: false, error: 'No hay destinatarios que cumplan el filtro', total: 0, skipped_opt_out } }
+  }
+  // Tope por invocación: la función tiene límite de tiempo y la cuenta
+  // tiene límite diario de conversaciones iniciadas.
+  const MAX_RECIPIENTS = 1000
+  if (recipients.length > MAX_RECIPIENTS) {
+    return { status: 400, body: { error: `${recipients.length} destinatarios supera el tope de ${MAX_RECIPIENTS} por envío. Afina el filtro.` } }
+  }
+
+  // 5) Marcar como enviando
+  await supabase.from('whatsapp_campaigns').update({
+    status: 'sending', started_at: new Date().toISOString(), total_recipients: recipients.length,
+  }).eq('id', wa_campaign_id)
+
+  // 6) Enviar en tandas pequeñas
+  const errors: any[] = []
+  let sent = 0
+  const CONCURRENCY = 5
+
+  async function sendOne(lead: any) {
+    const phone = normalizePhone(lead.phone)
+    const firstName = (lead.full_name || '').trim().split(/\s+/)[0] || 'Hola'
+    const bodyValues = (tpl.variables_count || 0) > 0 ? [firstName] : []
+    const components = buildComponents(tpl.header_type, bodyValues, wc.header_image_url)
+    try {
+      const res = await fetch(`${GRAPH_API}/${PHONE_ID}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: toWaNumber(phone),
+          type: 'template',
+          template: { name: tpl.template_name, language: { code: tpl.language }, components },
+        }),
+      })
+      const r = await res.json()
+      if (r.messages?.[0]?.id) {
+        await supabase.from('whatsapp_messages').insert({
+          meta_message_id: r.messages[0].id,
+          client_phone:    phone,
+          client_name:     lead.full_name || null,
+          direction:       'outbound',
+          message_type:    'template',
+          template_name:   tpl.template_name,
+          content:         { template_name: tpl.template_name, components },
+          status:          'sent',
+          // lead_id tiene FK contra campaign_leads: en un envío por grupo el
+          // id es de crm_contacts y el insert fallaría.
+          lead_id:         fromGroup ? null : lead.id,
+          campaign_id:     wc.campaign_id || null,
+          wa_campaign_id:  wa_campaign_id,
+        })
+        sent++
+      } else {
+        errors.push({ phone, error: r.error?.message || 'Meta error', code: r.error?.code })
+      }
+    } catch (e) {
+      errors.push({ phone, error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  for (let i = 0; i < recipients.length; i += CONCURRENCY) {
+    await Promise.all(recipients.slice(i, i + CONCURRENCY).map(sendOne))
+  }
+
+  await supabase.from('whatsapp_campaigns').update({
+    status: 'completed', completed_at: new Date().toISOString(),
+  }).eq('id', wa_campaign_id)
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      total: recipients.length,
+      sent,
+      failed: errors.length,
+      skipped_opt_out,
+      errors: errors.slice(0, 20),
+    },
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders })
   if (req.method !== 'POST') return json({ error: 'POST only' }, 405)
@@ -189,7 +366,48 @@ serve(async (req) => {
 
     const { action, ...payload } = await req.json()
 
-    // Autenticación común a todas las actions
+    // ── run_due_campaigns (cron) ─────────────────────────────────────
+    // Despacha las campañas cuya hora programada ya pasó. Lo llama pg_cron
+    // con la service role key, que NO es un JWT de usuario: por eso se
+    // autoriza aquí, antes de authenticate(), comparando el bearer contra
+    // el secreto. Sin esto las campañas 'scheduled' se quedaban esperando
+    // para siempre, porque nadie las ejecutaba.
+    if (action === 'run_due_campaigns') {
+      // El secreto va en el BODY, no en la cabecera: la función tiene
+      // verify_jwt activo, así que el Authorization debe ser un JWT válido
+      // (el cron manda la anon key) y no puede llevar el secreto.
+      // WA_CRON_SECRET evita además dejar la service role key escrita en
+      // cron.job, que es legible por cualquiera con acceso a la base.
+      const cronSecret = Deno.env.get('WA_CRON_SECRET') ?? ''
+      if (!cronSecret || payload.cron_secret !== cronSecret) {
+        return json({ error: 'Solo el planificador puede ejecutar esta action' }, 403)
+      }
+
+      const { data: due, error: dueErr } = await supabase
+        .from('whatsapp_campaigns')
+        .select('id, name, scheduled_at')
+        .eq('status', 'scheduled')
+        .lte('scheduled_at', new Date().toISOString())
+        .order('scheduled_at', { ascending: true })
+        .limit(5)   // tope por tick: cada campaña puede tardar
+      if (dueErr) return json({ error: dueErr.message }, 500)
+
+      const results: any[] = []
+      for (const c of due || []) {
+        try {
+          const r = await runCampaign(supabase, PHONE_ID, TOKEN, c.id)
+          results.push({ id: c.id, name: c.name, status: r.status, ...r.body })
+        } catch (e) {
+          // Se marca fallida para que el siguiente tick no la reintente en bucle
+          await supabase.from('whatsapp_campaigns')
+            .update({ status: 'failed', completed_at: new Date().toISOString() }).eq('id', c.id)
+          results.push({ id: c.id, name: c.name, status: 500, error: e instanceof Error ? e.message : String(e) })
+        }
+      }
+      return json({ success: true, due: (due || []).length, results })
+    }
+
+    // Autenticación común al resto de actions
     const { caller, role, staffId } = await authenticate(supabase, req)
     if (!caller) return json({ error: 'No autenticado' }, 401)
 
@@ -539,161 +757,17 @@ serve(async (req) => {
       return json({ success: true, message_id: sendResult.messages[0].id, media_meta_id: metaMediaId, assignment: assignmentResult })
     }
 
-    // ── send_campaign (NUEVO) ────────────────────────────────────────
-    // Envío masivo a campaign_leads según el target_filter de la campaña.
-    // Solo super_admin. Los contadores los mantiene el trigger de la base.
+    // ── send_campaign ────────────────────────────────────────────────
+    // Disparo manual desde el CRM. Solo super_admin.
+    // La ejecución vive en runCampaign(), compartida con el cron.
     if (action === 'send_campaign') {
       if (role !== 'super_admin') {
         return json({ error: 'Solo super_admin puede lanzar campañas' }, 403)
       }
       const { wa_campaign_id } = payload
       if (!wa_campaign_id) return json({ error: 'wa_campaign_id requerido' }, 400)
-
-      // 1) Campaña + plantilla
-      const { data: wc, error: wcErr } = await supabase
-        .from('whatsapp_campaigns')
-        .select('*, whatsapp_templates(template_name, language, header_type, variables_count, status)')
-        .eq('id', wa_campaign_id)
-        .maybeSingle()
-      if (wcErr || !wc) return json({ error: 'Campaña no encontrada' }, 404)
-
-      // Evita el doble disparo: sin esto un doble clic manda la campaña dos veces
-      if (wc.status === 'sending' || wc.status === 'completed') {
-        return json({ error: `La campaña ya está en estado "${wc.status}". No se reenvía.` }, 409)
-      }
-
-      const tpl = wc.whatsapp_templates
-      if (!tpl) return json({ error: 'La campaña no tiene plantilla asociada' }, 400)
-      if (tpl.status !== 'APPROVED') {
-        return json({ error: `La plantilla "${tpl.template_name}" está en estado ${tpl.status}, no APPROVED.` }, 400)
-      }
-      if (tpl.header_type === 'IMAGE' && !wc.header_image_url) {
-        return json({ error: `La plantilla "${tpl.template_name}" tiene encabezado de imagen: falta header_image_url en la campaña.` }, 400)
-      }
-
-      // 2) Destinatarios según target_filter
-      //    Dos orígenes posibles y excluyentes:
-      //      - contact_group_id → contactos de un grupo del CRM (crm_contacts)
-      //      - resto de filtros  → leads de campaña (campaign_leads)
-      const tf = wc.target_filter || {}
-      const fromGroup = !!tf.contact_group_id
-      let leads: any[] | null = null
-      let leadsErr: any = null
-
-      if (fromGroup) {
-        // Va con service role, así que RLS no aplica; el permiso ya se validó
-        // arriba (send_campaign es sólo super_admin).
-        const { data, error } = await supabase
-          .from('crm_contact_group_members')
-          .select('crm_contacts(id, full_name, phone)')
-          .eq('group_id', tf.contact_group_id)
-        leadsErr = error
-        leads = (data || []).map((r: any) => r.crm_contacts).filter((c: any) => c && c.phone)
-      } else {
-        let q = supabase.from('campaign_leads').select('id, full_name, phone, variant, etapa').not('phone', 'is', null)
-        if (tf.variant) q = q.eq('variant', tf.variant)
-        if (Array.isArray(tf.etapa) && tf.etapa.length) q = q.in('etapa', tf.etapa)
-        if (wc.campaign_id) q = q.eq('campaign_id', wc.campaign_id)
-        const r = await q
-        leads = r.data
-        leadsErr = r.error
-      }
-      if (leadsErr) return json({ error: `Error cargando destinatarios: ${leadsErr.message}` }, 500)
-
-      // 3) Dedup por teléfono normalizado — un mismo número puede estar en
-      //    varios leads y no queremos mandarle el mismo mensaje dos veces.
-      const seen = new Set<string>()
-      const unique = (leads || []).filter((l: any) => {
-        const n = normalizePhone(l.phone || '')
-        if (!n || n.length < 8 || seen.has(n)) return false
-        seen.add(n)
-        return true
-      })
-
-      // 4) Excluir bajas
-      const { data: optOuts } = await supabase.from('whatsapp_opt_outs').select('client_phone')
-      const blocked = new Set((optOuts || []).map((o: any) => o.client_phone))
-      const recipients = unique.filter((l: any) => !blocked.has(normalizePhone(l.phone)))
-      const skipped_opt_out = unique.length - recipients.length
-
-      if (!recipients.length) {
-        return json({ success: false, error: 'No hay destinatarios que cumplan el filtro', total: 0, skipped_opt_out }, 400)
-      }
-      // Tope por invocación: la función tiene límite de tiempo y la cuenta
-      // tiene límite diario de conversaciones iniciadas.
-      const MAX_RECIPIENTS = 1000
-      if (recipients.length > MAX_RECIPIENTS) {
-        return json({ error: `${recipients.length} destinatarios supera el tope de ${MAX_RECIPIENTS} por envío. Afina el filtro.` }, 400)
-      }
-
-      // 5) Marcar como enviando
-      await supabase.from('whatsapp_campaigns').update({
-        status: 'sending', started_at: new Date().toISOString(), total_recipients: recipients.length,
-      }).eq('id', wa_campaign_id)
-
-      // 6) Enviar en tandas pequeñas
-      const errors: any[] = []
-      let sent = 0
-      const CONCURRENCY = 5
-
-      async function sendOne(lead: any) {
-        const phone = normalizePhone(lead.phone)
-        const firstName = (lead.full_name || '').trim().split(/\s+/)[0] || 'Hola'
-        const bodyValues = (tpl.variables_count || 0) > 0 ? [firstName] : []
-        const components = buildComponents(tpl.header_type, bodyValues, wc.header_image_url)
-        try {
-          const res = await fetch(`${GRAPH_API}/${PHONE_ID}/messages`, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              messaging_product: 'whatsapp',
-              to: toWaNumber(phone),
-              type: 'template',
-              template: { name: tpl.template_name, language: { code: tpl.language }, components },
-            }),
-          })
-          const r = await res.json()
-          if (r.messages?.[0]?.id) {
-            await supabase.from('whatsapp_messages').insert({
-              meta_message_id: r.messages[0].id,
-              client_phone:    phone,
-              client_name:     lead.full_name || null,
-              direction:       'outbound',
-              message_type:    'template',
-              template_name:   tpl.template_name,
-              content:         { template_name: tpl.template_name, components },
-              status:          'sent',
-              // lead_id tiene FK contra campaign_leads: en un envío por grupo el
-              // id es de crm_contacts y el insert fallaría.
-              lead_id:         fromGroup ? null : lead.id,
-              campaign_id:     wc.campaign_id || null,
-              wa_campaign_id:  wa_campaign_id,
-            })
-            sent++
-          } else {
-            errors.push({ phone, error: r.error?.message || 'Meta error', code: r.error?.code })
-          }
-        } catch (e) {
-          errors.push({ phone, error: e instanceof Error ? e.message : String(e) })
-        }
-      }
-
-      for (let i = 0; i < recipients.length; i += CONCURRENCY) {
-        await Promise.all(recipients.slice(i, i + CONCURRENCY).map(sendOne))
-      }
-
-      await supabase.from('whatsapp_campaigns').update({
-        status: 'completed', completed_at: new Date().toISOString(),
-      }).eq('id', wa_campaign_id)
-
-      return json({
-        success: true,
-        total: recipients.length,
-        sent,
-        failed: errors.length,
-        skipped_opt_out,
-        errors: errors.slice(0, 20),
-      })
+      const r = await runCampaign(supabase, PHONE_ID, TOKEN, wa_campaign_id)
+      return json(r.body, r.status)
     }
 
     return json({ error: 'action no reconocida' }, 400)

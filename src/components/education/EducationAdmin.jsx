@@ -2,10 +2,11 @@
 // Reemplaza /cms/educacion/asignar y /cms/educacion/aprobaciones de pessaro_CL.
 // Edge Functions (sin cambios): assign-course-to-client, approve-course-assignment.
 // El backend resuelve crm_contacts.id → auth user internamente (resolve-client-account).
-// Acceso: Asignar = admin + super_admin · Aprobaciones = solo super_admin.
-import { useState, useEffect, useCallback } from 'react'
+// Acceso: Asignar = admin + super_admin · Aprobaciones = solo super_admin
+//         Certificados = admin + super_admin (anular, sólo super_admin).
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../../lib/supabase'
-import { P, GlassCard, Btn, Badge, Lbl, TextArea, Sel, Spinner } from '../webcontent/ui.jsx'
+import { P, GlassCard, Btn, Badge, Lbl, Input, TextArea, Sel, Spinner, fmtDate } from '../webcontent/ui.jsx'
 
 const DIFF_COLOR={principiante:P.green,intermedio:P.orange,avanzado:P.red}
 
@@ -173,6 +174,149 @@ function ApprovalQueue({user}){
   </div>
 }
 
+// ── Tab 3: Emisión de certificados (admin + super_admin) ─────────────────────
+// La fuente es list_certificate_candidates(): cruza las asignaciones aprobadas
+// con el progreso real del alumno. La emisión pasa por issue_education_certificate(),
+// que vuelve a validar rol y 100 % de avance en el servidor.
+function CertificatesTab({isSuperAdmin}){
+  const[rows,setRows]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[search,setSearch]=useState('')
+  const[filter,setFilter]=useState('todos')
+  const[issuing,setIssuing]=useState(null)
+  const[revoking,setRevoking]=useState(null)   // certificate_id en proceso de anulación
+  const[revokeReason,setRevokeReason]=useState('')
+  const[msg,setMsg]=useState(null)             // {type:'ok'|'err', text}
+
+  const load=useCallback(async()=>{
+    setLoading(true)
+    try{
+      const{data,error}=await supabase.rpc('list_certificate_candidates',{p_email:null})
+      if(error)throw error
+      setRows(data||[])
+    }catch(e){console.error('certificados:',e);setMsg({type:'err',text:e.message||'No se pudo cargar el listado'})}
+    finally{setLoading(false)}
+  },[])
+  useEffect(()=>{load()},[load])
+
+  const issue=async r=>{
+    setIssuing(r.assignment_id);setMsg(null)
+    try{
+      const{data,error}=await supabase.rpc('issue_education_certificate',{p_assignment_id:r.assignment_id,p_note:null})
+      if(error)throw error
+      setMsg({type:'ok',text:data?.already_issued
+        ?`Este curso ya tenía el certificado ${data.certificate_number}`
+        :`Certificado ${data.certificate_number} emitido a ${r.client_name}`})
+      load()
+    }catch(e){console.error(e);setMsg({type:'err',text:e.message||'No se pudo emitir el certificado'})}
+    finally{setIssuing(null)}
+  }
+
+  const revoke=async certId=>{
+    setMsg(null)
+    try{
+      const{error}=await supabase.rpc('revoke_education_certificate',{p_certificate_id:certId,p_reason:revokeReason})
+      if(error)throw error
+      setMsg({type:'ok',text:'Certificado anulado'})
+      setRevoking(null);setRevokeReason('');load()
+    }catch(e){console.error(e);setMsg({type:'err',text:e.message||'No se pudo anular'})}
+  }
+
+  const filtered=useMemo(()=>{
+    const q=search.trim().toLowerCase()
+    return rows.filter(r=>{
+      const ms=!q||`${r.client_name} ${r.client_email} ${r.module_title}`.toLowerCase().includes(q)
+      const mf=filter==='todos'
+        ||(filter==='listos'&&r.pct>=100&&!r.certificate_number)
+        ||(filter==='emitidos'&&!!r.certificate_number)
+        ||(filter==='curso'&&r.pct<100)
+      return ms&&mf
+    })
+  },[rows,search,filter])
+
+  const listos=rows.filter(r=>r.pct>=100&&!r.certificate_number).length
+  const emitidos=rows.filter(r=>r.certificate_number).length
+
+  if(loading)return <Spinner/>
+  return <div>
+    <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+      <Input value={search} onChange={setSearch} placeholder="Buscar cliente, correo o curso..." style={{maxWidth:300}}/>
+      <Sel value={filter} onChange={setFilter} style={{maxWidth:210}} options={[
+        {value:'todos',label:`Todos (${rows.length})`},
+        {value:'listos',label:`Listos para emitir (${listos})`},
+        {value:'emitidos',label:`Ya emitidos (${emitidos})`},
+        {value:'curso',label:'En curso'},
+      ]}/>
+      <Btn variant="ghost" onClick={load} style={{fontSize:11,padding:'7px 12px'}}>↺ Recargar</Btn>
+      <span style={{fontSize:11,color:P.muted,marginLeft:'auto'}}>El certificado se habilita al 100 % del curso</span>
+    </div>
+
+    {msg&&<p style={{fontSize:12.5,color:msg.type==='ok'?P.green:P.red,background:msg.type==='ok'?P.greenDim:P.redDim,borderRadius:8,padding:'10px 14px',margin:'0 0 14px'}}>
+      {msg.type==='ok'?'✓ ':'✕ '}{msg.text}
+    </p>}
+
+    {filtered.length===0?(
+      <GlassCard><p style={{fontSize:13,color:P.muted,textAlign:'center',margin:0}}>
+        {rows.length===0?'Todavía no hay cursos aprobados. Asigna y aprueba un curso para poder certificar.':'Sin resultados con ese filtro.'}
+      </p></GlassCard>
+    ):(
+      <div style={{display:'flex',flexDirection:'column',gap:12}}>
+        {filtered.map(r=>{
+          const diffColor=DIFF_COLOR[(r.difficulty_level||'').toLowerCase()]||P.blue
+          const completo=r.pct>=100
+          return <GlassCard key={r.assignment_id}>
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:6}}>
+              <span style={{fontSize:14,fontWeight:700,color:P.text}}>{r.client_name}</span>
+              <span style={{fontSize:11,color:P.muted,fontFamily:'monospace'}}>{r.client_email}</span>
+              {r.difficulty_level&&<Badge label={r.difficulty_level} color={diffColor}/>}
+            </div>
+            <p style={{fontSize:12.5,color:P.textSub,margin:'0 0 10px'}}>🎓 {r.module_title}</p>
+
+            <div style={{height:7,borderRadius:99,background:'rgba(255,255,255,0.07)',overflow:'hidden',marginBottom:8}}>
+              <div style={{height:'100%',width:`${Math.max(0,Math.min(100,r.pct))}%`,borderRadius:99,background:completo?P.green:P.orange}}/>
+            </div>
+
+            <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}}>
+              <span style={{fontSize:11.5,color:completo?P.green:P.muted,fontWeight:600}}>
+                {r.pct}% · {r.done_lessons} de {r.total_lessons} lecciones
+              </span>
+              {r.certificate_number&&(r.certificate_url
+                ?<a href={r.certificate_url} target="_blank" rel="noopener noreferrer" title="Abrir el certificado" style={{textDecoration:'none'}}>
+                   <Badge label={`${r.certificate_number} ↗`} color={P.green}/>
+                 </a>
+                :<Badge label={r.certificate_number} color={P.green}/>)}
+              {r.issued_at&&<span style={{fontSize:11,color:P.muted}}>Emitido {fmtDate(r.issued_at)}</span>}
+
+              <div style={{marginLeft:'auto',display:'flex',gap:8,flexWrap:'wrap'}}>
+                {!r.certificate_number&&(
+                  <Btn onClick={()=>issue(r)} disabled={!completo||issuing===r.assignment_id}
+                    style={{fontSize:12,padding:'7px 14px',
+                      ...(completo?{}:{background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`})}}>
+                    {issuing===r.assignment_id?'Emitiendo…':completo?'🏅 Emitir certificado':'Curso incompleto'}
+                  </Btn>
+                )}
+                {r.certificate_number&&isSuperAdmin&&revoking!==r.certificate_id&&(
+                  <Btn variant="ghost" style={{fontSize:11,padding:'6px 12px',color:P.red}} onClick={()=>{setRevoking(r.certificate_id);setRevokeReason('')}}>
+                    Anular
+                  </Btn>
+                )}
+              </div>
+            </div>
+
+            {revoking===r.certificate_id&&(
+              <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginTop:12,paddingTop:12,borderTop:`1px solid ${P.border}`}}>
+                <Input value={revokeReason} onChange={setRevokeReason} placeholder="Motivo de la anulación" style={{flex:1,minWidth:200}}/>
+                <Btn variant="danger" style={{fontSize:11,padding:'7px 12px'}} onClick={()=>revoke(r.certificate_id)}>Confirmar anulación</Btn>
+                <Btn variant="ghost" style={{fontSize:11,padding:'7px 12px'}} onClick={()=>{setRevoking(null);setRevokeReason('')}}>Cancelar</Btn>
+              </div>
+            )}
+          </GlassCard>
+        })}
+      </div>
+    )}
+  </div>
+}
+
 // ── Contenedor del módulo ────────────────────────────────────────────────────
 export default function EducationAdmin({user,isSuperAdmin}){
   const[tab,setTab]=useState('assign')
@@ -182,13 +326,15 @@ export default function EducationAdmin({user,isSuperAdmin}){
   return <div>
     <div style={{marginBottom:18}}>
       <h1 style={{fontSize:22,fontWeight:800,color:P.text,margin:'0 0 4px',letterSpacing:'-0.01em'}}>Educación</h1>
-      <p style={{fontSize:12,color:P.muted,margin:0}}>Asignación de cursos del módulo educativo (9 módulos · 67 lecciones) y flujo de aprobación</p>
+      <p style={{fontSize:12,color:P.muted,margin:0}}>Asignación de cursos del módulo educativo (9 módulos · 67 lecciones), flujo de aprobación y emisión de certificados según el progreso de cada cliente</p>
     </div>
     <div style={{display:'flex',gap:8,marginBottom:18,borderBottom:`1px solid ${P.border}`,paddingBottom:12}}>
       <Tab id="assign" label="📤 Asignar curso"/>
       {isSuperAdmin&&<Tab id="approvals" label="✅ Aprobaciones"/>}
+      <Tab id="certificates" label="🏅 Certificados"/>
     </div>
     {tab==='assign'&&<AssignCourse/>}
     {tab==='approvals'&&isSuperAdmin&&<ApprovalQueue user={user}/>}
+    {tab==='certificates'&&<CertificatesTab isSuperAdmin={isSuperAdmin}/>}
   </div>
 }

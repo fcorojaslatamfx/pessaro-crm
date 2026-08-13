@@ -205,6 +205,46 @@ function SHdr({title,sub,action}){
 }
 const TT={contentStyle:{background:P.surface,border:`1px solid ${P.border}`,borderRadius:8,color:P.text,fontSize:12}}
 
+// ─── FICHA DEL CLIENTE: piezas de la vista en pantalla completa ───────────────
+// Bloque con título; agrupa una sección de la ficha (registro, cuenta, tareas…)
+function FSection({title,icon,accent=P.purple,right,children}){
+  return <section style={{background:P.card,border:`1px solid ${P.border}`,borderRadius:14,padding:'18px 20px',marginBottom:16}}>
+    <div style={{display:'flex',alignItems:'center',gap:9,marginBottom:14,flexWrap:'wrap'}}>
+      <span style={{fontSize:14,lineHeight:1}}>{icon}</span>
+      <h3 style={{margin:0,fontSize:11,fontWeight:800,color:accent,textTransform:'uppercase',letterSpacing:'0.11em'}}>{title}</h3>
+      {right&&<div style={{marginLeft:'auto',display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>{right}</div>}
+    </div>
+    {children}
+  </section>
+}
+// Rejilla fluida: en móvil cae a una columna sola sin media queries
+function FGrid({children,min=210}){
+  return <div style={{display:'grid',gridTemplateColumns:`repeat(auto-fit,minmax(${min}px,1fr))`,gap:14}}>{children}</div>
+}
+// Campo etiqueta/valor. Lo no registrado se ve distinto para que salte a la vista
+function FField({label,value,mono,color}){
+  const vacio=value===null||value===undefined||value===''||value==='—'
+  return <div style={{minWidth:0}}>
+    <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 4px'}}>{label}</p>
+    <p style={{fontSize:13,color:vacio?P.muted:(color||P.text),margin:0,fontFamily:mono?'monospace':'inherit',fontStyle:vacio?'italic':'normal',wordBreak:'break-word',lineHeight:1.45}}>{vacio?'Sin registrar':value}</p>
+  </div>
+}
+// Barra de progreso 0-100 usada por el bloque de educación
+function FBar({pct,color=P.green}){
+  return <div style={{height:7,borderRadius:99,background:'rgba(255,255,255,0.07)',overflow:'hidden'}}>
+    <div style={{height:'100%',width:`${Math.max(0,Math.min(100,pct||0))}%`,background:color,borderRadius:99,transition:'width 0.3s'}}/>
+  </div>
+}
+const edad=d=>{
+  if(!d)return null
+  const b=new Date(d); if(isNaN(b))return null
+  const h=new Date(); let a=h.getFullYear()-b.getFullYear()
+  const m=h.getMonth()-b.getMonth()
+  if(m<0||(m===0&&h.getDate()<b.getDate()))a--
+  return a>=0&&a<130?a:null
+}
+const fmtUSD=n=>new Intl.NumberFormat('es-CL',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(Number(n)||0)
+
 // ─── WA TOAST ─────────────────────────────────────────────────────────────────
 // ─── BANNER DE PERMISO DE NOTIFICACIONES ──────────────────────────────────
 // Aparece flotante arriba cuando Notification.permission === 'default'
@@ -817,7 +857,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[editingAssignee,setEditingAssignee]=useState(null)
   const[assigneeValue,setAssigneeValue]=useState('')
   const[editingContact,setEditingContact]=useState(null)
-  const[editForm,setEditForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo'})
+  const[editForm,setEditForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',
+    birth_date:'',profession:'',account_opened:false,account_opened_at:'',account_kind:'',broker:'',account_number:'',initial_balance:'',managed_type:''})
   // Grupos: el grupo es del asesor que lo crea; el SA ve los de todos (RLS)
   const[groups,setGroups]=useState([])
   const[memberships,setMemberships]=useState({})   // contact_id -> [group_id]
@@ -832,6 +873,18 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   // Ficha: historial consolidado del contacto (WhatsApp, lead, tickets, tareas, cuenta)
   const[ficha,setFicha]=useState(null)
   const[loadingFicha,setLoadingFicha]=useState(false)
+  // Ficha en pantalla completa: depósitos/retiros y progreso educativo
+  const[movs,setMovs]=useState([])
+  const[movForm,setMovForm]=useState({kind:'deposito',amount:'',movement_date:new Date().toISOString().slice(0,10),note:''})
+  const[movSaving,setMovSaving]=useState(false)
+  const[movErr,setMovErr]=useState('')
+  const[edu,setEdu]=useState([])            // filas de list_certificate_candidates para este contacto
+  const[issuing,setIssuing]=useState(null)
+  const[certMsg,setCertMsg]=useState(null)
+  // La emisión de certificados es de admin/super admin; el asesor no ve el bloque
+  const isAdmin=isSuperAdmin||staffProfile?.role==='admin'
+  const ancho=useWindowSize()
+  const isMob=ancho<768
 
   const loadGroups=useCallback(async()=>{
     try{
@@ -942,9 +995,78 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   // Consolida el historial del contacto desde las cuatro fuentes del CRM.
   // Los teléfonos entran con formatos distintos según su origen (manual, CSV,
   // landing, webhook), así que WhatsApp se cruza por los últimos 8 dígitos.
+  // La ficha ocupa toda la pantalla: Escape la cierra y el fondo no debe scrollear
+  useEffect(()=>{
+    if(!selected)return
+    const h=e=>{if(e.key==='Escape'&&!editingContact)setSelected(null)}
+    const prev=document.body.style.overflow
+    document.body.style.overflow='hidden'
+    window.addEventListener('keydown',h)
+    return()=>{window.removeEventListener('keydown',h);document.body.style.overflow=prev}
+  },[selected,editingContact])
+
+  // Depósitos y retiros del cliente, lo más reciente primero
+  const loadMovs=useCallback(async contactId=>{
+    try{
+      const{data,error}=await supabase.from('crm_client_movements').select('*')
+        .eq('contact_id',contactId).order('movement_date',{ascending:false}).order('created_at',{ascending:false})
+      if(error)throw error
+      setMovs(data||[])
+    }catch(e){console.error('loadMovs:',e);setMovs([])}
+  },[])
+
+  const addMov=async()=>{
+    if(!selected)return
+    const monto=Number(String(movForm.amount).replace(',','.'))
+    if(!(monto>0)){setMovErr('Indica un monto mayor que 0');return}
+    if(!movForm.movement_date){setMovErr('Indica la fecha del movimiento');return}
+    setMovErr('');setMovSaving(true)
+    try{
+      const{data,error}=await supabase.from('crm_client_movements').insert({
+        contact_id:selected.id,kind:movForm.kind,amount:monto,
+        movement_date:movForm.movement_date,note:movForm.note.trim()||null,
+      }).select().single()
+      if(error)throw error
+      setMovs(p=>[data,...p].sort((a,b)=>new Date(b.movement_date)-new Date(a.movement_date)))
+      setMovForm({kind:'deposito',amount:'',movement_date:new Date().toISOString().slice(0,10),note:''})
+      logActivity(user.id,selected.id,'otro',`${movForm.kind==='deposito'?'Depósito':'Retiro'} registrado: ${fmtUSD(monto)}`,{})
+    }catch(e){console.error('addMov:',e);setMovErr(e.message||'No se pudo guardar el movimiento')}
+    finally{setMovSaving(false)}
+  }
+
+  // El certificado lo emite la RPC: valida rol (admin/super admin) y progreso 100 %
+  const issueCert=async row=>{
+    setIssuing(row.assignment_id);setCertMsg(null)
+    try{
+      const{data,error}=await supabase.rpc('issue_education_certificate',{p_assignment_id:row.assignment_id,p_note:null})
+      if(error)throw error
+      setCertMsg({type:'ok',text:data?.already_issued
+        ?`Este curso ya tenía el certificado ${data.certificate_number}`
+        :`Certificado ${data.certificate_number} emitido para ${row.client_name}`})
+      const{data:rows}=await supabase.rpc('list_certificate_candidates',{p_email:selected?.email||null})
+      setEdu(rows||[])
+      if(selected)logActivity(user.id,selected.id,'otro',`Certificado emitido · ${row.module_title}`,{})
+    }catch(e){console.error('issueCert:',e);setCertMsg({type:'err',text:e.message||'No se pudo emitir el certificado'})}
+    finally{setIssuing(null)}
+  }
+
+  const delMov=async id=>{
+    try{
+      const{error}=await supabase.from('crm_client_movements').delete().eq('id',id)
+      if(error)throw error
+      setMovs(p=>p.filter(m=>m.id!==id))
+    }catch(e){console.error('delMov:',e);setMovErr(e.message||'No se pudo eliminar')}
+  }
+
   const loadFicha=async c=>{
-    setFicha(null)
+    setFicha(null);setMovs([]);setEdu([]);setMovErr('')
     if(String(c.id).startsWith('sub_'))return
+    loadMovs(c.id)
+    // Progreso y certificados sólo los ve admin/super admin (la RPC además lo exige)
+    if(isAdmin&&c.email){
+      supabase.rpc('list_certificate_candidates',{p_email:c.email})
+        .then(({data,error})=>{if(error)console.error('edu:',error);else setEdu(data||[])})
+    }
     setLoadingFicha(true)
     try{
       const tail=(c.phone||'').replace(/\D/g,'').slice(-8)
@@ -1052,18 +1174,39 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   }
 
   const saveContactEdit=async(contactId)=>{
+    // Las columnas date/numeric no aceptan '': se mandan como null
+    const nn=v=>{const s=typeof v==='string'?v.trim():v; return s===''||s===undefined?null:s}
+    const payload={
+      ...editForm,
+      birth_date:nn(editForm.birth_date),
+      account_opened_at:nn(editForm.account_opened_at),
+      account_kind:nn(editForm.account_kind),
+      managed_type:nn(editForm.managed_type),
+      profession:nn(editForm.profession),
+      broker:nn(editForm.broker),
+      account_number:nn(editForm.account_number),
+      initial_balance:editForm.initial_balance===''||editForm.initial_balance===null?null:Number(String(editForm.initial_balance).replace(',','.')),
+      account_opened:!!editForm.account_opened,
+    }
     try{
-      await supabase.from('crm_contacts').update(editForm).eq('id',contactId)
+      const{error}=await supabase.from('crm_contacts').update(payload).eq('id',contactId)
+      if(error)throw error
       logActivity(user.id,contactId,'nota_agregada','Datos del contacto actualizados',{})
       load()
       setEditingContact(null)
-      if(selected?.id===contactId)setSelected(p=>({...p,...editForm}))
-    }catch(e){console.error('saveContactEdit:',e)}
+      if(selected?.id===contactId)setSelected(p=>({...p,...payload}))
+    }catch(e){console.error('saveContactEdit:',e);setMovErr('')}
   }
 
   const openEditContact=(c)=>{
     setEditingContact(c.id)
-    setEditForm({full_name:c.full_name||'',email:c.email||'',phone:c.phone||'',address:c.address||'',status:c.status||'activo'})
+    setEditForm({
+      full_name:c.full_name||'',email:c.email||'',phone:c.phone||'',address:c.address||'',status:c.status||'activo',
+      birth_date:c.birth_date||'',profession:c.profession||'',
+      account_opened:!!c.account_opened,account_opened_at:c.account_opened_at||'',
+      account_kind:c.account_kind||'',broker:c.broker||'',account_number:c.account_number||'',
+      initial_balance:c.initial_balance??'',managed_type:c.managed_type||'',
+    })
   }
 
   // Parser mejorado: detecta separador automáticamente (coma, tab, punto y coma),
@@ -1509,166 +1652,400 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       </div>}
     </Modal>}
 
-    {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)}>
-      <div>
-        <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap',alignItems:'center'}}>
-          <Badge label={selected.status} color={SCOLOR_MAP[selected.status]||P.muted}/>
-          <Badge label={selected.source||'crm'} color={selected.source==='formulario'?P.orange:selected.source==='csv'?P.blue:P.muted}/>
-          {selected._capital>0&&<span style={{fontSize:13,color:P.green,fontFamily:'monospace',fontWeight:700}}>{fmt(selected._capital)}</span>}
-          {staffProfile?.referral_code&&<WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={selected.full_name||''} leadPhone={selected.phone||''} onSend={()=>{if(!selected.id.startsWith('sub_')){logActivity(user.id,selected.id,'wafinance_invitacion','Invitación WAFinance enviada por WhatsApp',{advisor_code:staffProfile.referral_code});setActivities(p=>[{id:Date.now().toString(),activity_type:'wafinance_invitacion',description:'Invitación WAFinance enviada por WhatsApp',created_at:new Date().toISOString()},...p])}}}/>}
-          {!selected.id.startsWith('sub_')&&<button onClick={()=>openEditContact(selected)}
-            style={{padding:'5px 12px',borderRadius:8,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple,fontSize:12,fontWeight:600,cursor:'pointer'}}>
-            ✏️ Editar
-          </button>}
-        </div>
-        {!String(selected.id).startsWith('sub_')&&<div style={{marginBottom:18}}>
-          <Lbl>Grupos</Lbl>
-          {groups.length===0?(
-            <p style={{fontSize:11,color:P.muted,fontStyle:'italic',margin:0}}>Aún no hay grupos. Créalos con el botón «Grupos» de arriba.</p>
-          ):(
-            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-              {groups.map(g=>{
-                const on=(memberships[selected.id]||[]).includes(g.id)
-                return <button key={g.id} onClick={()=>toggleMember(selected.id,g.id)} title={on?'Quitar del grupo':'Agregar al grupo'}
-                  style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,cursor:'pointer',
-                    background:on?g.color+'28':'rgba(255,255,255,0.04)',color:on?g.color:P.muted,
-                    border:`1px solid ${on?g.color+'60':P.border}`}}>
-                  {on?'✓ ':'+ '}{g.name}
-                </button>
-              })}
+    {/* ── FICHA ONLINE DEL CLIENTE (pantalla completa) ─────────────────────── */}
+    {selected&&(()=>{
+      const esSub=String(selected.id).startsWith('sub_')
+      const f=ficha||{}
+      const tareas=f.tasks||[]
+      const pend=tareas.filter(t=>!t.done)
+      const hechas=tareas.filter(t=>t.done)
+      const dep=movs.filter(m=>m.kind==='deposito')
+      const ret=movs.filter(m=>m.kind==='retiro')
+      const suma=a=>a.reduce((s,m)=>s+Number(m.amount||0),0)
+      const linea=buildTimeline(notes,activities,ficha)
+      const anios=edad(selected.birth_date)
+      const cerrar=()=>{setSelected(null);setCertMsg(null);setMovErr('')}
+      return <div style={{position:'fixed',inset:0,zIndex:1002,background:P.bg,overflowY:'auto',fontFamily:'inherit'}}>
+
+        {/* Cabecera fija: identidad + acciones */}
+        <div style={{position:'sticky',top:0,zIndex:3,background:'rgba(13,15,23,0.94)',backdropFilter:'blur(14px)',borderBottom:`1px solid ${P.border}`,padding:isMob?'11px 14px':'13px 28px'}}>
+          <div style={{maxWidth:1240,margin:'0 auto',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+            <button onClick={cerrar} title="Volver al listado de contactos"
+              style={{padding:'7px 13px',borderRadius:9,background:'rgba(255,255,255,0.05)',border:`1px solid ${P.border}`,color:P.textSub,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit',flexShrink:0}}>
+              ← Volver
+            </button>
+            <div style={{width:38,height:38,borderRadius:11,background:P.purpleDim,display:'flex',alignItems:'center',justifyContent:'center',fontSize:16,fontWeight:800,color:P.purple,flexShrink:0}}>
+              {(selected.full_name||'?')[0]}
             </div>
-          )}
-        </div>}
-        {!String(selected.id).startsWith('sub_')&&<div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
-          <Btn variant="ghost" disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px'}}
-            onClick={()=>exportFichaHTML(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName))}>⬇ Ficha HTML</Btn>
-          <Btn disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px',background:'linear-gradient(135deg,#0a1f5c,#2563eb)',color:'#fff',border:'none'}}
-            onClick={()=>exportFichaPDF(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName),LOGO_URI)}>⬇ Ficha PDF</Btn>
-          {loadingFicha&&<span style={{fontSize:11,color:P.muted,alignSelf:'center'}}>Cargando historial…</span>}
-        </div>}
-        {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
-          <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
-            <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:4,margin:'0 0 4px',fontWeight:600}}>{k}</p>
-            <p style={{fontSize:13,color:P.text,margin:0}}>{v}</p>
-          </div>
-        ))}
-        <div style={{marginBottom:18}}>
-          <Lbl>Cambiar estado</Lbl>
-          <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-            {STATUS_OPT.map(s=>(
-              <button key={s.value} onClick={()=>updateStatus(selected.id,s.value)}
-                style={{padding:'5px 12px',borderRadius:6,fontSize:11,cursor:'pointer',fontWeight:600,
-                  background:selected.status===s.value?SCOLOR_MAP[s.value]+'30':'rgba(255,255,255,0.04)',
-                  color:selected.status===s.value?SCOLOR_MAP[s.value]:P.muted,
-                  border:`1px solid ${selected.status===s.value?SCOLOR_MAP[s.value]+'50':P.border}`}}>
-                {s.label}
-              </button>
-            ))}
+            <div style={{minWidth:0,flex:isMob?'1 1 100%':'0 1 auto',order:isMob?3:0}}>
+              <h2 style={{margin:0,fontSize:isMob?16:19,fontWeight:800,color:P.text,letterSpacing:'-0.01em',wordBreak:'break-word'}}>{selected.full_name||'Sin nombre'}</h2>
+              <p style={{margin:'2px 0 0',fontSize:11.5,color:P.muted,fontFamily:'monospace',wordBreak:'break-all'}}>{selected.email||'sin correo'}</p>
+            </div>
+            <div style={{marginLeft:isMob?0:'auto',display:'flex',gap:7,alignItems:'center',flexWrap:'wrap'}}>
+              <Badge label={selected.status} color={SCOLOR_MAP[selected.status]||P.muted}/>
+              <Badge label={selected.source||'crm'} color={selected.source==='formulario'?P.orange:selected.source==='csv'?P.blue:P.muted}/>
+              {selected._capital>0&&<span style={{fontSize:12.5,color:P.green,fontFamily:'monospace',fontWeight:700}}>{fmt(selected._capital)}</span>}
+              {!esSub&&<button onClick={()=>openEditContact(selected)}
+                style={{padding:'6px 12px',borderRadius:8,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                ✏️ Editar ficha
+              </button>}
+              {staffProfile?.referral_code&&<WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={selected.full_name||''} leadPhone={selected.phone||''} compact onSend={()=>{if(!esSub){logActivity(user.id,selected.id,'wafinance_invitacion','Invitación WAFinance enviada por WhatsApp',{advisor_code:staffProfile.referral_code});setActivities(p=>[{id:Date.now().toString(),activity_type:'wafinance_invitacion',description:'Invitación WAFinance enviada por WhatsApp',created_at:new Date().toISOString()},...p])}}}/>}
+              {!esSub&&<>
+                <Btn variant="ghost" disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px'}}
+                  onClick={()=>exportFichaHTML(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName,movs))}>⬇ HTML</Btn>
+                <Btn disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px',background:'linear-gradient(135deg,#0a1f5c,#2563eb)',color:'#fff',border:'none'}}
+                  onClick={()=>exportFichaPDF(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName,movs),LOGO_URI)}>⬇ PDF</Btn>
+              </>}
+              <button onClick={cerrar} title="Cerrar ficha"
+                style={{background:'none',border:'none',color:P.muted,fontSize:20,cursor:'pointer',lineHeight:1,padding:'0 4px'}}>✕</button>
+            </div>
           </div>
         </div>
-        {isSuperAdmin&&!selected.id.startsWith('sub_')&&<div style={{marginBottom:18}}>
-          <Lbl>Asesor asignado</Lbl>
-          <select value={selected.user_id||''} onChange={e=>handleAssigneeChange(selected.id,e.target.value)}
-            style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.purpleBorder}`,color:P.text,fontSize:13,outline:'none',fontFamily:'inherit',cursor:'pointer'}}>
-            <option value="">Sin asignar (Web)</option>
-            {staffList.map(s=><option key={s.user_id} value={s.user_id}>{s.display_name}</option>)}
-          </select>
-        </div>}
-        <div>
-          <p style={{fontSize:10,fontWeight:700,color:P.purple,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:10,margin:'0 0 10px'}}>Notas ({notes.length})</p>
-          {notes.map(n=><div key={n.id} style={{padding:'10px 12px',marginBottom:8,background:'rgba(108,92,231,0.08)',borderRadius:8,borderLeft:`3px solid ${P.purple}`}}>
-            <p style={{fontSize:13,color:P.textSub,margin:'0 0 4px',lineHeight:1.6}}>{n.content}</p>
-            <p style={{fontSize:10,color:P.muted,margin:0}}>{fmtDate(n.created_at)}</p>
-          </div>)}
-          <div style={{display:'flex',gap:8,marginTop:10}}>
-            <Input value={noteText} onChange={setNoteText} placeholder="Añadir nota..." style={{flex:1}}/>
-            <Btn onClick={addNote} disabled={!noteText.trim()}>+</Btn>
-          </div>
-        </div>
-        {!selected.id.startsWith('sub_')&&(
-          <div style={{marginTop:18,borderTop:`1px solid ${P.border}`,paddingTop:16}}>
-            {(()=>{
-              const linea=buildTimeline(notes,activities,ficha)
-              const f=ficha||{}
-              const resumen=[
-                ['WhatsApp',(f.wa||[]).length],['Tickets',(f.tickets||[]).length],
-                ['Tareas',(f.tasks||[]).length],['Formularios',(f.subs||[]).length],
-                ['Notas',notes.length],['Actividades',activities.length],
-              ].filter(([,n])=>n>0)
-              return <>
-                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',margin:'0 0 10px'}}>
-                  <p style={{fontSize:10,fontWeight:700,color:'#f0a500',textTransform:'uppercase',letterSpacing:'0.10em',margin:0}}>Historial completo ({linea.length})</p>
-                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
-                    {f.lead&&<Badge label="lead de campaña" color={P.blue}/>}
-                    {f.cliente&&<Badge label="cuenta de cliente" color={P.purple}/>}
-                  </div>
+
+        <div style={{maxWidth:1240,margin:'0 auto',padding:isMob?'16px 14px 64px':'22px 28px 72px'}}>
+          {esSub&&<div style={{background:P.orangeDim,border:'1px solid rgba(255,165,2,0.3)',borderRadius:12,padding:'12px 16px',marginBottom:16}}>
+            <p style={{margin:0,fontSize:12.5,color:P.orange}}>
+              Este registro viene de un <strong>formulario web</strong> y todavía no es un contacto del CRM.
+              Créalo como contacto para completar su ficha (cuenta, depósitos, tareas e historial).
+            </p>
+          </div>}
+
+          <div style={{display:'grid',gridTemplateColumns:ancho>1080?'1.15fr 1fr':'1fr',gap:16,alignItems:'start'}}>
+
+            {/* ── Columna izquierda ─────────────────────────────────────────── */}
+            <div style={{minWidth:0}}>
+
+              <FSection title="Registro completo del cliente" icon="🪪" accent={P.purple}>
+                <FGrid>
+                  <FField label="Nombre completo" value={selected.full_name}/>
+                  <FField label="Fecha de nacimiento" value={selected.birth_date?`${fmtDate(selected.birth_date)}${anios!==null?` · ${anios} años`:''}`:''}/>
+                  <FField label="Profesión, actividad u oficio" value={selected.profession}/>
+                  <FField label="Número móvil" value={selected.phone} mono/>
+                  <FField label="Correo electrónico" value={selected.email} mono/>
+                  <FField label="Dirección" value={selected.address}/>
+                  <FField label="Fecha de registro" value={fmtDate(selected.created_at)}/>
+                  <FField label="Asesor asignado" value={selected.user_id?getAdvisorName(selected.user_id):(selected.source==='formulario'?'Web (sin asignar)':'')}/>
+                </FGrid>
+                {!esSub&&<div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
+                  <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Grupos</p>
+                  {groups.length===0?(
+                    <p style={{fontSize:11.5,color:P.muted,fontStyle:'italic',margin:0}}>Aún no hay grupos. Créalos con el botón «Grupos» del listado.</p>
+                  ):(
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                      {groups.map(g=>{
+                        const on=(memberships[selected.id]||[]).includes(g.id)
+                        return <button key={g.id} onClick={()=>toggleMember(selected.id,g.id)} title={on?'Quitar del grupo':'Agregar al grupo'}
+                          style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
+                            background:on?g.color+'28':'rgba(255,255,255,0.04)',color:on?g.color:P.muted,
+                            border:`1px solid ${on?g.color+'60':P.border}`}}>
+                          {on?'✓ ':'+ '}{g.name}
+                        </button>
+                      })}
+                    </div>
+                  )}
+                </div>}
+              </FSection>
+
+              {!esSub&&<FSection title="Cuenta de inversión" icon="💹" accent={P.blue}>
+                <FGrid>
+                  <FField label="Apertura de cuenta"
+                    value={selected.account_opened?`Sí${selected.account_opened_at?` · ${fmtDate(selected.account_opened_at)}`:''}`:(selected.account_opened===false&&(selected.broker||selected.account_number)?'No':'')}
+                    color={selected.account_opened?P.green:undefined}/>
+                  <FField label="Tipo de cuenta" value={selected.account_kind==='real'?'Real':selected.account_kind==='demo'?'Demo':''}
+                    color={selected.account_kind==='real'?P.green:selected.account_kind==='demo'?P.orange:undefined}/>
+                  <FField label="Broker" value={selected.broker}/>
+                  <FField label="Número de cuenta" value={selected.account_number} mono/>
+                  <FField label="PAMM o MAM" value={selected.managed_type&&selected.managed_type!=='ninguno'?selected.managed_type:(selected.managed_type==='ninguno'?'Ninguno':'')}
+                    color={selected.managed_type&&selected.managed_type!=='ninguno'?P.purpleLight:undefined}/>
+                  <FField label="Equidad o balance inicial" value={selected.initial_balance!==null&&selected.initial_balance!==undefined&&selected.initial_balance!==''?fmtUSD(selected.initial_balance):''} mono color={P.green}/>
+                </FGrid>
+              </FSection>}
+
+              {!esSub&&<FSection title="Depósitos y retiros" icon="💰" accent={P.green}
+                right={<span style={{fontSize:11,color:P.muted}}>{movs.length} movimiento{movs.length!==1?'s':''}</span>}>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10,marginBottom:14}}>
+                  {[['Depósitos',suma(dep),P.green,dep.length],['Retiros',suma(ret),P.red,ret.length],['Neto',suma(dep)-suma(ret),P.text,null]].map(([k,v,col,n])=>(
+                    <div key={k} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,padding:'10px 12px'}}>
+                      <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 3px'}}>{k}{n!==null?` (${n})`:''}</p>
+                      <p style={{fontSize:15,fontWeight:700,color:col,margin:0,fontFamily:'monospace'}}>{fmtUSD(v)}</p>
+                    </div>
+                  ))}
                 </div>
-                {resumen.length>0&&<p style={{fontSize:11,color:P.muted,margin:'0 0 10px'}}>
-                  {resumen.map(([k,n])=>`${n} ${k.toLowerCase()}`).join(' · ')}
+                {movs.length>0&&<div style={{maxHeight:230,overflowY:'auto',display:'flex',flexDirection:'column',gap:6,marginBottom:14}}>
+                  {movs.map(m=>(
+                    <div key={m.id} style={{display:'flex',alignItems:'center',gap:10,padding:'8px 11px',background:'rgba(255,255,255,0.03)',borderRadius:9,borderLeft:`3px solid ${m.kind==='deposito'?P.green:P.red}`}}>
+                      <span style={{fontSize:14,flexShrink:0}}>{m.kind==='deposito'?'↓':'↑'}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <p style={{margin:0,fontSize:12.5,color:P.text,fontWeight:600}}>
+                          {m.kind==='deposito'?'Depósito':'Retiro'} · <span style={{fontFamily:'monospace',color:m.kind==='deposito'?P.green:P.red}}>{fmtUSD(m.amount)}</span>
+                        </p>
+                        <p style={{margin:'2px 0 0',fontSize:10.5,color:P.muted}}>
+                          {fmtDate(m.movement_date)}{m.note?` · ${m.note}`:''}
+                        </p>
+                      </div>
+                      <button onClick={()=>delMov(m.id)} title="Eliminar movimiento"
+                        style={{background:'none',border:'none',color:P.muted,fontSize:13,cursor:'pointer',flexShrink:0,fontFamily:'inherit'}}>🗑</button>
+                    </div>
+                  ))}
+                </div>}
+                <div style={{borderTop:`1px solid ${P.border}`,paddingTop:13}}>
+                  <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 8px'}}>Registrar movimiento</p>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(120px,1fr))',gap:8,marginBottom:8}}>
+                    <Sel value={movForm.kind} onChange={v=>setMovForm(p=>({...p,kind:v}))} options={[{value:'deposito',label:'Depósito'},{value:'retiro',label:'Retiro'}]}/>
+                    <Input type="date" value={movForm.movement_date} onChange={v=>setMovForm(p=>({...p,movement_date:v}))}/>
+                    <Input value={movForm.amount} onChange={v=>setMovForm(p=>({...p,amount:v}))} placeholder="Monto USD"/>
+                  </div>
+                  <div style={{display:'flex',gap:8}}>
+                    <Input value={movForm.note} onChange={v=>setMovForm(p=>({...p,note:v}))} placeholder="Nota (opcional)" style={{flex:1}}/>
+                    <Btn onClick={addMov} disabled={movSaving}>{movSaving?'…':'+ Añadir'}</Btn>
+                  </div>
+                  {movErr&&<p style={{fontSize:11.5,color:P.red,margin:'8px 0 0'}}>{movErr}</p>}
+                </div>
+              </FSection>}
+
+              {!esSub&&isAdmin&&<FSection title="Educación y certificados" icon="🎓" accent="#f0a500"
+                right={<span style={{fontSize:10.5,color:P.muted}}>Emisión: admin y super admin</span>}>
+                {certMsg&&<p style={{fontSize:12,color:certMsg.type==='ok'?P.green:P.red,background:certMsg.type==='ok'?P.greenDim:P.redDim,borderRadius:8,padding:'9px 12px',margin:'0 0 12px'}}>
+                  {certMsg.type==='ok'?'✓ ':'✕ '}{certMsg.text}
                 </p>}
-                {(loadingActivities||loadingFicha)?<Spinner/>:linea.length===0?(
-                  <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'12px 0',margin:0}}>Sin historial registrado aún</p>
+                {edu.length===0?(
+                  <p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>
+                    Sin cursos aprobados para este cliente. Asígnale uno desde el módulo Educación.
+                  </p>
                 ):(
-                  <div style={{maxHeight:300,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
-                    {linea.map((e,i)=>(
-                      <div key={i} style={{display:'flex',gap:10,padding:'8px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:'1px solid rgba(255,255,255,0.05)',borderLeft:`3px solid ${e.color}`}}>
-                        <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{e.icon}</span>
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    {edu.map(r=>(
+                      <div key={r.assignment_id} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,padding:'11px 13px'}}>
+                        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:8}}>
+                          <span style={{fontSize:12.5,fontWeight:700,color:P.text}}>{r.module_title}</span>
+                          {r.certificate_number
+                            ?(r.certificate_url
+                              ?<a href={r.certificate_url} target="_blank" rel="noopener noreferrer" title="Abrir el certificado" style={{textDecoration:'none'}}>
+                                 <Badge label={`certificado ${r.certificate_number} ↗`} color={P.green}/>
+                               </a>
+                              :<Badge label={`certificado ${r.certificate_number}`} color={P.green}/>)
+                            :<Badge label={`${r.pct}% completado`} color={r.pct>=100?P.green:r.pct>0?P.orange:P.muted}/>}
+                        </div>
+                        <FBar pct={r.pct} color={r.pct>=100?P.green:P.orange}/>
+                        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap',marginTop:9}}>
+                          <span style={{fontSize:10.5,color:P.muted}}>{r.done_lessons} de {r.total_lessons} lecciones</span>
+                          {r.certificate_number?(
+                            <span style={{fontSize:10.5,color:P.green,marginLeft:'auto'}}>Emitido {fmtDate(r.issued_at)}</span>
+                          ):(
+                            <Btn onClick={()=>issueCert(r)} disabled={r.pct<100||issuing===r.assignment_id}
+                              style={{marginLeft:'auto',fontSize:11,padding:'6px 12px',
+                                ...(r.pct<100?{background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`}:{})}}>
+                              {issuing===r.assignment_id?'Emitiendo…':r.pct<100?'Curso incompleto':'🏅 Emitir certificado'}
+                            </Btn>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </FSection>}
+            </div>
+
+            {/* ── Columna derecha ───────────────────────────────────────────── */}
+            <div style={{minWidth:0}}>
+
+              {!esSub&&<FSection title="Tareas" icon="✓" accent={P.red}
+                right={<span style={{fontSize:11,color:P.muted}}>{tareas.length} asignada{tareas.length!==1?'s':''}</span>}>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginBottom:tareas.length?13:0}}>
+                  {[['Asignadas',tareas.length,P.textSub],['Pendientes',pend.length,P.orange],['Completadas',hechas.length,P.green]].map(([k,v,col])=>(
+                    <div key={k} style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,padding:'9px 11px',textAlign:'center'}}>
+                      <p style={{fontSize:18,fontWeight:800,color:col,margin:0}}>{v}</p>
+                      <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',fontWeight:700,margin:'2px 0 0'}}>{k}</p>
+                    </div>
+                  ))}
+                </div>
+                {loadingFicha?<Spinner/>:tareas.length===0?(
+                  <p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>Sin tareas asignadas a este cliente.</p>
+                ):(
+                  <div style={{maxHeight:280,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+                    {[...pend,...hechas].map(t=>(
+                      <div key={t.id} style={{display:'flex',gap:9,padding:'8px 11px',background:'rgba(255,255,255,0.03)',borderRadius:9,borderLeft:`3px solid ${t.done?P.green:(PRIO_COLOR[t.priority]||P.orange)}`}}>
+                        <span style={{fontSize:13,flexShrink:0}}>{t.done?'✅':'📌'}</span>
                         <div style={{flex:1,minWidth:0}}>
-                          <p style={{fontSize:10,color:e.color,margin:'0 0 2px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em'}}>{e.tipo}</p>
-                          <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.4,wordBreak:'break-word'}}>{e.titulo}</p>
-                          {e.detalle&&<p style={{fontSize:10,color:P.muted,margin:'2px 0 0'}}>{e.detalle}</p>}
-                          <p style={{fontSize:10,color:P.muted,margin:'3px 0 0'}}>
-                            {new Date(e.ts).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})}
-                            {' · '}
-                            {new Date(e.ts).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}
+                          <p style={{margin:0,fontSize:12.5,color:t.done?P.muted:P.text,textDecoration:t.done?'line-through':'none',wordBreak:'break-word'}}>{t.title}</p>
+                          <p style={{margin:'2px 0 0',fontSize:10.5,color:P.muted}}>
+                            {t.done?`Completada ${t.completed_at?fmtDate(t.completed_at):''}`:(t.due_date?`Vence ${fmtDate(t.due_date)}`:'Sin fecha límite')}
+                            {t.priority?` · prioridad ${t.priority}`:''}
                           </p>
                         </div>
                       </div>
                     ))}
                   </div>
                 )}
-              </>
-            })()}
-          </div>
-        )}
-      </div>
-      {editingContact===selected?.id&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.7)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}
-          onClick={e=>{if(e.target===e.currentTarget)setEditingContact(null)}}>
-          <div style={{background:'#0a1628',border:`1px solid ${P.border}`,borderRadius:16,padding:24,maxWidth:420,width:'100%',fontFamily:'inherit',maxHeight:'80vh',overflowY:'auto'}}
-            onClick={e=>e.stopPropagation()}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
-              <h3 style={{fontSize:15,fontWeight:700,color:'#fff',margin:0}}>Editar contacto</h3>
-              <button onClick={()=>setEditingContact(null)} style={{background:'none',border:'none',color:P.muted,fontSize:18,cursor:'pointer'}}>✕</button>
-            </div>
-            {[['full_name','Nombre completo','text'],['email','Email','email'],['phone','Teléfono','tel'],['address','Dirección','text']].map(([field,label,type])=>(
-              <div key={field} style={{marginBottom:12}}>
-                <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>{label}</label>
-                <input type={type} value={editForm[field]} onChange={e=>setEditForm(p=>({...p,[field]:e.target.value}))}
-                  style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
-              </div>
-            ))}
-            <div style={{marginBottom:16}}>
-              <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Estado</label>
-              <select value={editForm.status} onChange={e=>setEditForm(p=>({...p,status:e.target.value}))}
-                style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',fontFamily:'inherit'}}>
-                {STATUS_OPT.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
-            </div>
-            <div style={{display:'flex',gap:8}}>
-              <button onClick={()=>setEditingContact(null)}
-                style={{flex:1,padding:'10px 0',borderRadius:8,background:'transparent',border:`1px solid ${P.border}`,color:P.muted,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
-                Cancelar
-              </button>
-              <button onClick={()=>saveContactEdit(selected.id)}
-                style={{flex:1,padding:'10px 0',borderRadius:8,background:P.purple,border:'none',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
-                Guardar cambios
-              </button>
+              </FSection>}
+
+              <FSection title={`Notas (${notes.length})`} icon="📝" accent={P.purple}>
+                {notes.length>0&&<div style={{maxHeight:240,overflowY:'auto',display:'flex',flexDirection:'column',gap:8,marginBottom:12}}>
+                  {notes.map(n=>(
+                    <div key={n.id} style={{padding:'10px 12px',background:'rgba(108,92,231,0.08)',borderRadius:9,borderLeft:`3px solid ${P.purple}`}}>
+                      <p style={{fontSize:12.5,color:P.textSub,margin:'0 0 4px',lineHeight:1.55,wordBreak:'break-word'}}>{n.content}</p>
+                      <p style={{fontSize:10,color:P.muted,margin:0}}>{fmtDate(n.created_at)}</p>
+                    </div>
+                  ))}
+                </div>}
+                <div style={{display:'flex',gap:8}}>
+                  <Input value={noteText} onChange={setNoteText} placeholder="Añadir nota..." style={{flex:1}}/>
+                  <Btn onClick={addNote} disabled={!noteText.trim()}>+</Btn>
+                </div>
+              </FSection>
+
+              <FSection title="Gestión" icon="⚙️" accent={P.blue}>
+                <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Estado</p>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:isSuperAdmin&&!esSub?16:0}}>
+                  {STATUS_OPT.map(s=>(
+                    <button key={s.value} onClick={()=>updateStatus(selected.id,s.value)}
+                      style={{padding:'5px 12px',borderRadius:7,fontSize:11,cursor:'pointer',fontWeight:600,fontFamily:'inherit',
+                        background:selected.status===s.value?SCOLOR_MAP[s.value]+'30':'rgba(255,255,255,0.04)',
+                        color:selected.status===s.value?SCOLOR_MAP[s.value]:P.muted,
+                        border:`1px solid ${selected.status===s.value?SCOLOR_MAP[s.value]+'50':P.border}`}}>
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+                {isSuperAdmin&&!esSub&&<div>
+                  <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Asesor asignado</p>
+                  <select value={selected.user_id||''} onChange={e=>handleAssigneeChange(selected.id,e.target.value)}
+                    style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.purpleBorder}`,color:P.text,fontSize:13,outline:'none',fontFamily:'inherit',cursor:'pointer'}}>
+                    <option value="">Sin asignar (Web)</option>
+                    {staffList.map(s=><option key={s.user_id} value={s.user_id}>{s.display_name}</option>)}
+                  </select>
+                </div>}
+              </FSection>
+
+              {!esSub&&(()=>{
+                const resumen=[
+                  ['WhatsApp',(f.wa||[]).length],['Tickets',(f.tickets||[]).length],
+                  ['Tareas',tareas.length],['Formularios',(f.subs||[]).length],
+                  ['Notas',notes.length],['Actividades',activities.length],
+                ].filter(([,n])=>n>0)
+                return <FSection title={`Historial completo (${linea.length})`} icon="🕘" accent="#f0a500"
+                  right={<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {f.lead&&<Badge label="lead de campaña" color={P.blue}/>}
+                    {f.cliente&&<Badge label="cuenta de cliente" color={P.purple}/>}
+                  </div>}>
+                  {resumen.length>0&&<p style={{fontSize:11,color:P.muted,margin:'0 0 10px'}}>
+                    {resumen.map(([k,n])=>`${n} ${k.toLowerCase()}`).join(' · ')}
+                  </p>}
+                  {(loadingActivities||loadingFicha)?<Spinner/>:linea.length===0?(
+                    <p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>Sin historial registrado aún</p>
+                  ):(
+                    <div style={{maxHeight:420,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+                      {linea.map((e,i)=>(
+                        <div key={i} style={{display:'flex',gap:10,padding:'8px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:'1px solid rgba(255,255,255,0.05)',borderLeft:`3px solid ${e.color}`}}>
+                          <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{e.icon}</span>
+                          <div style={{flex:1,minWidth:0}}>
+                            <p style={{fontSize:10,color:e.color,margin:'0 0 2px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em'}}>{e.tipo}</p>
+                            <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.4,wordBreak:'break-word'}}>{e.titulo}</p>
+                            {e.detalle&&<p style={{fontSize:10,color:P.muted,margin:'2px 0 0'}}>{e.detalle}</p>}
+                            <p style={{fontSize:10,color:P.muted,margin:'3px 0 0'}}>
+                              {new Date(e.ts).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})}
+                              {' · '}
+                              {new Date(e.ts).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </FSection>
+              })()}
             </div>
           </div>
         </div>
-      )}
-    </Modal>}
+
+        {/* Edición de los datos de la ficha */}
+        {editingContact===selected.id&&(
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.75)',zIndex:9998,display:'flex',alignItems:'center',justifyContent:'center',padding:20}}
+            onClick={e=>{if(e.target===e.currentTarget)setEditingContact(null)}}>
+            <div style={{background:'#0a1628',border:`1px solid ${P.border}`,borderRadius:16,padding:24,maxWidth:620,width:'100%',fontFamily:'inherit',maxHeight:'86vh',overflowY:'auto'}}
+              onClick={e=>e.stopPropagation()}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+                <h3 style={{fontSize:15,fontWeight:700,color:'#fff',margin:0}}>Editar ficha del cliente</h3>
+                <button onClick={()=>setEditingContact(null)} style={{background:'none',border:'none',color:P.muted,fontSize:18,cursor:'pointer'}}>✕</button>
+              </div>
+
+              <p style={{fontSize:10,fontWeight:800,color:P.purple,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Registro del cliente</p>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:18}}>
+                {[['full_name','Nombre completo','text'],['birth_date','Fecha de nacimiento','date'],['email','Email','email'],
+                  ['phone','Número móvil','tel'],['profession','Profesión, actividad u oficio','text'],['address','Dirección','text']].map(([field,label,type])=>(
+                  <div key={field}>
+                    <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>{label}</label>
+                    <input type={type} value={editForm[field]||''} onChange={e=>setEditForm(p=>({...p,[field]:e.target.value}))}
+                      style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+                  </div>
+                ))}
+              </div>
+
+              <p style={{fontSize:10,fontWeight:800,color:P.blue,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Cuenta de inversión</p>
+              <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))',gap:12,marginBottom:18}}>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Realizó apertura de cuenta</label>
+                  <label style={{display:'flex',alignItems:'center',gap:8,padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,cursor:'pointer'}}>
+                    <input type="checkbox" checked={!!editForm.account_opened} onChange={e=>setEditForm(p=>({...p,account_opened:e.target.checked}))} style={{cursor:'pointer'}}/>
+                    <span style={{fontSize:12,color:P.text}}>{editForm.account_opened?'Sí, cuenta abierta':'Todavía no'}</span>
+                  </label>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Fecha de apertura</label>
+                  <input type="date" value={editForm.account_opened_at||''} onChange={e=>setEditForm(p=>({...p,account_opened_at:e.target.value}))}
+                    style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Demo o real</label>
+                  <select value={editForm.account_kind||''} onChange={e=>setEditForm(p=>({...p,account_kind:e.target.value}))}
+                    style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',fontFamily:'inherit'}}>
+                    <option value="">Sin definir</option>
+                    <option value="demo">Demo</option>
+                    <option value="real">Real</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>PAMM o MAM</label>
+                  <select value={editForm.managed_type||''} onChange={e=>setEditForm(p=>({...p,managed_type:e.target.value}))}
+                    style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',fontFamily:'inherit'}}>
+                    <option value="">Sin definir</option>
+                    <option value="PAMM">PAMM</option>
+                    <option value="MAM">MAM</option>
+                    <option value="ninguno">Ninguno</option>
+                  </select>
+                </div>
+                {[['broker','Broker','text'],['account_number','Número de cuenta','text'],['initial_balance','Equidad o balance inicial (USD)','text']].map(([field,label,type])=>(
+                  <div key={field}>
+                    <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>{label}</label>
+                    <input type={type} value={editForm[field]??''} onChange={e=>setEditForm(p=>({...p,[field]:e.target.value}))}
+                      style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',boxSizing:'border-box',fontFamily:'inherit'}}/>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{marginBottom:18,maxWidth:260}}>
+                <label style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.5)',textTransform:'uppercase',letterSpacing:'0.08em',marginBottom:4,display:'block'}}>Estado</label>
+                <select value={editForm.status} onChange={e=>setEditForm(p=>({...p,status:e.target.value}))}
+                  style={{width:'100%',padding:'8px 12px',borderRadius:8,background:'rgba(255,255,255,0.06)',border:`1px solid ${P.border}`,color:P.text,fontSize:12,outline:'none',fontFamily:'inherit'}}>
+                  {STATUS_OPT.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                </select>
+              </div>
+
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>setEditingContact(null)}
+                  style={{flex:1,padding:'10px 0',borderRadius:8,background:'transparent',border:`1px solid ${P.border}`,color:P.muted,fontSize:12,cursor:'pointer',fontFamily:'inherit'}}>
+                  Cancelar
+                </button>
+                <button onClick={()=>saveContactEdit(selected.id)}
+                  style={{flex:1,padding:'10px 0',borderRadius:8,background:P.purple,border:'none',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                  Guardar cambios
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    })()}
   </div>
 }
 
@@ -2141,19 +2518,25 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
   const[selectedCamp,setSelectedCamp]=useState(null)
   const[manageVariant,setManageVariant]=useState(null) // for super admin variant-advisors modal
   const[staffList,setStaffList]=useState([])
+  // Canal de la campaña: el módulo unifica los tres orígenes que antes vivían
+  // en pantallas distintas (WABA estaba escondido dentro de Mensajes WA).
+  const[canal,setCanal]=useState('todas')
+  const[waCamps,setWaCamps]=useState([])
 
   // Load variants and advisor assignments
   useEffect(()=>{(async()=>{
     setLoading(true)
     try{
-      const[{data:v},{data:va},{data:sp}]=await Promise.all([
+      const[{data:v},{data:va},{data:sp},{data:wa}]=await Promise.all([
         supabase.from('campaign_variants').select('*').order('variant_key'),
         supabase.from('variant_advisors').select('*'),
         isSuperAdmin?supabase.from('crm_staff_profiles').select('id,display_name,pessaro_email,role').order('display_name'):Promise.resolve({data:[]}),
+        supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at',{ascending:false}),
       ])
       setVariants(v||[])
       setAdvisors(va||[])
       setStaffList(sp||[])
+      setWaCamps(wa||[])
     }catch(e){console.error('CampaignsHub load:',e)}
     setLoading(false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2217,78 +2600,169 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
     />
   }
 
-  return <div>
-    <SHdr title="Campañas" sub={`${visibleCampaigns.length} ${visibleCampaigns.length===1?'campaña activa':'campañas activas'}${isSuperAdmin?' · super admin':' · variantes asignadas a ti'}`}/>
+  // Clasificación por canal de entrega:
+  //  - enlace: la campaña reparte links de referido (tiene variantes con landing)
+  //  - waba:   envíos por plantilla de WhatsApp (tabla whatsapp_campaigns)
+  //  - otras:  campañas del CRM que sólo agrupan leads, sin link ni envío WABA
+  const conEnlace=visibleCampaigns.filter(c=>getVariantsFor(c.id).length>0)
+  const otras=visibleCampaigns.filter(c=>getVariantsFor(c.id).length===0)
+  const WA_ESTADO={draft:'Borrador',scheduled:'Programada',sending:'Enviando…',completed:'Completada',paused:'Pausada',failed:'Fallida'}
+  const WA_COLOR ={draft:P.muted,scheduled:P.blue,sending:P.orange,completed:P.green,paused:P.orange,failed:P.red}
 
-    {visibleCampaigns.length===0?(
-      <GlassCard style={{padding:40,textAlign:'center'}}>
-        <p style={{fontSize:13,color:P.muted,margin:0}}>
-          {isSuperAdmin?'No hay campañas creadas. Ve a "Campañas admin" para crear una.':'No tienes variantes habilitadas en ninguna campaña. Solicita acceso al super admin.'}
-        </p>
-      </GlassCard>
-    ):(
-      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>
-        {visibleCampaigns.map(c=>{
-          const campVariants=getVariantsFor(c.id)
-          const myVariants=campVariants.filter(v=>isMyVariant(v.id))
-          const activeMyVariants=myVariants.filter(v=>v.status==='activa')
-          const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
-          const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
-          const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
-          return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18}}>
-            <div style={{cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
-            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
-              <div style={{flex:1}}>
-                <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,marginBottom:4,margin:'0 0 4px'}}>{c.status}</p>
-                <p style={{fontSize:15,fontWeight:700,color:P.text,margin:'0 0 4px'}}>{c.name}</p>
-                <p style={{fontSize:11,color:P.muted,fontFamily:'monospace',margin:0}}>{c.slug}</p>
-              </div>
-              <div style={{textAlign:'right',marginLeft:10}}>
-                <p style={{fontSize:18,fontWeight:800,color:P.text,margin:0,lineHeight:1}}>{totalLeads}</p>
-                <p style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',margin:'4px 0 0'}}>leads</p>
-              </div>
-            </div>
-            {c.description&&<p style={{fontSize:11,color:P.muted,margin:'8px 0',lineHeight:1.5}}>{c.description}</p>}
-            <div style={{display:'flex',gap:8,marginTop:12,fontSize:11}}>
-              <span style={{color:P.green}}>● {deposits} depósitos</span>
-              <span style={{color:P.muted}}>· {totalLeads?Math.round(deposits/totalLeads*100):0}% conv.</span>
-            </div>
-            <div style={{display:'flex',gap:5,marginTop:12,flexWrap:'wrap'}}>
-              {(isSuperAdmin?campVariants:myVariants).map(v=>(
-                <span key={v.id} style={{
-                  fontSize:10,padding:'3px 8px',borderRadius:4,fontWeight:600,letterSpacing:'0.05em',
-                  background:v.color+'22',color:v.color,border:`1px solid ${v.color}40`,
-                  opacity:v.status==='activa'?1:0.5,
-                }}>{v.label}{v.status!=='activa'&&' · pausada'}</span>
-              ))}
-              {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
-            </div>
-            <p style={{fontSize:11,color:P.blue,margin:'12px 0 0',cursor:'pointer'}}>Ver detalle →</p>
-            </div>
-            {/* ── Referral links para asesores (acceso directo sin entrar al detalle) ── */}
-            {!isSuperAdmin&&myReferralCode&&activeMyVariants.length>0&&<div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
-              <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
-                <span style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>🔗 Mis links de referido</span>
-                <span style={{fontSize:10,color:P.purple,background:P.purpleDim,padding:'2px 6px',borderRadius:4,fontFamily:'monospace',fontWeight:700}}>{myReferralCode}</span>
-              </div>
-              {activeMyVariants.map(v=>{
-                const link=`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`
-                return <div key={v.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
-                  <span style={{fontSize:11,fontWeight:600,color:v.color,minWidth:80}}>{v.label}</span>
-                  <code style={{flex:1,fontSize:10,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'4px 8px',borderRadius:4,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</code>
-                  <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(link).then(()=>{const btn=e.currentTarget;btn.textContent='✓ Copiado';btn.style.color=P.green;btn.style.borderColor=P.green+'40';setTimeout(()=>{btn.textContent='Copiar';btn.style.color=P.muted;btn.style.borderColor=P.border},1500)})}}
-                    style={{padding:'4px 10px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:5,fontSize:10,cursor:'pointer',flexShrink:0,fontWeight:600}}>
-                    Copiar
-                  </button>
-                </div>
-              })}
-            </div>}
-            {/* SA: indicador rápido de código de referido */}
-            {isSuperAdmin&&myReferralCode&&<div style={{marginTop:10,fontSize:10,color:P.muted}}>📋 Mi código: <span style={{color:P.purple,fontFamily:'monospace',fontWeight:600}}>{myReferralCode}</span></div>}
-          </GlassCard>
-        })}
+  // Tarjeta de campaña del CRM — se reutiliza en «Todas», «Enlace» y «Otras»
+  const tarjetaCampana=c=>{
+    const campVariants=getVariantsFor(c.id)
+    const myVariants=campVariants.filter(v=>isMyVariant(v.id))
+    const activeMyVariants=myVariants.filter(v=>v.status==='activa')
+    const totalLeads=globalLeads.filter(l=>l.campaign_id===c.id).length
+    const deposits=globalLeads.filter(l=>l.campaign_id===c.id&&l.deposit_confirmed).length
+    const statusC=c.status==='activa'?P.green:c.status==='pausada'?P.orange:P.muted
+    const esEnlace=campVariants.length>0
+    return <GlassCard key={c.id} style={{borderLeft:`3px solid ${statusC}`,padding:18}}>
+      <div style={{cursor:'pointer'}} onClick={()=>setSelectedCamp(c)}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+        <div style={{flex:1}}>
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4,flexWrap:'wrap'}}>
+            <p style={{fontSize:9,color:statusC,textTransform:'uppercase',letterSpacing:'0.15em',fontWeight:700,margin:0}}>{c.status}</p>
+            <Badge label={esEnlace?'🔗 enlace':'📌 otra'} color={esEnlace?P.blue:P.muted}/>
+          </div>
+          <p style={{fontSize:15,fontWeight:700,color:P.text,margin:'0 0 4px'}}>{c.name}</p>
+          <p style={{fontSize:11,color:P.muted,fontFamily:'monospace',margin:0}}>{c.slug}</p>
+        </div>
+        <div style={{textAlign:'right',marginLeft:10}}>
+          <p style={{fontSize:18,fontWeight:800,color:P.text,margin:0,lineHeight:1}}>{totalLeads}</p>
+          <p style={{fontSize:9,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em',margin:'4px 0 0'}}>leads</p>
+        </div>
       </div>
-    )}
+      {c.description&&<p style={{fontSize:11,color:P.muted,margin:'8px 0',lineHeight:1.5}}>{c.description}</p>}
+      <div style={{display:'flex',gap:8,marginTop:12,fontSize:11}}>
+        <span style={{color:P.green}}>● {deposits} depósitos</span>
+        <span style={{color:P.muted}}>· {totalLeads?Math.round(deposits/totalLeads*100):0}% conv.</span>
+      </div>
+      <div style={{display:'flex',gap:5,marginTop:12,flexWrap:'wrap'}}>
+        {(isSuperAdmin?campVariants:myVariants).map(v=>(
+          <span key={v.id} style={{
+            fontSize:10,padding:'3px 8px',borderRadius:4,fontWeight:600,letterSpacing:'0.05em',
+            background:v.color+'22',color:v.color,border:`1px solid ${v.color}40`,
+            opacity:v.status==='activa'?1:0.5,
+          }}>{v.label}{v.status!=='activa'&&' · pausada'}</span>
+        ))}
+        {!isSuperAdmin&&myVariants.length===0&&<span style={{fontSize:10,color:P.muted,fontStyle:'italic'}}>sin variantes habilitadas</span>}
+      </div>
+      <p style={{fontSize:11,color:P.blue,margin:'12px 0 0',cursor:'pointer'}}>Ver detalle →</p>
+      </div>
+      {/* ── Referral links para asesores (acceso directo sin entrar al detalle) ── */}
+      {!isSuperAdmin&&myReferralCode&&activeMyVariants.length>0&&<div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
+        <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:10}}>
+          <span style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.08em'}}>🔗 Mis links de referido</span>
+          <span style={{fontSize:10,color:P.purple,background:P.purpleDim,padding:'2px 6px',borderRadius:4,fontFamily:'monospace',fontWeight:700}}>{myReferralCode}</span>
+        </div>
+        {activeMyVariants.map(v=>{
+          const link=`https://pessaro.cl${v.landing_url}?ref=${myReferralCode}`
+          return <div key={v.id} style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+            <span style={{fontSize:11,fontWeight:600,color:v.color,minWidth:80}}>{v.label}</span>
+            <code style={{flex:1,fontSize:10,color:P.muted,background:'rgba(255,255,255,0.04)',padding:'4px 8px',borderRadius:4,fontFamily:'monospace',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{link}</code>
+            <button onClick={e=>{e.stopPropagation();navigator.clipboard.writeText(link).then(()=>{const btn=e.currentTarget;btn.textContent='✓ Copiado';btn.style.color=P.green;btn.style.borderColor=P.green+'40';setTimeout(()=>{btn.textContent='Copiar';btn.style.color=P.muted;btn.style.borderColor=P.border},1500)})}}
+              style={{padding:'4px 10px',background:'rgba(255,255,255,0.05)',color:P.muted,border:`1px solid ${P.border}`,borderRadius:5,fontSize:10,cursor:'pointer',flexShrink:0,fontWeight:600}}>
+              Copiar
+            </button>
+          </div>
+        })}
+      </div>}
+      {/* SA: indicador rápido de código de referido */}
+      {isSuperAdmin&&myReferralCode&&<div style={{marginTop:10,fontSize:10,color:P.muted}}>📋 Mi código: <span style={{color:P.purple,fontFamily:'monospace',fontWeight:600}}>{myReferralCode}</span></div>}
+    </GlassCard>
+  }
+
+  const rejilla=(lista,vacio)=>lista.length===0
+    ?<GlassCard style={{padding:40,textAlign:'center'}}><p style={{fontSize:13,color:P.muted,margin:0}}>{vacio}</p></GlassCard>
+    :<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(320px,1fr))',gap:16}}>{lista.map(tarjetaCampana)}</div>
+
+  // Fila compacta de campaña WABA para el resumen de «Todas»
+  const filaWA=w=>{
+    const col=WA_COLOR[w.status]||P.muted
+    return <div key={w.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 13px',background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,borderLeft:`3px solid ${col}`}}>
+      <span style={{fontSize:14,flexShrink:0}}>🚀</span>
+      <div style={{flex:1,minWidth:0}}>
+        <p style={{margin:0,fontSize:12.5,fontWeight:600,color:P.text,wordBreak:'break-word'}}>{w.name}</p>
+        <p style={{margin:'2px 0 0',fontSize:10.5,color:P.muted}}>
+          {w.whatsapp_templates?.template_name||'—'} · {fmtDate(w.created_at)}
+          {w.total_recipients>0?` · ${w.sent_count||0}/${w.total_recipients} enviados`:''}
+        </p>
+      </div>
+      <Badge label={WA_ESTADO[w.status]||w.status} color={col}/>
+    </div>
+  }
+
+  const CANALES=[
+    ['todas','Todas'],
+    ...(isSuperAdmin?[['waba','🚀 WhatsApp (WABA)']]:[]),
+    ['enlace','🔗 Enlace'],
+    ['otras','📌 Otras'],
+  ]
+
+  return <div>
+    <SHdr title="Campañas"
+      sub={`${visibleCampaigns.length} del CRM${isSuperAdmin?` · ${waCamps.length} envío${waCamps.length!==1?'s':''} WABA · super admin`:' · variantes asignadas a ti'}`}/>
+
+    {/* Selector de canal de entrega */}
+    <div style={{display:'flex',gap:6,marginBottom:20,flexWrap:'wrap'}}>
+      {CANALES.map(([id,label])=>(
+        <button key={id} onClick={()=>setCanal(id)}
+          style={{padding:'7px 15px',borderRadius:9,fontSize:12.5,cursor:'pointer',fontFamily:'inherit',
+            fontWeight:canal===id?700:500,
+            background:canal===id?P.purpleDim:'rgba(255,255,255,0.03)',
+            color:canal===id?P.purple:P.muted,
+            border:`1px solid ${canal===id?P.purpleBorder:P.border}`}}>
+          {label}
+        </button>
+      ))}
+    </div>
+
+    {canal==='waba'&&<CampaignSender user={user}/>}
+
+    {canal==='enlace'&&rejilla(conEnlace,
+      isSuperAdmin?'No hay campañas con links de referido. Crea variantes en «Campañas admin».':'No tienes variantes habilitadas. Solicita acceso al super admin.')}
+
+    {canal==='otras'&&rejilla(otras,'No hay campañas sin canal de entrega definido.')}
+
+    {canal==='todas'&&<div>
+      {/* Recuento por canal */}
+      <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))',gap:12,marginBottom:20}}>
+        {[
+          ...(isSuperAdmin?[['🚀 WhatsApp (WABA)',waCamps.length,P.green,'waba']]:[]),
+          ['🔗 Enlace',conEnlace.length,P.blue,'enlace'],
+          ['📌 Otras',otras.length,P.muted,'otras'],
+        ].map(([label,n,col,destino])=>(
+          <button key={label} onClick={()=>setCanal(destino)}
+            style={{background:P.card,border:`1px solid ${P.border}`,borderLeft:`3px solid ${col}`,borderRadius:12,padding:'13px 15px',textAlign:'left',cursor:'pointer',fontFamily:'inherit'}}>
+            <p style={{fontSize:22,fontWeight:800,color:col,margin:0,lineHeight:1}}>{n}</p>
+            <p style={{fontSize:10.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.09em',fontWeight:700,margin:'6px 0 0'}}>{label}</p>
+          </button>
+        ))}
+      </div>
+
+      {isSuperAdmin&&<div style={{marginBottom:22}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10,flexWrap:'wrap'}}>
+          <p style={{fontSize:11,fontWeight:800,color:P.green,textTransform:'uppercase',letterSpacing:'0.10em',margin:0}}>Envíos por WhatsApp (WABA)</p>
+          <Btn variant="ghost" onClick={()=>setCanal('waba')} style={{fontSize:11,padding:'5px 11px'}}>Gestionar →</Btn>
+        </div>
+        {waCamps.length===0
+          ?<p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>Aún no hay envíos por plantilla de WhatsApp.</p>
+          :<div style={{display:'flex',flexDirection:'column',gap:7}}>{waCamps.slice(0,6).map(filaWA)}</div>}
+        {waCamps.length>6&&<p style={{fontSize:11,color:P.muted,margin:'8px 0 0'}}>y {waCamps.length-6} más en la pestaña WABA</p>}
+      </div>}
+
+      <p style={{fontSize:11,fontWeight:800,color:P.blue,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Campañas con enlace de referido</p>
+      <div style={{marginBottom:22}}>
+        {rejilla(conEnlace,isSuperAdmin?'No hay campañas con links de referido.':'No tienes variantes habilitadas.')}
+      </div>
+
+      {otras.length>0&&<>
+        <p style={{fontSize:11,fontWeight:800,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 10px'}}>Otras campañas</p>
+        {rejilla(otras,'')}
+      </>}
+    </div>}
 
     {/* Modal: gestión de asesores por variante (super admin only) */}
     {manageVariant&&isSuperAdmin&&<Modal title={`Asesores · ${manageVariant.label}`} onClose={()=>setManageVariant(null)} accent={manageVariant.color}>
@@ -3418,7 +3892,7 @@ tr:last-child td{border-bottom:none}
 // ─── FICHA DEL CONTACTO: documento exportable ────────────────────────────────
 // Arma el objeto que alimenta tanto la descarga HTML como la vista de impresión,
 // para que ambos salgan idénticos a lo que se ve en pantalla.
-function buildFichaDoc(c,groups,memberships,notes,activities,ficha,getAdvisorName){
+function buildFichaDoc(c,groups,memberships,notes,activities,ficha,getAdvisorName,movs){
   const f=ficha||{}
   const misGrupos=(groups||[]).filter(g=>(memberships[c.id]||[]).includes(g.id))
   return {
@@ -3426,7 +3900,17 @@ function buildFichaDoc(c,groups,memberships,notes,activities,ficha,getAdvisorNam
       nombre:c.full_name||'—', email:c.email||'—', telefono:c.phone||'—',
       direccion:c.address||'—', estado:c.status||'—', origen:c.source||'crm',
       creado:c.created_at||null, asesor:c.user_id?getAdvisorName(c.user_id):'Sin asignar',
+      nacimiento:c.birth_date||null, profesion:c.profession||'',
     },
+    cuenta:{
+      apertura:c.account_opened?'Sí':(c.broker||c.account_number?'No':''),
+      apertura_fecha:c.account_opened_at||null,
+      tipo:c.account_kind==='real'?'Real':c.account_kind==='demo'?'Demo':'',
+      broker:c.broker||'', numero:c.account_number||'',
+      gestion:c.managed_type||'',
+      balance_inicial:c.initial_balance!==null&&c.initial_balance!==undefined&&c.initial_balance!==''?fmtUSD(c.initial_balance):'',
+    },
+    movimientos:(movs||[]).map(m=>({kind:m.kind,amount:Number(m.amount||0),fecha:m.movement_date,note:m.note||''})),
     grupos:misGrupos.map(g=>({name:g.name,color:g.color})),
     resumen:{
       whatsapp:(f.wa||[]).length, tickets:(f.tickets||[]).length, tareas:(f.tasks||[]).length,
@@ -3443,8 +3927,10 @@ function fichaHTMLDoc(doc,logoUri,standalone){
   const fd=v=>v?new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}):'—'
   const fdt=v=>v?`${new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})} · ${new Date(v).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}`:''
   const k=doc.contacto
-  const datos=[['Email',k.email],['Teléfono',k.telefono],['Dirección',k.direccion],['Estado',k.estado],
+  const datos=[['Email',k.email],['Número móvil',k.telefono],['Fecha de nacimiento',k.nacimiento?fd(k.nacimiento):''],
+    ['Profesión, actividad u oficio',k.profesion],['Dirección',k.direccion],['Estado',k.estado],
     ['Origen',k.origen],['Asesor',k.asesor],['Registro',fd(k.creado)]]
+    .filter(([,v])=>v!==null&&v!==undefined&&v!=='')
     .map(([l,v])=>`<div class="d"><div class="d-l">${esc(l)}</div><div class="d-v">${esc(v)}</div></div>`).join('')
   const chips=doc.grupos.length
     ?doc.grupos.map(g=>`<span class="chip" style="background:${esc(g.color)}22;color:${esc(g.color)};border-color:${esc(g.color)}55">${esc(g.name)}</span>`).join('')
@@ -3468,6 +3954,30 @@ function fichaHTMLDoc(doc,logoUri,standalone){
   const lead=doc.lead?bloque('Lead de campaña',[['Etapa',doc.lead.etapa],['Capital declarado',doc.lead.investment_range],
     ['Variante',doc.lead.variant],['Perfil',doc.lead.perfil],['Equipo',doc.lead.team],['Origen',doc.lead.source],
     ['Cupo',doc.lead.cupo_confirmed?`#${doc.lead.cupo_number||''}`:null],['Registro',fd(doc.lead.created_at)]]):''
+  const q=doc.cuenta||{}
+  const cuenta=bloque('Cuenta de inversión',[['Realizó apertura de cuenta',q.apertura],['Fecha de apertura',q.apertura_fecha?fd(q.apertura_fecha):''],
+    ['Demo o real',q.tipo],['Broker',q.broker],['Número de cuenta',q.numero],
+    ['PAMM o MAM',q.gestion==='ninguno'?'Ninguno':q.gestion],['Equidad o balance inicial',q.balance_inicial]])
+  const movimientos=(()=>{
+    const ms=doc.movimientos||[]
+    if(!ms.length)return ''
+    const money=n=>new Intl.NumberFormat('es-CL',{style:'currency',currency:'USD',maximumFractionDigits:2}).format(n||0)
+    const tot=t=>ms.filter(m=>m.kind===t).reduce((s,m)=>s+m.amount,0)
+    const filas=ms.map(m=>`<div class="ev" style="border-left-color:${m.kind==='deposito'?'#00a86b':'#e11d48'}">
+        <div class="ev-i">${m.kind==='deposito'?'↓':'↑'}</div>
+        <div class="ev-b">
+          <div class="ev-t" style="color:${m.kind==='deposito'?'#00a86b':'#e11d48'}">${m.kind==='deposito'?'Depósito':'Retiro'}</div>
+          <div class="ev-x">${esc(money(m.amount))}</div>
+          ${m.note?`<div class="ev-d">${esc(m.note)}</div>`:''}
+          <div class="ev-f">${esc(fd(m.fecha))}</div>
+        </div></div>`).join('')
+    return `<h2>Depósitos y retiros (${ms.length})</h2>
+      <div class="kpis" style="margin-bottom:10px">
+        <div class="kpi"><div class="kpi-lbl">Depósitos</div><div class="kpi-val">${esc(money(tot('deposito')))}</div></div>
+        <div class="kpi"><div class="kpi-lbl">Retiros</div><div class="kpi-val">${esc(money(tot('retiro')))}</div></div>
+        <div class="kpi"><div class="kpi-lbl">Neto</div><div class="kpi-val">${esc(money(tot('deposito')-tot('retiro')))}</div></div>
+      </div>${filas}`
+  })()
   const cli=doc.cliente?bloque('Cuenta de cliente',[['Estado',doc.cliente.account_status],['Tipo',doc.cliente.account_type],
     ['Tolerancia al riesgo',doc.cliente.risk_tolerance],['Experiencia',doc.cliente.experience_level],
     ['Capital',doc.cliente.investment_capital],['Horizonte',doc.cliente.investment_horizon],
@@ -3526,8 +4036,10 @@ h2:first-of-type{margin-top:0}
   </div>
   <div class="gold"></div>
   <div class="body">
-    <h2>Datos del contacto</h2><div class="grid">${datos}</div>
+    <h2>Registro completo del cliente</h2><div class="grid">${datos}</div>
     <h2>Grupos</h2><div class="chips">${chips}</div>
+    ${cuenta}
+    ${movimientos}
     ${kpis?`<h2>Resumen del historial</h2><div class="kpis">${kpis}</div>`:''}
     ${lead}
     ${cli}
@@ -4307,10 +4819,12 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:20 }}>
         <div>
           <h2 style={{ fontSize:20, fontWeight:700, color:P.text, margin:'0 0 4px' }}>WhatsApp</h2>
-          <p style={{ fontSize:13, color:P.muted, margin:0 }}>Bandeja de mensajes y campañas masivas</p>
+          <p style={{ fontSize:13, color:P.muted, margin:0 }}>
+            Bandeja de mensajes · los envíos masivos viven ahora en el módulo <strong style={{color:P.textSub}}>Campañas → WhatsApp (WABA)</strong>
+          </p>
         </div>
         <div style={{ display:'flex', gap:4 }}>
-          {[['chat','💬 Mensajes'],['wafinance','💹 WAFinance'],['campaigns','🚀 Campañas']].map(([id, label]) => (
+          {[['chat','💬 Mensajes'],['wafinance','💹 WAFinance']].map(([id, label]) => (
             <button key={id} onClick={() => setSubTab(id)}
               style={{
                 padding:'7px 14px', borderRadius:8, fontSize:12, cursor:'pointer',
@@ -4368,9 +4882,6 @@ function WhatsAppMessages({ user, staffProfile, isSuperAdmin, waAssignments, set
         <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} />
       )}
 
-      {subTab === 'campaigns' && (
-        <CampaignSender user={user} />
-      )}
     </div>
   )
 }
