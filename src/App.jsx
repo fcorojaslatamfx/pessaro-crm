@@ -769,6 +769,109 @@ function NoStaffScreen({onBackToLogin}){
 }
 
 // ─── DASHBOARD ────────────────────────────────────────────────────────────────
+// ─── ANÁLISIS DIARIO DE INSTRUMENTOS (panel del asesor) ──────────────────────
+// Lee la parte interna (analisis_instrumentos_staff), que RLS reserva al staff.
+// El aviso de carácter educativo se pinta siempre, sin condición: es un
+// requisito legal del sitio, no un adorno.
+function AnalisisDiario(){
+  const[filas,setFilas]=useState([])
+  const[cargando,setCargando]=useState(true)
+  const[abierto,setAbierto]=useState(null)
+  const isMob=useWindowSize()<768
+
+  const cargar=useCallback(async()=>{
+    try{
+      const hoy=new Date().toISOString().slice(0,10)
+      const{data,error}=await supabase
+        .from('analisis_instrumentos')
+        .select('*, analisis_instrumentos_staff(analisis_staff)')
+        .eq('fecha',hoy)
+        .order('instrumento')
+      if(error)throw error
+      setFilas(data||[])
+    }catch(e){console.error('analisis diario:',e)}
+    finally{setCargando(false)}
+  },[])
+
+  useEffect(()=>{cargar()},[cargar])
+
+  // Realtime: cuando la edge function publica el análisis de la mañana, la
+  // pantalla se actualiza sola sin recargar.
+  useEffect(()=>{
+    const canal=supabase.channel('analisis-diario')
+      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos'},()=>cargar())
+      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos_staff'},()=>cargar())
+      .subscribe()
+    return()=>{supabase.removeChannel(canal)}
+  },[cargar])
+
+  const COLOR={ALCISTA:P.green,BAJISTA:P.red,NEUTRA:P.muted}
+  const FLECHA={ALCISTA:'▲',BAJISTA:'▼',NEUTRA:'▬'}
+  const num=v=>Number(v).toLocaleString('es-CL',{maximumFractionDigits:5})
+  const aviso=filas[0]?.disclaimer||'Contenido de carácter educativo e informativo. No constituye asesoría de inversión.'
+
+  return <GlassCard style={{marginBottom:18}}>
+    <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+      <span style={{fontSize:15}}>📈</span>
+      <p style={{fontSize:10,fontWeight:800,color:'#f0a500',textTransform:'uppercase',letterSpacing:'0.11em',margin:0}}>
+        Análisis diario de instrumentos
+      </p>
+      <span style={{fontSize:10.5,color:P.muted,marginLeft:'auto'}}>
+        {cargando?'cargando…':filas.length?`${filas.length} instrumentos · ${fmtDate(filas[0].fecha)}`:'sin análisis de hoy'}
+      </span>
+    </div>
+
+    {!cargando&&filas.length===0&&(
+      <p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:'0 0 14px'}}>
+        El análisis se publica cada mañana. Si no aparece, revisa el planificador.
+      </p>
+    )}
+
+    {filas.length>0&&<div style={{display:'grid',gridTemplateColumns:isMob?'1fr':'repeat(auto-fit,minmax(250px,1fr))',gap:10,marginBottom:14}}>
+      {filas.map(f=>{
+        const col=COLOR[f.tendencia]||P.muted
+        const activo=abierto===f.id
+        const staff=f.analisis_instrumentos_staff?.analisis_staff
+        return <div key={f.id}
+          onClick={()=>setAbierto(activo?null:f.id)}
+          style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderLeft:`3px solid ${col}`,
+            borderRadius:10,padding:'11px 13px',cursor:'pointer',gridColumn:activo&&!isMob?'1 / -1':'auto'}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+            <span style={{fontSize:13,fontWeight:700,color:P.text,fontFamily:'monospace'}}>{f.instrumento}</span>
+            <span style={{fontSize:11,fontWeight:700,color:col}}>{FLECHA[f.tendencia]} {f.tendencia}</span>
+            <span style={{fontSize:10.5,color:P.muted,marginLeft:'auto',fontFamily:'monospace'}}>{num(f.precio_referencia)}</span>
+          </div>
+          <div style={{display:'flex',gap:12,marginTop:6,fontSize:10.5,fontFamily:'monospace'}}>
+            <span style={{color:P.green}}>S {num(f.soporte)}</span>
+            <span style={{color:P.red}}>R {num(f.resistencia)}</span>
+          </div>
+          {activo&&(
+            <div style={{marginTop:11,paddingTop:11,borderTop:`1px solid ${P.border}`}}>
+              <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 6px'}}>
+                Lectura técnica
+              </p>
+              <p style={{fontSize:12.5,color:P.textSub,margin:0,lineHeight:1.65,whiteSpace:'pre-wrap'}}>
+                {staff||'Sin lectura técnica disponible.'}
+              </p>
+              <p style={{fontSize:10,color:P.muted,margin:'9px 0 0'}}>
+                Fuente: {f.fuente_datos} · {f.validacion?.velas||'—'} sesiones · datos {fmtDate(f.datos_at)}
+              </p>
+            </div>
+          )}
+          {!activo&&<p style={{fontSize:10,color:P.muted,margin:'7px 0 0'}}>Ver lectura técnica →</p>}
+        </div>
+      })}
+    </div>}
+
+    {/* Aviso legal: se muestra siempre, haya o no análisis */}
+    <div style={{background:P.orangeDim,border:'1px solid rgba(255,165,2,0.28)',borderRadius:9,padding:'9px 12px'}}>
+      <p style={{fontSize:10.5,color:P.orange,margin:0,lineHeight:1.6}}>
+        <strong>Carácter educativo.</strong> {aviso}
+      </p>
+    </div>
+  </GlassCard>
+}
+
 function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile}){
   // Asesor ve solo SUS leads (por advisor_assigned o por referral_code)
   const leads=isSuperAdmin?allLeads:(()=>{
@@ -796,6 +899,9 @@ function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile
       <StatCard label="Capital declarado" value={fmt(totalCap)} accent={P.green} Icon="💵"/>
       <StatCard label="Tasa cierre" value={leads.length?`${Math.round(closed/leads.length*100)}%`:'—'} accent={P.orange} Icon="🎯"/>
     </div>
+
+    <AnalisisDiario/>
+
     <div style={{display:'grid',gridTemplateColumns:isMob?'1fr':'1fr 1fr',gap:18,marginBottom:18}}>
       <GlassCard>
         <p style={{fontSize:10,fontWeight:600,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:16,margin:'0 0 16px'}}>Pipeline por etapa</p>
