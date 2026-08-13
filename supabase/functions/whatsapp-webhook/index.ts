@@ -1,3 +1,20 @@
+// whatsapp-webhook v16
+// Cambios respecto a v15:
+//   - AUTOMATIZACIONES: se resuelve la intencion del entrante (boton de
+//     respuesta rapida o texto libre) y se ejecutan tres flujos:
+//       baja     -> whatsapp_opt_outs + crm_contacts.status='inactivo' + confirmacion
+//       alta     -> marca opted_in_at (no borra la fila, conserva auditoria) + confirmacion
+//       comenzar -> crm_contacts.status='activo', campaign_leads.etapa=2 + bienvenida
+//   - La comparacion es por texto normalizado (sin tildes/mayusculas). El
+//     patron anterior no reconocia "Darme de baja", que es el texto exacto del
+//     boton aprobado: ninguna baja se estaba registrando.
+//   - Se cubre msg.type 'interactive' (button_reply), que antes quedaba fuera.
+//   - responder(): las respuestas automaticas van a Graph directamente (no via
+//     whatsapp-send, que bloquea a los dados de baja) y se insertan en
+//     whatsapp_messages con auto_reply=true para que salgan en las burbujas.
+//   - Los botones de tipo URL siguen sin generar evento: Meta no avisa de ese
+//     clic. Para automatizar "Comenzar" el boton debe ser de respuesta rapida.
+//
 // whatsapp-webhook v15
 // Cambios respecto a v14:
 //   - client_phone se guarda SOLO EN DIGITOS. Antes se anteponia '+' a msg.from,
@@ -29,6 +46,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? ''
 const SERVICE_KEY  = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
 const WA_TOKEN     = Deno.env.get('WA_PERMANENT_TOKEN') ?? ''
+const WA_PHONE_ID  = Deno.env.get('WA_PHONE_NUMBER_ID') ?? ''
 const GRAPH_API    = 'https://graph.facebook.com/v22.0'
 
 const corsHeaders = {
@@ -162,23 +180,170 @@ async function sendPushToUser(userId: string, notification: any) {
   }
 }
 
-// ── Detección de baja (opt-out) ───────────────────────────────────────────
-// campana_minimalist promete en su pie 'Responde "Salir"', así que como mínimo
-// hay que reconocer esa palabra. Se acepta el texto suelto y también el texto
-// o payload de un botón de respuesta rápida.
-const OPT_OUT_RE = /^\s*(salir|baja|stop|unsubscribe|dar de baja|no recibir(\s+m[áa]s)?(\s+mensajes)?)\s*[.!]?\s*$/i
+// ── Automatizaciones: detección de intención ──────────────────────────────
+// Un clic en un botón de respuesta rápida llega como msg.type 'button'
+// (plantillas) o 'interactive' → button_reply (mensajes interactivos), según
+// el origen. Los botones de tipo URL NO generan ningún evento: abren el enlace
+// en el navegador y Meta no avisa, así que no hay nada que disparar con ellos.
+//
+// La comparación es por texto normalizado (sin tildes ni mayúsculas) en vez de
+// por un patrón rígido: el botón aprobado dice "Darme de baja" y el patrón
+// anterior sólo aceptaba "dar de baja", así que las bajas no se registraban.
+type Intencion = 'comenzar' | 'baja' | 'alta' | null
 
-function detectOptOut(msgType: string, content: any): { hit: boolean; source: string; raw: string } {
-  if (msgType === 'text') {
-    const t = String(content.text || '')
-    if (OPT_OUT_RE.test(t)) return { hit: true, source: 'text', raw: t }
+const normalizar = (s: string) =>
+  String(s || '')
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')  // quita tildes
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')                       // signos fuera
+    .replace(/\s+/g, ' ')
+    .trim()
+
+const FRASES: Record<Exclude<Intencion, null>, string[]> = {
+  baja: [
+    'darme de baja', 'dar de baja', 'baja', 'darse de baja', 'me doy de baja',
+    'salir', 'stop', 'unsubscribe', 'no recibir mas mensajes', 'no recibir mensajes',
+    'no recibir mas', 'eliminar', 'quitar de la lista',
+  ],
+  alta: ['alta', 'suscribir', 'suscribirme', 'quiero recibir informacion'],
+  comenzar: ['comenzar', 'empezar', 'quiero empezar', 'quiero comenzar'],
+}
+
+function resolverIntencion(texto: string): Intencion {
+  const t = normalizar(texto)
+  if (!t) return null
+  for (const [intencion, frases] of Object.entries(FRASES)) {
+    if (frases.includes(t)) return intencion as Intencion
   }
-  if (msgType === 'button') {
-    const t = String(content.text || '')
-    const p = String(content.payload || '')
-    if (OPT_OUT_RE.test(t) || OPT_OUT_RE.test(p)) return { hit: true, source: 'button', raw: t || p }
+  return null
+}
+
+// Unifica los dos formatos de botón + el texto libre en una sola cadena
+function textoAccionable(msgType: string, content: any): { texto: string; source: string } | null {
+  if (msgType === 'text')   return { texto: String(content.text || ''), source: 'text' }
+  if (msgType === 'button') return { texto: String(content.text || content.payload || ''), source: 'button' }
+  if (msgType === 'interactive') return { texto: String(content.title || ''), source: 'interactive' }
+  return null
+}
+
+// ── Textos de las respuestas automáticas ──────────────────────────────────
+const TEXTO_BIENVENIDA =
+  'Gracias por dar el primer paso 👋\n\n' +
+  'Soy parte del equipo de Pessaro Capital. Nuestro programa de *Inteligencia Financiera* ' +
+  'existe para que entiendas dónde está tu dinero y por qué, antes de mover un peso.\n\n' +
+  'Así avanzamos:\n\n' +
+  '1️⃣ *Diagnóstico* — conversamos 20 minutos sobre tu situación y tus objetivos. Sin costo y sin compromiso.\n' +
+  '2️⃣ *Formación* — accedes a nuestra sección educativa: 9 módulos y 67 lecciones sobre mercados, ' +
+  'gestión de riesgo y análisis, a tu ritmo.\n' +
+  '3️⃣ *Acompañamiento* — un asesor te guía en la práctica y resuelve tus dudas cuando aparecen.\n\n' +
+  'Puedes empezar por la sección educativa ahora mismo:\n' +
+  'https://pessarocapital.com/educacion\n\n' +
+  'Un asesor te escribirá en breve para coordinar el diagnóstico. ' +
+  'Si prefieres, respóndeme aquí y avanzamos por este medio.\n\n' +
+  '_Pessaro Capital SpA · 17 años de experiencia en mercados financieros_'
+
+const TEXTO_BAJA =
+  'Entendido. Hemos desactivado las notificaciones para este número y ya no recibirás ' +
+  'nuestras campañas. 🙌\n\n' +
+  'Si más adelante quieres volver a recibir información, escribe *ALTA* en cualquier momento.\n\n' +
+  'Gracias por tu tiempo. ¡Que tengas un excelente día!'
+
+const TEXTO_ALTA =
+  '¡Bienvenido de vuelta! ✅\n\n' +
+  'Hemos reactivado las notificaciones para este número. Volverás a recibir nuestras ' +
+  'novedades y contenidos de educación financiera.\n\n' +
+  'Si en algún momento quieres dejar de recibirlos, escribe *BAJA*.'
+
+// ── Respuesta automática ──────────────────────────────────────────────────
+// Se envía a Graph directamente y NO vía whatsapp-send, a propósito: esa
+// función bloquea cualquier envío a un número dado de baja, y aquí justamente
+// hay que confirmarle la baja a quien la acaba de pedir.
+// El clic en un botón abre la ventana de 24 h, así que es un mensaje de sesión
+// (texto libre, sin plantilla).
+async function responder(supabase: any, phone: string, texto: string): Promise<void> {
+  if (!WA_PHONE_ID || !WA_TOKEN) {
+    console.error('[auto] faltan WA_PHONE_NUMBER_ID / WA_PERMANENT_TOKEN, no se responde')
+    return
   }
-  return { hit: false, source: '', raw: '' }
+  try {
+    const res = await fetch(`${GRAPH_API}/${WA_PHONE_ID}/messages`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${WA_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'text',
+        text: { body: texto, preview_url: true },
+      }),
+    })
+    const r = await res.json()
+    if (!r.messages?.[0]?.id) {
+      console.error('[auto] Meta rechazó la respuesta:', JSON.stringify(r).slice(0, 300))
+      return
+    }
+    // Se registra igual que cualquier saliente para que salga en las burbujas
+    // del CRM; auto_reply lo diferencia de lo que escribe un asesor.
+    await supabase.from('whatsapp_messages').insert({
+      meta_message_id: r.messages[0].id,
+      client_phone:    phone,
+      direction:       'outbound',
+      message_type:    'text',
+      content:         { text: texto },
+      status:          'sent',
+      auto_reply:      true,
+    })
+  } catch (e) {
+    console.error('[auto] error respondiendo:', e instanceof Error ? e.message : String(e))
+  }
+}
+
+// ── Acciones de cada intención ────────────────────────────────────────────
+async function accionBaja(supabase: any, phone: string, raw: string, source: string) {
+  // 1) El bloqueo REAL de campañas es esta tabla: isOptedOut() la consulta en
+  //    cada envío. Cambiar sólo crm_contacts.status NO excluye de las campañas,
+  //    porque runCampaign() no filtra por estado al armar los destinatarios.
+  const { error: ooErr } = await supabase.from('whatsapp_opt_outs').upsert({
+    client_phone: phone,
+    opted_out_at: new Date().toISOString(),
+    opted_in_at:  null,          // por si se había reactivado antes
+    source,
+    raw_text:     raw,
+  }, { onConflict: 'client_phone' })
+  if (ooErr) console.error('[baja] no se pudo registrar:', ooErr.message)
+
+  // 2) Estado visible para el asesor en Contactos
+  await supabase.from('crm_contacts').update({ status: 'inactivo' }).eq('phone', phone)
+
+  await responder(supabase, phone, TEXTO_BAJA)
+  console.log(`[baja] ${phone} dado de baja (${source})`)
+}
+
+async function accionAlta(supabase: any, phone: string) {
+  // No se borra la fila: marcarla conserva la auditoría de la baja original
+  const { data: fila } = await supabase
+    .from('whatsapp_opt_outs').select('client_phone').eq('client_phone', phone).maybeSingle()
+  if (!fila) {
+    // Nunca estuvo de baja: no hay nada que reactivar, no se responde para no
+    // contestar un "alta" suelto en mitad de una conversación normal
+    return
+  }
+  await supabase.from('whatsapp_opt_outs')
+    .update({ opted_in_at: new Date().toISOString() }).eq('client_phone', phone)
+  await supabase.from('crm_contacts').update({ status: 'activo' }).eq('phone', phone)
+  await responder(supabase, phone, TEXTO_ALTA)
+  console.log(`[alta] ${phone} reactivado`)
+}
+
+async function accionComenzar(supabase: any, phone: string) {
+  await supabase.from('crm_contacts').update({ status: 'activo' }).eq('phone', phone)
+  // etapa 2 = Contactado en el pipeline de campaign_leads
+  await supabase.from('campaign_leads').update({ etapa: 2 }).eq('phone', phone).lt('etapa', 2)
+
+  // Pulsar "Comenzar" es una petición explícita, así que se responde aunque el
+  // contacto esté de baja. Lo que NO se hace es reactivarlo: salir de la lista
+  // de campañas sólo se revierte con un ALTA explícito, como exige Meta.
+  await responder(supabase, phone, TEXTO_BIENVENIDA)
+  console.log(`[comenzar] ${phone} → bienvenida enviada`)
 }
 
 function makePreview(msgType: string, content: any): string {
@@ -431,21 +596,17 @@ serve(async (req) => {
             continue
           }
 
-          // ── Baja (opt-out) ────────────────────────────────────────────
-          // Se registra antes que nada: si el cliente pidió la baja, es lo
-          // más importante que ocurre en este mensaje.
-          const optOut = detectOptOut(msg.type, contentData)
-          if (optOut.hit) {
-            const { error: ooErr } = await supabase
-              .from('whatsapp_opt_outs')
-              .upsert({
-                client_phone: clientPhone,
-                opted_out_at: new Date().toISOString(),
-                source:       optOut.source,
-                raw_text:     optOut.raw,
-              }, { onConflict: 'client_phone' })
-            if (ooErr) console.error('[opt-out] no se pudo registrar:', ooErr.message)
-            else console.log(`[opt-out] ${clientPhone} dado de baja (${optOut.source})`)
+          // ── Automatizaciones ──────────────────────────────────────────
+          // Van antes que nada: si el cliente pidió la baja, es lo más
+          // importante que ocurre en este mensaje.
+          const accionable = textoAccionable(msg.type, contentData)
+          const intencion  = accionable ? resolverIntencion(accionable.texto) : null
+          if (intencion === 'baja') {
+            await accionBaja(supabase, clientPhone, accionable!.texto, accionable!.source)
+          } else if (intencion === 'alta') {
+            await accionAlta(supabase, clientPhone)
+          } else if (intencion === 'comenzar') {
+            await accionComenzar(supabase, clientPhone)
           }
 
           // Asociar con lead si existe
