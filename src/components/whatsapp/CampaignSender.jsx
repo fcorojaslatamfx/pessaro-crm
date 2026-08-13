@@ -95,6 +95,8 @@ export default function CampaignSender({ user }) {
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState('')
   const [sendingId, setSendingId] = useState(null)   // campaña que se está disparando
   const [confirmSend, setConfirmSend] = useState(null) // confirmación en dos pasos
   const [rowMsg, setRowMsg] = useState(null)         // {id, type, text}
@@ -199,6 +201,34 @@ export default function CampaignSender({ user }) {
     }
   }
 
+  // Relee el catálogo completo desde Meta. Hace falta cada vez que se edita una
+  // plantilla allí: el CRM sólo se entera por el evento del webhook, y si ese
+  // evento no llega (o la edición aún no está aprobada) el catálogo queda viejo.
+  async function sincronizarPlantillas() {
+    setSyncing(true); setSyncMsg('')
+    try {
+      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+      const { data: { session } } = await supabase.auth.getSession()
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+        body: JSON.stringify({ action: 'sync_templates' }),
+      })
+      const r = await res.json()
+      if (r.success) {
+        const { data: t } = await supabase.from('whatsapp_templates').select('*').eq('status', 'APPROVED')
+        setTemplates(t || [])
+        if ((t || []).length > 0 && !form.template_id) setForm(f => ({ ...f, template_id: t[0].id }))
+        setSyncMsg(`✓ ${r.synced} plantilla${r.synced !== 1 ? 's' : ''} en Meta · ${r.approved} aprobada${r.approved !== 1 ? 's' : ''}`)
+      } else {
+        setSyncMsg(`✕ ${r.error || 'Error sincronizando'}`)
+      }
+    } catch (e) {
+      setSyncMsg(`✕ ${e.message}`)
+    }
+    setSyncing(false)
+  }
+
   async function recargarCampanas() {
     const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
     setWaCampaigns(wcs || [])
@@ -273,11 +303,25 @@ export default function CampaignSender({ user }) {
             </div>
 
             <div>
-              <Lbl>Plantilla WhatsApp</Lbl>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <Lbl>Plantilla WhatsApp</Lbl>
+                <button onClick={sincronizarPlantillas} disabled={syncing}
+                  title="Relee el catálogo desde Meta. Úsalo tras editar o crear una plantilla allí."
+                  style={{
+                    padding: '4px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, fontFamily: 'inherit',
+                    marginBottom: 5, cursor: syncing ? 'wait' : 'pointer',
+                    background: 'rgba(255,255,255,0.05)', color: C.textSub, border: `1px solid ${C.border}`,
+                  }}>
+                  {syncing ? 'Sincronizando…' : '⟳ Sincronizar desde Meta'}
+                </button>
+              </div>
               {templates.length === 0
                 ? <p style={{ color: C.muted, fontSize: 12 }}>No hay plantillas aprobadas en whatsapp_templates.</p>
                 : <Sel value={form.template_id} onChange={v => setForm(f => ({ ...f, template_id: v }))}
                     options={templates.map(t => ({ value: t.id, label: `${t.template_name} (${t.category || 'UTILITY'})` }))} />}
+              {syncMsg && (
+                <p style={{ fontSize: 11, margin: '6px 0 0', color: syncMsg.startsWith('✓') ? C.green : C.red }}>{syncMsg}</p>
+              )}
             </div>
 
             {tplSeleccionada?.header_type === 'IMAGE' && (

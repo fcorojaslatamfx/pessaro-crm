@@ -4,6 +4,7 @@ import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, A
 import WhatsAppInbox from './components/whatsapp/WhatsAppInbox.jsx'
 import ChatWindow from './components/whatsapp/ChatWindow.jsx'
 import CampaignSender from './components/whatsapp/CampaignSender.jsx'
+import StartChatModal from './components/whatsapp/StartChatModal.jsx'
 import WAFinanceChat from './pages/WAFinanceChat.jsx'
 import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
@@ -886,6 +887,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[edu,setEdu]=useState([])            // filas de list_certificate_candidates para este contacto
   // Bajas de WhatsApp: el teléfono va en dígitos, igual que crm_contacts.phone
   const[optOuts,setOptOuts]=useState(new Set())
+  // Envio de plantilla WABA desde Contactos (solo super admin)
+  const[waContact,setWaContact]=useState(null)
   const[issuing,setIssuing]=useState(null)
   const[certMsg,setCertMsg]=useState(null)
   // La emisión de certificados es de admin/super admin; el asesor no ve el bloque
@@ -1590,7 +1593,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
               </td>
               <td style={{padding:'12px 18px'}}><Badge label={c.status} color={SCOLOR_MAP[c.status]||P.muted}/></td>
               <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/>{c._origStatus==='new'&&<Badge label="nuevo" color={P.orange}/>}</div></td>
-              <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,alignItems:'center'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn>{staffProfile?.referral_code&&<span onClick={e=>e.stopPropagation()}><WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={c.full_name||''} leadPhone={c.phone||''} compact/></span>}</div></td>
+              <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,alignItems:'center'}}><Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}}>Ver →</Btn>{isSuperAdmin&&!c.id.startsWith('sub_')&&c.phone&&<button onClick={e=>{e.stopPropagation();setWaContact(c)}} title="Enviar plantilla de WhatsApp (WABA)"
+                  style={{padding:'4px 9px',borderRadius:7,background:P.greenDim,border:`1px solid ${P.green}40`,color:P.green,fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>💬 WABA</button>}{staffProfile?.referral_code&&<span onClick={e=>e.stopPropagation()}><WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={c.full_name||''} leadPhone={c.phone||''} compact/></span>}</div></td>
             </tr>
           ))}
         </tbody>
@@ -1598,6 +1602,15 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       </div>
       {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>{contacts.length===0?'Aún no tienes contactos. Añade uno o importa un CSV.':'Sin resultados.'}</div>}
     </GlassCard>}
+
+    {/* Envío de plantilla WABA — sólo super admin. start_chat valida el rol
+        en el backend y auto-asigna el chat, así que la conversación queda en
+        la bandeja como cualquier otra. */}
+    {waContact&&<StartChatModal contact={waContact} onClose={()=>setWaContact(null)}
+      onStarted={c=>{
+        logActivity(user.id,c.id,'whatsapp_chat',`Plantilla de WhatsApp enviada a ${c.full_name||c.phone}`,{})
+        if(selected?.id===c.id)setActivities(p=>[{id:Date.now().toString(),activity_type:'whatsapp_chat',description:'Plantilla de WhatsApp enviada',created_at:new Date().toISOString()},...p])
+      }}/>}
 
     {showGroups&&<Modal title="Grupos de contactos" onClose={()=>{setShowGroups(false);setManagingGroup(null);setEditingGroup(null);setGroupErr('');setGroupForm({name:'',description:'',color:GROUP_COLORS[0]})}}>
       {managingGroup?(()=>{
@@ -1715,6 +1728,18 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                 style={{padding:'6px 12px',borderRadius:8,background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,color:P.purple,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
                 ✏️ Editar ficha
               </button>}
+              {/* Envío por la API de WhatsApp: sólo super admin, y bloqueado si pidió la baja */}
+              {isSuperAdmin&&!esSub&&selected.phone&&(
+                optOuts.has(soloDigitos(selected.phone))
+                  ?<span title="Este contacto pidió no recibir mensajes. El envío está bloqueado."
+                     style={{padding:'6px 12px',borderRadius:8,background:'rgba(255,255,255,0.04)',border:`1px solid ${P.border}`,color:P.muted,fontSize:12,fontWeight:600,cursor:'not-allowed'}}>
+                     💬 WABA bloqueado
+                   </span>
+                  :<button onClick={()=>setWaContact(selected)} title="Enviar una plantilla aprobada por la API de WhatsApp"
+                     style={{padding:'6px 12px',borderRadius:8,background:P.greenDim,border:`1px solid ${P.green}40`,color:P.green,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                     💬 Enviar WABA
+                   </button>
+              )}
               {staffProfile?.referral_code&&<WAFinanceInviteButton advisorCode={staffProfile.referral_code} advisorName={staffProfile.display_name||''} leadName={selected.full_name||''} leadPhone={selected.phone||''} compact onSend={()=>{if(!esSub){logActivity(user.id,selected.id,'wafinance_invitacion','Invitación WAFinance enviada por WhatsApp',{advisor_code:staffProfile.referral_code});setActivities(p=>[{id:Date.now().toString(),activity_type:'wafinance_invitacion',description:'Invitación WAFinance enviada por WhatsApp',created_at:new Date().toISOString()},...p])}}}/>}
               {!esSub&&<>
                 <Btn variant="ghost" disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px'}}
@@ -2442,7 +2467,7 @@ return <div key={r} style={{marginBottom:12}}>
         }
       </GlassCard>}
       {!myReferralCode&&<GlassCard style={{padding:14,background:P.orange+'10',border:`1px solid ${P.orange}30`}}>
-        <p style={{fontSize:12,color:P.orange,margin:0}}>⚠ No tienes un código de referido asignado. Pide al super admin que te genere uno en "Campañas admin → Links Asesores".</p>
+        <p style={{fontSize:12,color:P.orange,margin:0}}>⚠ No tienes un código de referido asignado. Pide al super admin que te genere uno en «Campañas → Administrar → Links Asesores».</p>
       </GlassCard>}
     </div>}
 
@@ -2537,7 +2562,7 @@ return <div key={r} style={{marginBottom:12}}>
 
 
 // ─── CAMPAIGNS HUB — vista unificada para todos los roles ──────────────────
-function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setGlobalLeads}){
+function CampaignsHub({campaigns,setCampaigns,user,isSuperAdmin,staffProfile,globalLeads,setGlobalLeads}){
   const[variants,setVariants]=useState([])
   const[advisors,setAdvisors]=useState([])
   const[loading,setLoading]=useState(true)
@@ -2725,6 +2750,7 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
     ...(isSuperAdmin?[['waba','🚀 WhatsApp (WABA)']]:[]),
     ['enlace','🔗 Enlace'],
     ['otras','📌 Otras'],
+    ...(isSuperAdmin?[['admin','⚙ Administrar']]:[]),
   ]
 
   return <div>
@@ -2747,8 +2773,10 @@ function CampaignsHub({campaigns,user,isSuperAdmin,staffProfile,globalLeads,setG
 
     {canal==='waba'&&<CampaignSender user={user}/>}
 
+    {canal==='admin'&&isSuperAdmin&&<AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>}
+
     {canal==='enlace'&&rejilla(conEnlace,
-      isSuperAdmin?'No hay campañas con links de referido. Crea variantes en «Campañas admin».':'No tienes variantes habilitadas. Solicita acceso al super admin.')}
+      isSuperAdmin?'No hay campañas con links de referido. Crea variantes en la pestaña «Administrar».':'No tienes variantes habilitadas. Solicita acceso al super admin.')}
 
     {canal==='otras'&&rejilla(otras,'No hay campañas sin canal de entrega definido.')}
 
@@ -5488,7 +5516,6 @@ export default function App(){
     ...(canAccess('reports')  ?['reports']:[]),
     ...(canAccess('equipo')   ?['equipo']:[]),
     ...(canAccess('campaigns')?['campaigns']:[]),
-    ...(isSuperAdmin          ?['admin_campaigns']:[]),
     ...(isSuperAdmin          ?['webcontent']:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?['education']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
@@ -5506,7 +5533,6 @@ export default function App(){
     canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
-    ...(isSuperAdmin?[{id:'admin_campaigns',label:'Campañas admin',icon:'⚙',color:P.orange}]:[]),
     ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?[{id:'education',label:'Educación',icon:'🎓',color:P.green}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
@@ -5669,8 +5695,7 @@ export default function App(){
           if(currentMod==='emails')    return <Emails contacts={contacts} leads={myLeads} staffProfile={staffProfile} user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='reports')   return <Reports contacts={contacts} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
-          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
-          if(currentMod==='admin_campaigns'&&isSuperAdmin) return <AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>
+          if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} setCampaigns={setCampaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='webcontent'&&isSuperAdmin) return <WebContentHub isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='education'&&(isSuperAdmin||staffProfile?.role==='admin')) return <EducationAdmin user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>

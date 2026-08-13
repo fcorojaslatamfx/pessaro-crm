@@ -31,6 +31,7 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
   const [varValues, setVarValues] = useState([])
+  const [headerImg, setHeaderImg] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
 
@@ -54,6 +55,7 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
       auto[0] = contact.full_name.split(' ')[0]
     }
     setVarValues(auto)
+    setHeaderImg('')
   }
 
   async function handleSend() {
@@ -64,9 +66,17 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
       const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
       const { data: { session } } = await supabase.auth.getSession()
       if (!session?.access_token) throw new Error('No autenticado')
-      const components = varValues.length
-        ? [{ type: 'body', parameters: varValues.map(v => ({ type: 'text', text: v })) }]
-        : []
+      // Meta exige el componente 'header' en CADA envio si la plantilla tiene
+      // encabezado de imagen: la del ejemplo aprobado no viaja con el mensaje.
+      // Sin esto el envio falla por parametros faltantes.
+      const components = []
+      if (selected.header_type === 'IMAGE') {
+        if (!imagenValida) { setError('Esta plantilla lleva encabezado de imagen: indica una URL https valida.'); return }
+        components.push({ type: 'header', parameters: [{ type: 'image', image: { link: headerImg.trim() } }] })
+      }
+      if (varValues.length) {
+        components.push({ type: 'body', parameters: varValues.map(v => ({ type: 'text', text: v })) })
+      }
       const res = await fetch(`${SUPABASE_URL}/functions/v1/whatsapp-send`, {
         method: 'POST',
         headers: {
@@ -97,6 +107,7 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
   }
 
   const preview = selected ? fillVars(selected.body_text, varValues) : ''
+  const imagenValida = /^https:\/\/.+/i.test((headerImg || '').trim())
 
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1100, padding: 20 }}
@@ -174,6 +185,18 @@ export default function StartChatModal({ contact, onClose, onStarted }) {
               <p style={{ fontSize: 11, color: C.muted, margin: '0 0 4px', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>{selected.template_name}</p>
               {selected.body_text && <p style={{ fontSize: 13, color: C.textSub, margin: 0, lineHeight: 1.5 }}>{selected.body_text}</p>}
             </div>
+
+            {selected.header_type === 'IMAGE' && (
+              <div style={{ marginBottom: 14 }}>
+                <p style={{ fontSize: 11, color: C.muted, margin: '0 0 8px', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600 }}>Imagen del encabezado *</p>
+                <input value={headerImg} onChange={e => setHeaderImg(e.target.value)} placeholder="https://..."
+                  style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: `1px solid ${imagenValida ? C.green + '50' : C.orange + '50'}`, borderRadius: 8, padding: '8px 10px', color: C.text, fontSize: 13, outline: 'none', boxSizing: 'border-box' }} />
+                <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0', lineHeight: 1.5 }}>
+                  Esta plantilla lleva encabezado de imagen y WhatsApp la exige en cada envio. URL publica HTTPS.
+                </p>
+                {imagenValida && <img src={headerImg.trim()} alt="" style={{ marginTop: 10, maxWidth: '100%', maxHeight: 130, borderRadius: 8, display: 'block' }} />}
+              </div>
+            )}
 
             {selected.variables_count > 0 && (
               <div style={{ marginBottom: 14 }}>
