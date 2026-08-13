@@ -44,7 +44,7 @@ function edadSync(fecha) {
   return `hace ${Math.floor(h / 24)} d`
 }
 
-export default function TemplatePicker({ onSend, onClose, isSuperAdmin }) {
+export default function TemplatePicker({ onSend, onClose, isSuperAdmin, clientName }) {
   const [templates, setTemplates] = useState([])
   const [loading, setLoading] = useState(true)
   const [selected, setSelected] = useState(null)
@@ -115,10 +115,16 @@ export default function TemplatePicker({ onSend, onClose, isSuperAdmin }) {
     setSyncing(false)
   }
 
+  // El primer nombre del contacto es lo que casi siempre va en {{1}}, asi que
+  // se rellena solo. Antes habia que escribirlo a mano en cada envio.
+  const primerNombre = String(clientName || '').trim().split(/\s+/)[0] || ''
+
   function selectTemplate(t) {
     if (!esEnviable(t)) return
     setSelected(t)
-    setVarValues(Array(t.variables_count || 0).fill(''))
+    const auto = Array(t.variables_count || 0).fill('')
+    if ((t.variables_count || 0) > 0 && primerNombre) auto[0] = primerNombre
+    setVarValues(auto)
     setHeaderImg('')
   }
 

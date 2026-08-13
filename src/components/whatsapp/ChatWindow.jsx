@@ -608,6 +608,7 @@ export default function ChatWindow({ clientPhone, clientName, staffId, isSuperAd
           onSend={handleSendTemplate}
           onClose={() => setShowPicker(false)}
           isSuperAdmin={isSuperAdmin}
+          clientName={clientName}
         />
       )}
 

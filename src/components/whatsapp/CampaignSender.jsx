@@ -112,6 +112,7 @@ export default function CampaignSender({ user }) {
     scheduled_at: '',
     header_image_url: '',
     contact_group_id: '',   // vacío = campaign_leads; con valor = grupo de contactos
+    body_variable: '',      // vacío = primer nombre de cada destinatario
   })
 
   const tplSeleccionada = templates.find(t => t.id === form.template_id)
@@ -174,6 +175,7 @@ export default function CampaignSender({ user }) {
       variant_key: form.variant_key || null,
       target_filter: Object.keys(targetFilter).length ? targetFilter : null,
       header_image_url: form.header_image_url.trim() || null,
+      body_variable: form.body_variable.trim() || null,
       scheduled_at: localAISO(form.scheduled_at),
       status: form.scheduled_at ? 'scheduled' : 'draft',
       created_by: user?.id || null,
@@ -187,7 +189,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '' })
         await recargarCampanas()
         setTab('historial')
       } else {
@@ -250,6 +252,31 @@ export default function CampaignSender({ user }) {
       return await res.json()
     } catch (e) {
       return { success: false, error: e.message || 'Error de red al llamar a whatsapp-send' }
+    }
+  }
+
+  // Reutilizar una campaña: copia la configuración ya probada a un borrador
+  // nuevo, en vez de rellenar el formulario otra vez. No copia contadores ni
+  // fechas: nace limpia y se envía cuando quieras.
+  async function duplicar(wc) {
+    setRowMsg(null)
+    try {
+      const { data, error } = await supabase.from('whatsapp_campaigns').insert({
+        name: `${wc.name} (copia)`,
+        template_id: wc.template_id,
+        campaign_id: wc.campaign_id,
+        variant_key: wc.variant_key,
+        target_filter: wc.target_filter,
+        header_image_url: wc.header_image_url,
+        body_variable: wc.body_variable,
+        status: 'draft',
+        created_by: user?.id || null,
+      }).select().single()
+      if (error) throw error
+      await recargarCampanas()
+      setRowMsg({ id: data.id, type: 'ok', text: 'Copia creada como borrador. Revisa y pulsa «Enviar ahora».' })
+    } catch (e) {
+      setRowMsg({ id: wc.id, type: 'err', text: e.message || 'No se pudo duplicar' })
     }
   }
 
@@ -334,6 +361,30 @@ export default function CampaignSender({ user }) {
                 {imagenCampanaValida && (
                   <img src={form.header_image_url.trim()} alt="" style={{ marginTop: 10, maxWidth: '100%', maxHeight: 140, borderRadius: 8, display: 'block' }} />
                 )}
+              </div>
+            )}
+
+            {/* Qué se escribe en {{1}}. Sin esto el saludo sale con la primera
+                palabra del nombre del contacto, que no siempre es un nombre. */}
+            {tplSeleccionada?.variables_count > 0 && (
+              <div>
+                <Lbl>Saludo de la plantilla · variable {'{{1}}'}</Lbl>
+                <Sel value={form.body_variable ? 'fijo' : 'auto'}
+                  onChange={v => setForm(f => ({ ...f, body_variable: v === 'auto' ? '' : (f.body_variable || 'Hola') }))}
+                  options={[
+                    { value: 'auto', label: 'Primer nombre de cada destinatario' },
+                    { value: 'fijo', label: 'Un mismo texto para todos' },
+                  ]} />
+                {form.body_variable !== '' && (
+                  <div style={{ marginTop: 8 }}>
+                    <Input value={form.body_variable} onChange={v => setForm(f => ({ ...f, body_variable: v }))} placeholder="Ej: Hola" />
+                  </div>
+                )}
+                <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0', lineHeight: 1.5 }}>
+                  {form.body_variable
+                    ? <>Todos recibirán: <span style={{ color: C.textSub }}>«{(tplSeleccionada.body_text || '').replace(/\{\{1\}\}/, form.body_variable).slice(0, 70)}…»</span></>
+                    : 'Se usa el primer nombre del contacto. Si no tiene nombre registrado, se saluda sin él.'}
+                </p>
               </div>
             )}
 
@@ -455,6 +506,7 @@ export default function CampaignSender({ user }) {
                     <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{wc.name}</p>
                     <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted }}>
                       {wc.whatsapp_templates?.template_name || '—'} · {new Date(wc.created_at).toLocaleDateString('es-CL')}
+                      {' · saludo: '}{wc.body_variable ? `«${wc.body_variable}»` : 'nombre del contacto'}
                     </p>
                     {wc.scheduled_at && (
                       <p style={{ margin: '3px 0 0', fontSize: 11, color: vencida ? C.orange : C.blue }}>
@@ -482,6 +534,10 @@ export default function CampaignSender({ user }) {
                         Cancelar
                       </button>
                     )}
+                    <button onClick={() => duplicar(wc)} title="Crear un borrador nuevo con la misma configuración"
+                      style={{ padding: '6px 11px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: C.textSub, border: `1px solid ${C.border}` }}>
+                      ⧉ Reutilizar
+                    </button>
                     <span style={{ fontSize: 10, fontWeight: 700, color: sc, background: sc + '20', border: `1px solid ${sc}35`, borderRadius: 4, padding: '3px 8px', textTransform: 'uppercase' }}>
                       {STATUS_LABEL[wc.status] || wc.status}
                     </span>
