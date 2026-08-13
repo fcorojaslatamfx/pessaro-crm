@@ -311,8 +311,12 @@ async function runCampaign(
 
   async function sendOne(lead: any) {
     const phone = normalizePhone(lead.phone)
+    // Qué va en {{1}}: el texto fijo de la campaña si se indicó, y si no el
+    // primer nombre del destinatario. El respaldo evita saludos rotos cuando el
+    // contacto no tiene nombre.
     const firstName = (lead.full_name || '').trim().split(/\s+/)[0] || 'Hola'
-    const bodyValues = (tpl.variables_count || 0) > 0 ? [firstName] : []
+    const valorVariable = (wc.body_variable || '').trim() || firstName
+    const bodyValues = (tpl.variables_count || 0) > 0 ? [valorVariable] : []
     const components = buildComponents(tpl.header_type, bodyValues, wc.header_image_url)
     try {
       const res = await fetch(`${GRAPH_API}/${PHONE_ID}/messages`, {
