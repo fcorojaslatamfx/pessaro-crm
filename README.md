@@ -10,6 +10,7 @@ Repo hermano relacionado: `pessarocl` (sitio público pessaro.cl, fuente de lead
 - **Campañas** (módulo unificado por canal): **WhatsApp (WABA)** con plantillas de Meta, programación y reutilización · **Enlace** (variantes de landing Navy/Bold/Editorial/Minimalist, leads en `campaign_leads`, asignación por asesor) · **Otras** · **Administrar** (alta de campañas y variantes, sólo super admin).
 - **WhatsApp**: inbox de chats, envío de texto/plantillas/adjuntos, asignación de conversaciones a asesores (vía Meta WhatsApp Cloud API) y **automatizaciones** sobre los mensajes entrantes: baja (opt-out), reactivación con `ALTA` y bienvenida al pulsar el botón «Comenzar».
 - **Emails**: envío transaccional y de campaña (Resend), tracking por asesor.
+- **Análisis diario de instrumentos**: 9 instrumentos (divisas, metales, energía, índices, cripto) analizados cada mañana. Los niveles se calculan en código sobre series de precios reales y se validan antes de publicar; el modelo sólo redacta. Dos audiencias con RLS separado: lectura técnica para el asesor en el CRM, lectura divulgativa para el cliente en el portal. Detalle en `ANALISIS_DIARIO_INSTRUMENTOS.md`.
 - **Educación**: asignación y aprobación de contenido educativo a clientes, y **emisión de certificados** según el progreso real del alumno — exclusiva de admin/super admin (la autoemisión desde el portal está desactivada).
 - **Contenido Web (CMS)**: gestores de Blog, FAQs, Servicios, Instrumentos, Equipo, Páginas y Ajustes del sitio público.
 - **Clientes / Portal KYC**: revisión de verificación KYC de clientes desde Contactos.
@@ -63,6 +64,7 @@ supabase/
 │   ├── whatsapp-webhook/       # Recibe eventos de Meta (mensajes, estados) + automatizaciones
 │   ├── whatsapp-send/          # Envío de texto/plantillas/media + campañas y planificador
 │   ├── generate-certificate/   # Desactivada: la emisión de certificados es del staff (403)
+│   ├── generar-analisis-diario/ # Análisis diario de instrumentos (datos reales + Claude)
 │   ├── support_otp/            # OTP por email para el portal de soporte
 │   ├── support_tickets/        # CRUD de tickets (crear, listar, responder)
 │   └── support_notify/         # Notificación al asesor asignado
