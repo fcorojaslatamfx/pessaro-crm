@@ -50,13 +50,25 @@ supabase secrets set WA_PHONE_NUMBER_ID="TU_PHONE_NUMBER_ID"
 supabase secrets set WA_WABA_ID="TU_WABA_ID"
 supabase secrets set WA_PERMANENT_TOKEN="TU_TOKEN_PERMANENTE"
 supabase secrets set WA_VERIFY_TOKEN="PessaroWA2026SecretHook"
+supabase secrets set WA_CRON_SECRET="<cadena aleatoria>"   # planificador de campañas
 ```
+
+`WA_CRON_SECRET` lo usa el job de pg_cron para autorizar la action `run_due_campaigns`
+(ver §14). Se eligió un secreto propio en vez de la service role key para no dejar esa
+clave escrita en `cron.job`, que es legible por cualquiera con acceso a la base.
 
 **IMPORTANTE:** Después de agregar secrets, hay que hacer **redeploy** de las edge functions para que `Deno.env.get()` los detecte.
 
 ---
 
 ## 4. Modelo de Datos (SQL)
+
+> ⚠️ **Este bloque es el SQL de creación inicial, no el esquema vigente.** Desde entonces
+> se añadieron columnas y estados por migración: `whatsapp_messages.auto_reply`,
+> `whatsapp_campaigns.header_image_url` / `body_variable`, el estado `failed` en
+> `whatsapp_campaigns.status`, y las tablas `whatsapp_opt_outs` (con `opted_in_at`) y
+> `whatsapp_assignments`. Además **`client_phone` ya no lleva `+`**: el formato vigente es
+> sólo dígitos (ver §12). La fuente de verdad es `supabase/migrations/`.
 
 ```sql
 -- ─── Credenciales WhatsApp (referencia, los valores reales van en Vault) ────
@@ -727,7 +739,81 @@ graph.facebook.com
 
 ## 11. Limitaciones y costos
 
-- **Ventana de 24h:** Solo puedes responder mensajes de texto libre dentro de 24h desde el último mensaje del cliente. Fuera de esa ventana, solo plantillas aprobadas.
+- **Ventana de 24h:** Solo puedes responder mensajes de texto libre dentro de 24h desde el último mensaje del cliente. Fuera de esa ventana, solo plantillas aprobadas. Un clic en un botón de respuesta rápida **abre esa ventana**, y por eso las respuestas automáticas del §13 son mensajes de sesión (texto libre, sin plantilla).
 - **Rate limits:** Tier 1 = 1.000 msgs/24h business-initiated. Sube con verificación y volumen.
 - **Costos por mensaje:** Varía por país. Chile ~$0.04 USD conversation (marketing), ~$0.02 (utility).
 - **Aprobación de plantillas:** 24-48h típico. Marketing templates requieren opt-in del usuario.
+
+---
+
+## 12. Formato de teléfono (2026-08-13)
+
+**Formato único en todo el sistema: sólo dígitos**, sin `+` ni espacios (`56973312927`). Es lo que espera Meta y lo que devuelve `msg.from`.
+
+No es una preferencia estética: **el mismo string enlaza** `crm_contacts.phone` y `campaign_leads.phone` con las claves de WhatsApp (`whatsapp_messages.client_phone`, `whatsapp_assignments.client_phone`, `whatsapp_opt_outs.client_phone`). Si se cambia el formato en un lado y no en el otro, **falla en silencio**:
+
+- los opt-out dejan de coincidir → se vuelve a escribir a quien pidió la baja
+- `canSendToPhone()` no encuentra la asignación → el asesor pierde permiso en sus propios chats
+- la bandeja parte el hilo de una misma persona en dos conversaciones
+
+Si alguna vez hay que volver a tocarlo, se cambia **todo junto**: `whatsapp-webhook` (`clientPhone`), `whatsapp-send` (`normalizePhone`, `toWaNumber`), `App.jsx` (`soloDigitos()` en alta manual, edición e importación CSV), `WhatsAppInbox.jsx` (`normalizePhone`) y una migración para los datos existentes.
+
+---
+
+## 13. Automatizaciones sobre mensajes entrantes (`whatsapp-webhook` v16)
+
+El webhook resuelve la **intención** de cada entrante y ejecuta tres flujos. La comparación es por **texto normalizado** (sin tildes ni mayúsculas) contra una lista de frases, no por un patrón rígido: el botón aprobado dice «Darme de baja» y el patrón anterior sólo aceptaba «dar de baja», así que **ninguna baja se estaba registrando**.
+
+| Intención | Frases | Acciones |
+|---|---|---|
+| `baja` | darme de baja, dar de baja, baja, salir, stop, unsubscribe, no recibir más mensajes… | fila en `whatsapp_opt_outs` + `crm_contacts.status='inactivo'` + confirmación |
+| `alta` | alta, suscribir, suscribirme… | marca `opted_in_at` + confirmación |
+| `comenzar` | comenzar, empezar, quiero empezar… | `status='activo'`, `campaign_leads.etapa=2` + bienvenida |
+
+Sólo dispara con **coincidencia exacta** de la frase completa: «la bolsa está en baja» o «quiero darme de baja del gimnasio» no activan nada.
+
+### Reglas que no son obvias
+
+- **Un botón de plantilla sólo genera evento si es de _respuesta rápida_.** Los de tipo **URL** abren el enlace en el navegador y Meta **no envía nada**: no hay webhook que escuchar, así que no se pueden automatizar. Llegan como `msg.type = 'button'` (plantillas) o `'interactive'` → `button_reply` (mensajes interactivos).
+- **`crm_contacts.status = 'inactivo'` NO excluye de las campañas.** `runCampaign()` no filtra por estado al armar destinatarios, ni desde grupos de contactos ni desde `campaign_leads`. El bloqueo real es `whatsapp_opt_outs` vía `isOptedOut()`. Por eso el flujo de baja escribe en los dos sitios: la tabla bloquea, el estado se ve.
+- **La reactivación marca, no borra.** `opted_in_at` no nulo = vuelto a suscribir; la fila se conserva para mantener la auditoría de la baja, que es lo que Meta exige poder demostrar. Toda consulta a esa tabla debe filtrar `.is('opted_in_at', null)`.
+- **Las respuestas automáticas van a Graph directamente**, no vía `whatsapp-send`: esa función bloquea los envíos a quien está de baja, y aquí justamente hay que confirmarle la baja a quien la acaba de pedir. Se insertan en `whatsapp_messages` con `auto_reply = true` para que salgan en las burbujas del CRM y se distingan de lo que escribe un asesor.
+- Pulsar «Comenzar» estando de baja **responde** (es una petición explícita) pero **no reactiva**: salir de las campañas sólo se revierte con un `ALTA` explícito.
+
+---
+
+## 14. Campañas: planificador y variable del saludo
+
+### Planificador (`run_due_campaigns`)
+
+Una campaña con fecha se guardaba con `status='scheduled'` y **nada la ejecutaba después**: el mensaje no llegaba nunca. El badge «Programada» del historial es una etiqueta de estado, no un botón.
+
+- `whatsapp-send` v17 expone la action **`run_due_campaigns`**, que despacha las campañas vencidas (`status='scheduled'` y `scheduled_at <= now()`, tope de 5 por ciclo).
+- La llama **pg_cron cada 5 min**, job `wa-campanas-programadas`.
+- Se autoriza con **`WA_CRON_SECRET` en el _body_**, no en la cabecera: la función tiene `verify_jwt` activo, así que el `Authorization` debe ser un JWT válido (el cron manda la anon key) y no puede transportar el secreto.
+- `runCampaign()` es la ejecución compartida por el disparo manual (`send_campaign`) y el planificador.
+- Una campaña sin destinatarios pasa a **`failed`**; si se quedara en `scheduled` el cron la reintentaría en cada ciclo.
+
+```sql
+-- diagnóstico del planificador
+select * from cron.job_run_details
+where jobid = (select jobid from cron.job where jobname='wa-campanas-programadas')
+order by start_time desc limit 10;
+
+select status_code, content::text from net._http_response order by id desc limit 5;
+```
+
+> **Zona horaria:** `<input type="datetime-local">` entrega una hora **sin zona**. Guardarla tal cual hacía que Postgres la interpretara como UTC y la campaña saliera 4 h antes de lo elegido. El frontend la convierte con `localAISO()` antes de guardar.
+
+### Variable `{{1}}`
+
+El envío masivo la rellenaba siempre con la primera palabra del nombre del contacto. Con un contacto llamado «Para pruebas WABA» el mensaje salía como *«Hola, Para.»* — la plantilla de Meta estaba bien; el valor lo ponía el CRM.
+
+`whatsapp_campaigns.body_variable` decide qué va ahí:
+
+- `null` → **primer nombre de cada destinatario** (con respaldo si no tiene nombre)
+- texto → **ese mismo texto para todos** los destinatarios de la campaña
+
+En los envíos 1-a-1, `TemplatePicker` recibe el nombre del contacto desde `ChatWindow` y rellena la variable automáticamente.
+
+---

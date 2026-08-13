@@ -1,8 +1,24 @@
 # 📋 Pessaro Capital CRM — Infraestructura Definitiva
 
 **Creado:** 2026-02-25  
-**Última actualización:** 2026-07-21  
+**Última actualización:** 2026-08-13  
 **Estado general:** 🟢 Operativo (WhatsApp + Campañas + Contactos + Emails + Soporte)
+
+
+> 📌 **Actualización 2026-08-13** — Cambios posteriores a la última revisión completa de este
+> documento, detallados en `CHANGELOG_CRM.md`:
+> - `crm_contacts` gana los campos de la ficha del cliente; nueva tabla `crm_client_movements`.
+> - Certificados: RPCs `is_crm_admin()`, `issue_education_certificate()`,
+>   `revoke_education_certificate()`, `list_certificate_candidates()`. La edge function
+>   `generate-certificate` queda **desactivada** (403).
+> - WhatsApp: `whatsapp-send` **v18**, `whatsapp-webhook` **v16**. Nueva action
+>   `run_due_campaigns` + job de pg_cron `wa-campanas-programadas` (cada 5 min) que despacha
+>   las campañas programadas. Automatizaciones de baja / `ALTA` / «Comenzar».
+> - Teléfonos en **formato único sólo dígitos** en `crm_contacts`, `campaign_leads`,
+>   `contact_submissions`, `whatsapp_messages`, `whatsapp_assignments` y `whatsapp_opt_outs`.
+> - Columnas nuevas: `whatsapp_opt_outs.opted_in_at`, `whatsapp_messages.auto_reply`,
+>   `whatsapp_campaigns.body_variable` y estado `failed`.
+> - Módulo **Campañas** unificado por canal; «Campañas admin» pasa a ser su pestaña *Administrar*.
 
 ---
 

@@ -6,11 +6,11 @@ Repo hermano relacionado: `pessarocl` (sitio público pessaro.cl, fuente de lead
 
 ## Alcance actual
 
-- **Contactos y leads**: gestión de contactos propios por asesor, import masivo CSV/TXT, notas.
-- **Campañas**: variantes de landing (Navy/Bold/Editorial/Minimalist), leads (`campaign_leads`), asignación por asesor.
-- **WhatsApp**: inbox de chats, envío de texto/plantillas/adjuntos, asignación de conversaciones a asesores (vía Meta WhatsApp Cloud API).
+- **Contactos y leads**: gestión de contactos propios por asesor, import masivo CSV/TXT, notas, grupos y **ficha del cliente a pantalla completa** (registro, cuenta de inversión, depósitos/retiros, tareas e historial consolidado, exportable a HTML/PDF).
+- **Campañas** (módulo unificado por canal): **WhatsApp (WABA)** con plantillas de Meta, programación y reutilización · **Enlace** (variantes de landing Navy/Bold/Editorial/Minimalist, leads en `campaign_leads`, asignación por asesor) · **Otras** · **Administrar** (alta de campañas y variantes, sólo super admin).
+- **WhatsApp**: inbox de chats, envío de texto/plantillas/adjuntos, asignación de conversaciones a asesores (vía Meta WhatsApp Cloud API) y **automatizaciones** sobre los mensajes entrantes: baja (opt-out), reactivación con `ALTA` y bienvenida al pulsar el botón «Comenzar».
 - **Emails**: envío transaccional y de campaña (Resend), tracking por asesor.
-- **Educación**: módulo de asignación y aprobación de contenido educativo a clientes.
+- **Educación**: asignación y aprobación de contenido educativo a clientes, y **emisión de certificados** según el progreso real del alumno — exclusiva de admin/super admin (la autoemisión desde el portal está desactivada).
 - **Contenido Web (CMS)**: gestores de Blog, FAQs, Servicios, Instrumentos, Equipo, Páginas y Ajustes del sitio público.
 - **Clientes / Portal KYC**: revisión de verificación KYC de clientes desde Contactos.
 - **Soporte (Tickets con OTP)** — módulo más reciente y activo:
@@ -60,8 +60,9 @@ src/
 
 supabase/
 ├── functions/
-│   ├── whatsapp-webhook/       # Recibe eventos de Meta (mensajes, estados)
-│   ├── whatsapp-send/          # Envío de texto/plantillas/media
+│   ├── whatsapp-webhook/       # Recibe eventos de Meta (mensajes, estados) + automatizaciones
+│   ├── whatsapp-send/          # Envío de texto/plantillas/media + campañas y planificador
+│   ├── generate-certificate/   # Desactivada: la emisión de certificados es del staff (403)
 │   ├── support_otp/            # OTP por email para el portal de soporte
 │   ├── support_tickets/        # CRUD de tickets (crear, listar, responder)
 │   └── support_notify/         # Notificación al asesor asignado
@@ -113,6 +114,24 @@ Los secretos de servidor (`WA_PERMANENT_TOKEN`, `WA_VERIFY_TOKEN`, `SUPABASE_SER
 ## Estado actual / trabajo reciente
 
 El repo está en desarrollo activo.
+
+**2026-08-13 — Ficha del cliente, certificados de staff, campañas unificadas y automatizaciones de WhatsApp.**
+
+Sesión larga con seis bloques; tres nacieron de fallos que **no daban ningún error visible**. Detalle completo en `CHANGELOG_CRM.md`.
+
+1. **Ficha del cliente a pantalla completa** — `crm_contacts` gana los campos del registro (nacimiento, profesión, apertura de cuenta, demo/real, broker, nº de cuenta, PAMM/MAM, balance inicial) y aparece `crm_client_movements` para depósitos y retiros.
+2. **Certificados sólo del staff** — `issue_education_certificate()` valida rol y 100 % de avance en el servidor; la edge function `generate-certificate`, que permitía al alumno autoemitirse el certificado con la *service role key*, responde ahora **403**.
+3. **Campañas en un solo módulo**, separadas por canal (WABA / Enlace / Otras / Administrar). «Campañas admin» sale del sidebar. Botones de **sincronizar plantillas desde Meta** y de **reutilizar** una campaña ya probada.
+4. **Campañas programadas: no existía planificador.** Las filas se quedaban en `status='scheduled'` para siempre y el mensaje nunca llegaba; además `scheduled_at` se guardaba sin zona horaria, adelantando la campaña 4 h. Ahora `whatsapp-send` v17 expone `run_due_campaigns` y **pg_cron lo llama cada 5 min** (job `wa-campanas-programadas`, autorizado con `WA_CRON_SECRET` en el body porque la función tiene `verify_jwt` activo).
+5. **Móviles en formato único, sólo dígitos.** El cambio tuvo que abarcar `crm_contacts`, `campaign_leads`, `contact_submissions` y las tres tablas de WhatsApp: quitar el `+` sólo de contactos habría roto **en silencio** los opt-out y las asignaciones de chat.
+6. **Automatizaciones de WhatsApp** — el patrón de opt-out no reconocía «Darme de baja», el texto exacto del botón aprobado, así que **ninguna baja se estaba registrando** y esa gente seguía entrando en las campañas. `whatsapp-webhook` v16 resuelve la intención por texto normalizado y ejecuta baja / reactivación (`ALTA`) / bienvenida, respondiendo automáticamente y dejando la respuesta en el historial (`auto_reply`).
+
+Dos avisos que conviene tener presentes:
+
+- **Un botón de plantilla sólo dispara automatizaciones si es de _respuesta rápida_.** Los de tipo URL abren el enlace y Meta **no envía ningún evento**, así que no hay nada que escuchar.
+- **`crm_contacts.status = 'inactivo'` NO excluye de los envíos masivos**: `runCampaign()` no filtra por estado. El único bloqueo real es `whatsapp_opt_outs` vía `isOptedOut()`.
+
+Pendientes conocidos de este bloque: el job de pg_cron `task-reminders-daily` usa `app.settings.service_role_key`, que no está definido en la base (manda un `Bearer` vacío y probablemente lleva tiempo fallando); y si el portal `pessaro.cl` tiene un botón de descarga de certificado que llama a `generate-certificate`, ahora recibirá el 403.
 
 **2026-08-12 — WhatsApp: plantillas y campañas por grupo; Contactos: grupos y ficha.**
 

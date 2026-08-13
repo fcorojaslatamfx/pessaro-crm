@@ -1,11 +1,27 @@
 # 📋 Pessaro Capital — Infraestructura Consolidada v1.7
 
 **Creado:** 2026-02-25  
-**Última actualización:** 2026-07-02  
+**Última actualización:** 2026-08-13  
 **Versión:** 1.7 — Consolidada (CRM + Website + Educación)  
 **Estado general:** 🟢 Operativo en producción
 
 > ⚠️ **Este documento es el punto de control único del proyecto.** Fusiona `PESSARO_CRM_INFRASTRUCTURE.md` (v1.6) + `PESSARO_CL_ACTUALIZACION_2026_07_02.md` en una única fuente de verdad. Toda nueva herramienta, feature o modificación debe partir de lo aquí documentado.
+
+
+> 📌 **Actualización 2026-08-13** — Cambios posteriores a la última revisión completa de este
+> documento, detallados en `CHANGELOG_CRM.md`:
+> - `crm_contacts` gana los campos de la ficha del cliente; nueva tabla `crm_client_movements`.
+> - Certificados: RPCs `is_crm_admin()`, `issue_education_certificate()`,
+>   `revoke_education_certificate()`, `list_certificate_candidates()`. La edge function
+>   `generate-certificate` queda **desactivada** (403).
+> - WhatsApp: `whatsapp-send` **v18**, `whatsapp-webhook` **v16**. Nueva action
+>   `run_due_campaigns` + job de pg_cron `wa-campanas-programadas` (cada 5 min) que despacha
+>   las campañas programadas. Automatizaciones de baja / `ALTA` / «Comenzar».
+> - Teléfonos en **formato único sólo dígitos** en `crm_contacts`, `campaign_leads`,
+>   `contact_submissions`, `whatsapp_messages`, `whatsapp_assignments` y `whatsapp_opt_outs`.
+> - Columnas nuevas: `whatsapp_opt_outs.opted_in_at`, `whatsapp_messages.auto_reply`,
+>   `whatsapp_campaigns.body_variable` y estado `failed`.
+> - Módulo **Campañas** unificado por canal; «Campañas admin» pasa a ser su pestaña *Administrar*.
 
 ---
 
@@ -164,7 +180,7 @@ Pessaro Capital:  04536ab3-f27e-49cd-a437-b7a539cfdcee
 | `education_lessons` | 67 | id, module_id, title, content, lesson_order | Lecciones por módulo |
 | `education_course_assignments` | — | id, client_email, module_id, assigned_by, created_at | Asignación de módulos a clientes |
 | `education_completion` | — | id, assignment_id, completed_at | Historial de finalización |
-| `education_certificates` | — | id, assignment_id, certificate_url, issued_at | Certificados PDF generados |
+| `education_certificates` | — | id, user_id, module_id, certificate_number, certificate_url, verification_code, issued_by_user_id, opted…/revoked_at | Certificados. **Desde 2026-08-13 los emite sólo admin/super_admin** vía RPC `issue_education_certificate()` |
 | `education_ratings` | — | id, lesson_id, student_email, rating, comment | Feedback de lecciones |
 | `education_downloads` | — | id, lesson_id, student_email, downloaded_at | Tracking de descargas |
 
@@ -226,7 +242,7 @@ generate_referral_code()      SECURITY DEFINER → 8 chars único
 |---------|---|-----------|--------|
 | `resolve-client-account` | 1 | false | ~1 jul |
 | `education-otp` | 1 | false | ~30 jun |
-| `generate-certificate` | 1 | true | ~29 jun |
+| `generate-certificate` | 8 | true | **Desactivada 2026-08-13**: devuelve 403 `self_issue_disabled`. La emisión es del staff desde el CRM |
 | `check-course-access` | 1 | false | ~29 jun |
 | `approve-course-assignment` | 1 | true | ~29 jun |
 | `assign-course-to-client` | 1 | true | ~29 jun |
@@ -261,7 +277,7 @@ generate_referral_code()      SECURITY DEFINER → 8 chars único
 |---------|---|-----------|-----------|
 | `wafinance_otp` | 6 | false | OTP generación/verificación |
 | `wafinance_advisor` | 5 | true | Sugerencias IA para asesor |
-| `task_notifications` | 1 | true | Notif + cron diario 12:00 UTC |
+| `task_notifications` | 1 | true | Notif + cron diario 12:00 UTC. ⚠️ El job usa `app.settings.service_role_key`, **no definido** en la base: manda un Bearer vacío |
 
 ⚠️ **Discrepancia detectada:** Todas las versiones listadas aquí son **mayores** a las de `PESSARO_CRM_INFRASTRUCTURE.md` v1.6. Ejemplos: `market_prices` v25→v27; `crm_send_email` v18→v22; `unified_forms_complete` v45→v47.
 
@@ -684,7 +700,7 @@ Cada asesor pertenece a uno de 3 equipos. Las plantillas de **invitación** est�
 ---
 
 **Documento generado:** 2026-02-25  
-**Última actualización:** 2026-07-02  
+**Última actualización:** 2026-08-13  
 **Versión:** 1.7 — Consolidada (CRM + Website + Educación)  
 **Mantenedor:** Francisco Rojas-Aranda  
 **Próxima revisión recomendada:** Al completar sincronización de mirror, o antes de próximo deploy mayor a main.
