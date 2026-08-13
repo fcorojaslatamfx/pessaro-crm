@@ -1,3 +1,11 @@
+// whatsapp-send v18
+// CAMBIOS v18:
+//  - normalizePhone() pasa a dejar SOLO DIGITOS (antes conservaba el '+').
+//    El formato unico del CRM es sin '+', igual que el que espera Meta y el
+//    que guardan whatsapp_messages/assignments/opt_outs tras la migracion
+//    20260813_telefonos_solo_digitos.sql. Con el formato mezclado, un opt-out
+//    o una asignacion guardados con '+' dejaban de coincidir.
+//
 // whatsapp-send v17
 // Actions: send_text, send_template, send_media, start_chat, sync_templates,
 //          send_campaign, run_due_campaigns
@@ -7,8 +15,9 @@
 //      scheduled_at ya vencido. Lo llama pg_cron cada 5 min con la service role
 //      key. Antes NADA despachaba las campañas programadas: se quedaban en
 //      'scheduled' indefinidamente y el mensaje nunca llegaba.
-//      Se autoriza comparando el bearer contra SUPABASE_SERVICE_ROLE_KEY porque
-//      esa clave no es un JWT de usuario y authenticate() la rechazaría.
+//      Se autoriza con WA_CRON_SECRET en el BODY: la función tiene verify_jwt
+//      activo, así que el bearer debe ser un JWT válido (el cron manda la anon
+//      key) y no puede llevar el secreto.
 //  - runCampaign(): la ejecución de una campaña sale de la action send_campaign
 //      a una función propia, compartida por el disparo manual y por el cron.
 //  - Una campaña sin destinatarios pasa a 'failed' en vez de quedarse en
@@ -76,8 +85,11 @@ function mimeToWhatsappType(mime: string): 'image' | 'document' | null {
 }
 
 function normalizePhone(phone: string): string {
-  // Normaliza '+56 9 7331 2927' -> '+56973312927' para comparación
-  return phone.replace(/[^\d+]/g, '')
+  // Formato único del CRM: sólo dígitos, sin '+' ni espacios.
+  // '+56 9 7331 2927' -> '56973312927'. Es lo que espera Meta y lo que guardan
+  // whatsapp_messages/assignments/opt_outs, así que el mismo número no queda
+  // duplicado según su origen (manual, CSV, landing, webhook).
+  return phone.replace(/\D/g, '')
 }
 
 async function authenticate(supabase: any, req: Request) {
@@ -117,9 +129,9 @@ function json(data: object, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 }
 
-// Número tal como lo espera Meta: solo dígitos
+// Número tal como lo espera Meta: solo dígitos (ya lo es tras normalizePhone)
 function toWaNumber(phone: string): string {
-  return normalizePhone(phone).replace(/\+/g, '')
+  return normalizePhone(phone)
 }
 
 // ── Opt-out ────────────────────────────────────────────────────────────────

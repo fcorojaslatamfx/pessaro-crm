@@ -17,14 +17,12 @@ const C = {
   orange: '#fd9644',
 }
 
-// Normaliza un teléfono para comparar: solo dígitos y +
-// "+56 9 7331 2927" → "+56973312927"
-// "56973312927"     → "+56973312927"  (agrega + si no existe)
+// Formato único del CRM: sólo dígitos, sin '+' ni espacios.
+// "+56 9 7331 2927" → "56973312927"
+// "56973312927"     → "56973312927"
 function normalizePhone(p) {
   if (!p) return ''
-  let clean = String(p).replace(/[^\d+]/g, '')
-  if (!clean.startsWith('+') && clean.length > 0) clean = '+' + clean
-  return clean
+  return String(p).replace(/\D/g, '')
 }
 
 function fmtTime(ts) {
