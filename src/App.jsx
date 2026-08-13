@@ -70,6 +70,32 @@ const ACTIVITY_ICONS = {
   tarea_creada:'📌', tarea_completada:'✅', llamada:'📞',
   asignacion:'👤', otro:'📎',
 }
+const GROUP_COLORS = ['#6c5ce7','#00d084','#ffa502','#2563eb','#e84393','#00b8d4','#f0a500','#636e72']
+
+// Une las fuentes del CRM en una sola línea de tiempo, lo más nuevo primero.
+// La usan tanto la ficha en pantalla como los export a HTML/PDF, para que el
+// documento descargado sea exactamente lo que el asesor vio.
+function buildTimeline(notes,activities,ficha){
+  const ev=[]
+  const push=(ts,icon,tipo,titulo,detalle,color)=>{if(ts)ev.push({ts,icon,tipo,titulo:titulo||'',detalle:detalle||'',color})}
+  for(const n of notes||[])push(n.created_at,'📝','Nota',n.content,'',P.purple)
+  for(const a of activities||[])push(a.created_at,ACTIVITY_ICONS[a.activity_type]||'📎','Actividad',a.description,a.metadata?.source?`Fuente: ${a.metadata.source}`:'',P.orange)
+  const f=ficha||{}
+  for(const m of f.wa||[]){
+    const txt=m.content?.text||m.content?.caption||m.template_name||m.message_type
+    push(m.created_at,m.direction==='inbound'?'📥':'📤','WhatsApp',
+      `${m.direction==='inbound'?'Recibido':'Enviado'}: ${String(txt||'').slice(0,140)}`,
+      m.template_name?`Plantilla ${m.template_name}${m.status?` · ${m.status}`:''}`:(m.status||''),P.green)
+  }
+  if(f.lead)push(f.lead.created_at,'🎯','Lead de campaña',`Registrado como lead${f.lead.etapa?` · etapa ${f.lead.etapa}`:''}`,
+    [f.lead.investment_range&&`Capital: ${f.lead.investment_range}`,f.lead.variant&&`Variante: ${f.lead.variant}`,f.lead.perfil&&`Perfil: ${f.lead.perfil}`].filter(Boolean).join(' · '),P.blue)
+  for(const s of f.subs||[])push(s.submitted_at||s.created_at,'🌐','Formulario web',s.form_type||s.management_type||'Formulario enviado',s.comments||'',P.orange)
+  for(const t of f.tickets||[])push(t.created_at,'🎫','Soporte',`Ticket ${t.ticket_number||''} · ${t.subject||''}`,[t.status,t.category].filter(Boolean).join(' · '),'#00b8d4')
+  for(const t of f.tasks||[])push(t.created_at,t.done?'✅':'📌','Tarea',t.title,[t.priority&&`prioridad ${t.priority}`,t.due_date&&`vence ${String(t.due_date).slice(0,10)}`].filter(Boolean).join(' · '),P.red)
+  if(f.cliente)push(f.cliente.created_at,'👤','Cuenta de cliente',`Cuenta creada${f.cliente.account_status?` · ${f.cliente.account_status}`:''}`,
+    [f.cliente.account_type,f.cliente.risk_tolerance&&`riesgo ${f.cliente.risk_tolerance}`].filter(Boolean).join(' · '),P.purple)
+  return ev.sort((a,b)=>new Date(b.ts)-new Date(a.ts))
+}
 async function logActivity(userId, contactId, activityType, description, metadata={}) {
   if(!contactId||String(contactId).startsWith('sub_'))return
   try{await supabase.from('contact_activity_log').insert({contact_id:contactId,user_id:userId,activity_type:activityType,description,metadata})}
@@ -792,6 +818,70 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[assigneeValue,setAssigneeValue]=useState('')
   const[editingContact,setEditingContact]=useState(null)
   const[editForm,setEditForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo'})
+  // Grupos: el grupo es del asesor que lo crea; el SA ve los de todos (RLS)
+  const[groups,setGroups]=useState([])
+  const[memberships,setMemberships]=useState({})   // contact_id -> [group_id]
+  const[groupFilter,setGroupFilter]=useState('todos')
+  const[showGroups,setShowGroups]=useState(false)
+  const[groupForm,setGroupForm]=useState({name:'',description:'',color:GROUP_COLORS[0]})
+  const[editingGroup,setEditingGroup]=useState(null)
+  const[managingGroup,setManagingGroup]=useState(null) // grupo cuyos miembros se están editando
+  const[groupSearch,setGroupSearch]=useState('')
+  const[confirmDeleteGroup,setConfirmDeleteGroup]=useState(null) // borrar pide confirmación en el propio botón
+  const[groupErr,setGroupErr]=useState('')
+  // Ficha: historial consolidado del contacto (WhatsApp, lead, tickets, tareas, cuenta)
+  const[ficha,setFicha]=useState(null)
+  const[loadingFicha,setLoadingFicha]=useState(false)
+
+  const loadGroups=useCallback(async()=>{
+    try{
+      const[{data:gs},{data:ms}]=await Promise.all([
+        supabase.from('crm_contact_groups').select('*').order('name'),
+        supabase.from('crm_contact_group_members').select('group_id,contact_id'),
+      ])
+      setGroups(gs||[])
+      const map={}
+      for(const m of ms||[])(map[m.contact_id]=map[m.contact_id]||[]).push(m.group_id)
+      setMemberships(map)
+    }catch(e){console.error('loadGroups:',e)}
+  },[])
+
+  useEffect(()=>{loadGroups()},[loadGroups])
+
+  const saveGroup=async()=>{
+    const name=groupForm.name.trim()
+    if(!name){setGroupErr('El nombre es obligatorio');return}
+    setGroupErr('')
+    if(editingGroup){
+      const{error}=await supabase.from('crm_contact_groups')
+        .update({name,description:groupForm.description||null,color:groupForm.color,updated_at:new Date().toISOString()}).eq('id',editingGroup)
+      if(error){setGroupErr(error.message);return}
+    }else{
+      const{error}=await supabase.from('crm_contact_groups')
+        .insert({name,description:groupForm.description||null,color:groupForm.color,user_id:user.id})
+      // 23505 = choca con UNIQUE(user_id,name): el mismo asesor no repite nombre
+      if(error){setGroupErr(error.code==='23505'?'Ya tienes un grupo con ese nombre.':error.message);return}
+    }
+    setGroupForm({name:'',description:'',color:GROUP_COLORS[0]});setEditingGroup(null);loadGroups()
+  }
+
+  const deleteGroup=async(id)=>{
+    const{error}=await supabase.from('crm_contact_groups').delete().eq('id',id)
+    if(error){setGroupErr(error.message);return}
+    if(groupFilter===id)setGroupFilter('todos')
+    if(editingGroup===id){setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0]})}
+    loadGroups()
+  }
+
+  const toggleMember=async(contactId,groupId)=>{
+    const has=(memberships[contactId]||[]).includes(groupId)
+    // Optimista: los chips de la ficha responden sin esperar al round-trip
+    setMemberships(p=>({...p,[contactId]:has?(p[contactId]||[]).filter(g=>g!==groupId):[...(p[contactId]||[]),groupId]}))
+    const{error}=has
+      ?await supabase.from('crm_contact_group_members').delete().eq('group_id',groupId).eq('contact_id',contactId)
+      :await supabase.from('crm_contact_group_members').insert({group_id:groupId,contact_id:contactId,added_by:user.id})
+    if(error){console.error('toggleMember:',error);loadGroups()}
+  }
 
   const load=useCallback(async()=>{
     setLoading(true)
@@ -826,7 +916,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     const ms=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
     const mst=statusFilter==='todos'||(statusFilter==='activos'&&c.status!=='inactivo')||c.status===statusFilter
     const mu=userFilter==='todos'||c.user_id===userFilter
-    return ms&&mst&&mu
+    const mg=groupFilter==='todos'||(memberships[c.id]||[]).includes(groupFilter)
+    return ms&&mst&&mu&&mg
   })
 
   const validate=()=>{
@@ -848,8 +939,45 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     setFormErr({});setTab('lista')
   }
 
+  // Consolida el historial del contacto desde las cuatro fuentes del CRM.
+  // Los teléfonos entran con formatos distintos según su origen (manual, CSV,
+  // landing, webhook), así que WhatsApp se cruza por los últimos 8 dígitos.
+  const loadFicha=async c=>{
+    setFicha(null)
+    if(String(c.id).startsWith('sub_'))return
+    setLoadingFicha(true)
+    try{
+      const tail=(c.phone||'').replace(/\D/g,'').slice(-8)
+      const email=(c.email||'').trim()
+      const[wa,leadById,leadByMail,subs,tkByContact,tkByMail,tasks,cliente]=await Promise.all([
+        tail.length>=8?supabase.from('whatsapp_messages').select('id,direction,message_type,content,template_name,status,created_at').ilike('client_phone',`%${tail}`).order('created_at',{ascending:false}).limit(200):{data:[]},
+        c.lead_id?supabase.from('campaign_leads').select('*').eq('id',c.lead_id).limit(1):{data:[]},
+        email?supabase.from('campaign_leads').select('*').eq('email',email).limit(1):{data:[]},
+        email?supabase.from('contact_submissions').select('*').eq('email',email).order('submitted_at',{ascending:false}):{data:[]},
+        supabase.from('support_tickets').select('*').eq('contact_id',c.id),
+        email?supabase.from('support_tickets').select('*').eq('client_email',email):{data:[]},
+        supabase.from('crm_tasks').select('*').eq('contact_id',c.id).order('created_at',{ascending:false}),
+        email?supabase.from('client_profiles_2026_02_08_22_02').select('*').eq('email',email).limit(1):{data:[]},
+      ])
+      // El mismo ticket puede llegar por contact_id y por email; se deduplica
+      const tickets=[...(tkByContact.data||[]),...(tkByMail.data||[])]
+        .filter((t,i,a)=>a.findIndex(x=>x.id===t.id)===i)
+        .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
+      setFicha({
+        wa:wa.data||[],
+        lead:(leadById.data||[])[0]||(leadByMail.data||[])[0]||null,
+        subs:subs.data||[],
+        tickets,
+        tasks:tasks.data||[],
+        cliente:(cliente.data||[])[0]||null,
+      })
+    }catch(e){console.error('loadFicha:',e)}
+    finally{setLoadingFicha(false)}
+  }
+
   const openContact=async c=>{
     setSelected(c);setNotes([]);setNoteText('');setActivities([])
+    loadFicha(c)
     try{
       let q=supabase.from('crm_notes').select('*').order('created_at',{ascending:false})
       if(c.id.startsWith('sub_')) q=q.eq('contact_submission_id',c.id.replace('sub_',''))
@@ -1097,6 +1225,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       sub={isSuperAdmin?`${filtered.length} de ${contacts.length} · CRM + formularios web`:`${contacts.length} contactos propios`}
       action={<div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
         <Btn variant="ghost" onClick={()=>load()} style={{fontSize:11,padding:'6px 10px'}} title="Recargar contactos">⟳ Recargar</Btn>
+        <Btn variant="ghost" onClick={()=>setShowGroups(true)} style={{fontSize:11,padding:'6px 10px'}} title="Crear y administrar grupos de contactos">🗂 Grupos ({groups.length})</Btn>
         {isSuperAdmin&&<div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
           <Btn variant="ghost" onClick={()=>exportContactsCSV(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ CSV</Btn>
           <Btn variant="ghost" onClick={()=>exportContactsExcel(filtered)} style={{fontSize:11,padding:'6px 10px'}}>⬇ Excel</Btn>
@@ -1252,6 +1381,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:300}}/>
       <Sel value={statusFilter} onChange={setStatusFilter} style={{maxWidth:160}} options={[{value:'todos',label:'Todos (incl. spam)'},{value:'activos',label:'Activos (excl. spam)'},...STATUS_OPT]}/>
       {isSuperAdmin&&staffList.length>0&&<Sel value={userFilter} onChange={setUserFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los asesores'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
+      {groups.length>0&&<Sel value={groupFilter} onChange={setGroupFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los grupos'},...groups.map(g=>({value:g.id,label:`${g.name} (${Object.values(memberships).filter(ids=>ids.includes(g.id)).length})`}))]}/>}
       <Btn variant="ghost" onClick={load} style={{padding:'9px 12px'}}>↺</Btn>
     </div>
 
@@ -1303,6 +1433,82 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       {filtered.length===0&&<div style={{textAlign:'center',padding:48,color:P.muted,fontSize:13}}>{contacts.length===0?'Aún no tienes contactos. Añade uno o importa un CSV.':'Sin resultados.'}</div>}
     </GlassCard>}
 
+    {showGroups&&<Modal title="Grupos de contactos" onClose={()=>{setShowGroups(false);setManagingGroup(null);setEditingGroup(null);setGroupErr('');setGroupForm({name:'',description:'',color:GROUP_COLORS[0]})}}>
+      {managingGroup?(()=>{
+        const g=groups.find(x=>x.id===managingGroup)
+        if(!g)return null
+        // Sólo contactos reales: los formularios web todavía no son crm_contacts
+        const reales=contacts.filter(c=>!String(c.id).startsWith('sub_'))
+        const q=groupSearch.trim().toLowerCase()
+        const lista=q?reales.filter(c=>`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(q)):reales
+        const dentro=reales.filter(c=>(memberships[c.id]||[]).includes(g.id)).length
+        return <div>
+          <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14}}>
+            <Btn variant="ghost" onClick={()=>{setManagingGroup(null);setGroupSearch('')}} style={{fontSize:11,padding:'5px 10px'}}>← Volver</Btn>
+            <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
+            <span style={{fontSize:14,fontWeight:700,color:P.text}}>{g.name}</span>
+            <span style={{fontSize:11,color:P.muted}}>{dentro} de {reales.length} contactos</span>
+          </div>
+          <Input value={groupSearch} onChange={setGroupSearch} placeholder="Buscar contacto para agregar o quitar..." style={{marginBottom:12}}/>
+          <div style={{maxHeight:340,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+            {lista.map(c=>{
+              const on=(memberships[c.id]||[]).includes(g.id)
+              return <button key={c.id} onClick={()=>toggleMember(c.id,g.id)}
+                style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+                  background:on?g.color+'18':'rgba(255,255,255,0.03)',border:`1px solid ${on?g.color+'55':P.border}`}}>
+                <span style={{fontSize:13,color:on?g.color:P.muted,flexShrink:0}}>{on?'☑':'☐'}</span>
+                <span style={{flex:1,minWidth:0}}>
+                  <span style={{display:'block',fontSize:13,color:P.text,fontWeight:600}}>{c.full_name}</span>
+                  <span style={{display:'block',fontSize:11,color:P.muted,fontFamily:'monospace'}}>{c.email}</span>
+                </span>
+              </button>
+            })}
+            {lista.length===0&&<p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'12px 0',margin:0}}>Sin contactos que coincidan.</p>}
+          </div>
+        </div>
+      })():<div>
+        <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:18}}>
+          {groups.map(g=>{
+            const n=Object.values(memberships).filter(ids=>ids.includes(g.id)).length
+            return <div key={g.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10}}>
+              <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{margin:0,fontSize:13,fontWeight:600,color:P.text}}>{g.name}</p>
+                <p style={{margin:'2px 0 0',fontSize:11,color:P.muted}}>
+                  {n} contacto{n!==1?'s':''}{g.description?` · ${g.description}`:''}
+                  {isSuperAdmin&&g.user_id!==user.id?` · ${getAdvisorName(g.user_id)}`:''}
+                </p>
+              </div>
+              <Btn variant="ghost" onClick={()=>setManagingGroup(g.id)} style={{fontSize:11,padding:'5px 10px'}}>Contactos</Btn>
+              <Btn variant="ghost" onClick={()=>{setEditingGroup(g.id);setGroupForm({name:g.name,description:g.description||'',color:g.color})}} style={{fontSize:11,padding:'5px 10px'}}>✏️</Btn>
+              <Btn variant="ghost" onClick={()=>{if(confirmDeleteGroup===g.id)deleteGroup(g.id);else setConfirmDeleteGroup(g.id)}}
+                style={{fontSize:11,padding:'5px 10px',color:confirmDeleteGroup===g.id?P.red:P.muted}}>
+                {confirmDeleteGroup===g.id?'¿Seguro?':'🗑'}
+              </Btn>
+            </div>
+          })}
+          {groups.length===0&&<p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>Todavía no hay grupos. Crea el primero abajo.</p>}
+        </div>
+        <div style={{borderTop:`1px solid ${P.border}`,paddingTop:16}}>
+          <Lbl>{editingGroup?'Editar grupo':'Nuevo grupo'}</Lbl>
+          <Input value={groupForm.name} onChange={v=>setGroupForm(p=>({...p,name:v}))} placeholder="Nombre del grupo" style={{marginBottom:8}}/>
+          <Input value={groupForm.description} onChange={v=>setGroupForm(p=>({...p,description:v}))} placeholder="Descripción (opcional)" style={{marginBottom:10}}/>
+          <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
+            {GROUP_COLORS.map(col=>(
+              <button key={col} onClick={()=>setGroupForm(p=>({...p,color:col}))}
+                style={{width:24,height:24,borderRadius:'50%',background:col,cursor:'pointer',
+                  border:groupForm.color===col?'2px solid #fff':'2px solid transparent'}}/>
+            ))}
+          </div>
+          {groupErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 10px'}}>{groupErr}</p>}
+          <div style={{display:'flex',gap:8}}>
+            <Btn onClick={saveGroup}>{editingGroup?'Guardar cambios':'+ Crear grupo'}</Btn>
+            {editingGroup&&<Btn variant="ghost" onClick={()=>{setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0]});setGroupErr('')}}>Cancelar</Btn>}
+          </div>
+        </div>
+      </div>}
+    </Modal>}
+
     {selected&&<Modal title={selected.full_name} onClose={()=>setSelected(null)}>
       <div>
         <div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap',alignItems:'center'}}>
@@ -1315,6 +1521,31 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             ✏️ Editar
           </button>}
         </div>
+        {!String(selected.id).startsWith('sub_')&&<div style={{marginBottom:18}}>
+          <Lbl>Grupos</Lbl>
+          {groups.length===0?(
+            <p style={{fontSize:11,color:P.muted,fontStyle:'italic',margin:0}}>Aún no hay grupos. Créalos con el botón «Grupos» de arriba.</p>
+          ):(
+            <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+              {groups.map(g=>{
+                const on=(memberships[selected.id]||[]).includes(g.id)
+                return <button key={g.id} onClick={()=>toggleMember(selected.id,g.id)} title={on?'Quitar del grupo':'Agregar al grupo'}
+                  style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,cursor:'pointer',
+                    background:on?g.color+'28':'rgba(255,255,255,0.04)',color:on?g.color:P.muted,
+                    border:`1px solid ${on?g.color+'60':P.border}`}}>
+                  {on?'✓ ':'+ '}{g.name}
+                </button>
+              })}
+            </div>
+          )}
+        </div>}
+        {!String(selected.id).startsWith('sub_')&&<div style={{display:'flex',gap:8,marginBottom:18,flexWrap:'wrap'}}>
+          <Btn variant="ghost" disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px'}}
+            onClick={()=>exportFichaHTML(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName))}>⬇ Ficha HTML</Btn>
+          <Btn disabled={loadingFicha} style={{fontSize:11,padding:'6px 10px',background:'linear-gradient(135deg,#0a1f5c,#2563eb)',color:'#fff',border:'none'}}
+            onClick={()=>exportFichaPDF(buildFichaDoc(selected,groups,memberships,notes,activities,ficha,getAdvisorName),LOGO_URI)}>⬇ Ficha PDF</Btn>
+          {loadingFicha&&<span style={{fontSize:11,color:P.muted,alignSelf:'center'}}>Cargando historial…</span>}
+        </div>}
         {[['Email',selected.email],['Teléfono',selected.phone],['Dirección',selected.address||'—'],['Registro',fmtDate(selected.created_at)]].map(([k,v])=>(
           <div key={k} style={{paddingBottom:12,marginBottom:12,borderBottom:`1px solid ${P.border}`}}>
             <p style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',marginBottom:4,margin:'0 0 4px',fontWeight:600}}>{k}</p>
@@ -1356,27 +1587,48 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         </div>
         {!selected.id.startsWith('sub_')&&(
           <div style={{marginTop:18,borderTop:`1px solid ${P.border}`,paddingTop:16}}>
-            <p style={{fontSize:10,fontWeight:700,color:'#f0a500',textTransform:'uppercase',letterSpacing:'0.10em',margin:'0 0 12px'}}>Historial de Actividades ({activities.length})</p>
-            {loadingActivities?<Spinner/>:activities.length===0?(
-              <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'12px 0',margin:0}}>Sin actividades registradas aún</p>
-            ):(
-              <div style={{maxHeight:220,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
-                {activities.map(a=>(
-                  <div key={a.id} style={{display:'flex',gap:10,padding:'8px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:'1px solid rgba(255,255,255,0.05)'}}>
-                    <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{ACTIVITY_ICONS[a.activity_type]||'📎'}</span>
-                    <div style={{flex:1,minWidth:0}}>
-                      <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.4}}>{a.description}</p>
-                      {a.metadata?.source&&<p style={{fontSize:10,color:P.purple,margin:'2px 0 0'}}>Fuente: {a.metadata.source}</p>}
-                      <p style={{fontSize:10,color:P.muted,margin:'3px 0 0'}}>
-                        {new Date(a.created_at).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})}
-                        {' · '}
-                        {new Date(a.created_at).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}
-                      </p>
-                    </div>
+            {(()=>{
+              const linea=buildTimeline(notes,activities,ficha)
+              const f=ficha||{}
+              const resumen=[
+                ['WhatsApp',(f.wa||[]).length],['Tickets',(f.tickets||[]).length],
+                ['Tareas',(f.tasks||[]).length],['Formularios',(f.subs||[]).length],
+                ['Notas',notes.length],['Actividades',activities.length],
+              ].filter(([,n])=>n>0)
+              return <>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:10,flexWrap:'wrap',margin:'0 0 10px'}}>
+                  <p style={{fontSize:10,fontWeight:700,color:'#f0a500',textTransform:'uppercase',letterSpacing:'0.10em',margin:0}}>Historial completo ({linea.length})</p>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                    {f.lead&&<Badge label="lead de campaña" color={P.blue}/>}
+                    {f.cliente&&<Badge label="cuenta de cliente" color={P.purple}/>}
                   </div>
-                ))}
-              </div>
-            )}
+                </div>
+                {resumen.length>0&&<p style={{fontSize:11,color:P.muted,margin:'0 0 10px'}}>
+                  {resumen.map(([k,n])=>`${n} ${k.toLowerCase()}`).join(' · ')}
+                </p>}
+                {(loadingActivities||loadingFicha)?<Spinner/>:linea.length===0?(
+                  <p style={{fontSize:12,color:P.muted,fontStyle:'italic',padding:'12px 0',margin:0}}>Sin historial registrado aún</p>
+                ):(
+                  <div style={{maxHeight:300,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
+                    {linea.map((e,i)=>(
+                      <div key={i} style={{display:'flex',gap:10,padding:'8px 10px',background:'rgba(255,255,255,0.03)',borderRadius:8,border:'1px solid rgba(255,255,255,0.05)',borderLeft:`3px solid ${e.color}`}}>
+                        <span style={{fontSize:15,flexShrink:0,marginTop:1}}>{e.icon}</span>
+                        <div style={{flex:1,minWidth:0}}>
+                          <p style={{fontSize:10,color:e.color,margin:'0 0 2px',fontWeight:700,textTransform:'uppercase',letterSpacing:'0.06em'}}>{e.tipo}</p>
+                          <p style={{fontSize:12,color:P.text,margin:'0 0 2px',lineHeight:1.4,wordBreak:'break-word'}}>{e.titulo}</p>
+                          {e.detalle&&<p style={{fontSize:10,color:P.muted,margin:'2px 0 0'}}>{e.detalle}</p>}
+                          <p style={{fontSize:10,color:P.muted,margin:'3px 0 0'}}>
+                            {new Date(e.ts).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})}
+                            {' · '}
+                            {new Date(e.ts).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            })()}
           </div>
         )}
       </div>
@@ -3163,6 +3415,149 @@ tr:last-child td{border-bottom:none}
 }
 
 // ─── REPORTS ──────────────────────────────────────────────────────────────────
+// ─── FICHA DEL CONTACTO: documento exportable ────────────────────────────────
+// Arma el objeto que alimenta tanto la descarga HTML como la vista de impresión,
+// para que ambos salgan idénticos a lo que se ve en pantalla.
+function buildFichaDoc(c,groups,memberships,notes,activities,ficha,getAdvisorName){
+  const f=ficha||{}
+  const misGrupos=(groups||[]).filter(g=>(memberships[c.id]||[]).includes(g.id))
+  return {
+    contacto:{
+      nombre:c.full_name||'—', email:c.email||'—', telefono:c.phone||'—',
+      direccion:c.address||'—', estado:c.status||'—', origen:c.source||'crm',
+      creado:c.created_at||null, asesor:c.user_id?getAdvisorName(c.user_id):'Sin asignar',
+    },
+    grupos:misGrupos.map(g=>({name:g.name,color:g.color})),
+    resumen:{
+      whatsapp:(f.wa||[]).length, tickets:(f.tickets||[]).length, tareas:(f.tasks||[]).length,
+      formularios:(f.subs||[]).length, notas:(notes||[]).length, actividades:(activities||[]).length,
+    },
+    lead:f.lead||null, cliente:f.cliente||null,
+    linea:buildTimeline(notes,activities,ficha),
+  }
+}
+
+function fichaHTMLDoc(doc,logoUri,standalone){
+  const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+  const now=new Date().toLocaleString('es-CL',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})
+  const fd=v=>v?new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}):'—'
+  const fdt=v=>v?`${new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})} · ${new Date(v).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}`:''
+  const k=doc.contacto
+  const datos=[['Email',k.email],['Teléfono',k.telefono],['Dirección',k.direccion],['Estado',k.estado],
+    ['Origen',k.origen],['Asesor',k.asesor],['Registro',fd(k.creado)]]
+    .map(([l,v])=>`<div class="d"><div class="d-l">${esc(l)}</div><div class="d-v">${esc(v)}</div></div>`).join('')
+  const chips=doc.grupos.length
+    ?doc.grupos.map(g=>`<span class="chip" style="background:${esc(g.color)}22;color:${esc(g.color)};border-color:${esc(g.color)}55">${esc(g.name)}</span>`).join('')
+    :'<span class="none">Sin grupos asignados</span>'
+  const kpis=Object.entries(doc.resumen).filter(([,n])=>n>0)
+    .map(([l,n])=>`<div class="kpi"><div class="kpi-lbl">${esc(l)}</div><div class="kpi-val">${n}</div></div>`).join('')
+  const eventos=doc.linea.length
+    ?doc.linea.map(e=>`<div class="ev" style="border-left-color:${esc(e.color)}">
+        <div class="ev-i">${e.icon}</div>
+        <div class="ev-b">
+          <div class="ev-t" style="color:${esc(e.color)}">${esc(e.tipo)}</div>
+          <div class="ev-x">${esc(e.titulo)}</div>
+          ${e.detalle?`<div class="ev-d">${esc(e.detalle)}</div>`:''}
+          <div class="ev-f">${esc(fdt(e.ts))}</div>
+        </div></div>`).join('')
+    :'<p class="none">Sin historial registrado.</p>'
+  const bloque=(titulo,pares)=>{
+    const items=pares.filter(([,v])=>v!==null&&v!==undefined&&v!=='').map(([l,v])=>`<div class="d"><div class="d-l">${esc(l)}</div><div class="d-v">${esc(v)}</div></div>`).join('')
+    return items?`<h2>${esc(titulo)}</h2><div class="grid">${items}</div>`:''
+  }
+  const lead=doc.lead?bloque('Lead de campaña',[['Etapa',doc.lead.etapa],['Capital declarado',doc.lead.investment_range],
+    ['Variante',doc.lead.variant],['Perfil',doc.lead.perfil],['Equipo',doc.lead.team],['Origen',doc.lead.source],
+    ['Cupo',doc.lead.cupo_confirmed?`#${doc.lead.cupo_number||''}`:null],['Registro',fd(doc.lead.created_at)]]):''
+  const cli=doc.cliente?bloque('Cuenta de cliente',[['Estado',doc.cliente.account_status],['Tipo',doc.cliente.account_type],
+    ['Tolerancia al riesgo',doc.cliente.risk_tolerance],['Experiencia',doc.cliente.experience_level],
+    ['Capital',doc.cliente.investment_capital],['Horizonte',doc.cliente.investment_horizon],
+    ['País',doc.cliente.country],['Alta',fd(doc.cliente.created_at)]]):''
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Ficha — ${esc(k.nombre)} — Pessaro Capital</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',sans-serif;background:#f0f4f8;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.toolbar{background:#050816;padding:14px 32px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.08)}
+.brand{display:flex;align-items:center;gap:12px}.brand img{width:36px;height:36px;border-radius:8px}
+.brand strong{color:#fff;font-size:14px;display:block}.brand small{color:#94a3b8;font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
+.btns{display:flex;gap:10px}.btn{border:none;cursor:pointer;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;padding:9px 18px;border-radius:9px}
+.btn-p{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.35)}
+.btn-g{background:rgba(255,255,255,.06);color:#e6ecff;border:1px solid rgba(255,255,255,.14)}
+@media print{.toolbar{display:none!important}body{background:#fff}.wrap{margin:0;padding:0}.card{border-radius:0;box-shadow:none}.ev{break-inside:avoid}}
+.wrap{max-width:900px;margin:24px auto 48px;padding:0 20px}
+.card{background:#fff;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.18);overflow:hidden}
+.band{background:linear-gradient(135deg,#050816 0%,#0a1f5c 40%,#1e3a8a 70%,#2563eb 100%);padding:24px 40px;display:flex;align-items:center;gap:16px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.band-logo{width:48px;height:48px;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.2)}
+.band-logo img{width:100%;height:100%;object-fit:cover}
+.band h1{font-size:20px;font-weight:700;color:#fff}.band-sub{color:#b9c5e6;font-size:12px;margin-top:2px}
+.gold{height:4px;background:linear-gradient(135deg,#b8860b,#d4af37,#fbbf24);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.body{padding:28px 40px 24px}
+h2{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#64748b;font-weight:700;margin:24px 0 10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0}
+h2:first-of-type{margin-top:0}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
+.d{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px}
+.d-l{font-size:9px;letter-spacing:1.2px;text-transform:uppercase;color:#94a3b8;font-weight:600;margin-bottom:3px}
+.d-v{font-size:13px;color:#1e293b;font-weight:500;word-break:break-word}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{font-size:11px;font-weight:600;padding:4px 12px;border-radius:20px;border:1px solid}
+.none{font-size:12px;color:#94a3b8;font-style:italic}
+.kpis{display:flex;gap:10px;flex-wrap:wrap}
+.kpi{flex:1;min-width:90px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center}
+.kpi-lbl{font-size:9px;letter-spacing:1.2px;text-transform:uppercase;font-weight:600;color:#64748b;margin-bottom:4px}
+.kpi-val{font-size:20px;font-weight:800;color:#0a1f5c}
+.ev{display:flex;gap:12px;padding:10px 14px;background:#fff;border:1px solid #f1f5f9;border-left:3px solid #cbd5e1;border-radius:8px;margin-bottom:6px}
+.ev-i{font-size:16px;flex-shrink:0}
+.ev-b{flex:1;min-width:0}
+.ev-t{font-size:9px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;margin-bottom:2px}
+.ev-x{font-size:13px;color:#1e293b;line-height:1.5;word-break:break-word}
+.ev-d{font-size:11px;color:#64748b;margin-top:2px}
+.ev-f{font-size:10px;color:#94a3b8;margin-top:4px}
+.disc{margin-top:20px;padding:10px 14px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;font-size:10px;color:#78350f;line-height:1.6;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.foot{margin-top:20px;padding-top:12px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center}
+.foot-brand{display:flex;align-items:center;gap:8px}.foot-brand img{width:22px;height:22px;border-radius:4px}
+.foot-brand span{font-size:11px;color:#94a3b8}.foot-note{font-size:10px;color:#cbd5e1;text-align:right;line-height:1.6}
+</style></head><body>
+<div class="toolbar">
+  <div class="brand"><img src="${logoUri}" alt="Pessaro"><div><strong>Pessaro Capital</strong><small>CRM Interno</small></div></div>
+  <div class="btns"><button class="btn btn-p" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>${standalone?'':'<button class="btn btn-g" onclick="window.close()">✕ Cerrar</button>'}</div>
+</div>
+<div class="wrap"><div class="card">
+  <div class="band">
+    <div class="band-logo"><img src="${logoUri}" alt="Pessaro"></div>
+    <div><h1>${esc(k.nombre)}</h1><div class="band-sub">Ficha de contacto · ${esc(k.estado)} · Generada ${esc(now)}</div></div>
+  </div>
+  <div class="gold"></div>
+  <div class="body">
+    <h2>Datos del contacto</h2><div class="grid">${datos}</div>
+    <h2>Grupos</h2><div class="chips">${chips}</div>
+    ${kpis?`<h2>Resumen del historial</h2><div class="kpis">${kpis}</div>`:''}
+    ${lead}
+    ${cli}
+    <h2>Historial completo (${doc.linea.length})</h2>
+    ${eventos}
+    <div class="disc"><strong>Confidencial.</strong> Este documento contiene datos personales de un contacto de Pessaro Capital SpA y su historial comercial. Su uso está restringido al personal autorizado del CRM. No lo distribuyas fuera de la organización.</div>
+    <div class="foot">
+      <div class="foot-brand"><img src="${logoUri}" alt="Pessaro"><span>Pessaro Capital SpA · pessaro.cl</span></div>
+      <div class="foot-note">Generado desde el CRM el ${esc(now)}<br>Asesor responsable: ${esc(k.asesor)}</div>
+    </div>
+  </div>
+</div></div>
+</body></html>`
+}
+
+function exportFichaHTML(doc){
+  const html=fichaHTMLDoc(doc,LOGO_URI,true)
+  const slug=String(doc.contacto.nombre||'contacto').normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-zA-Z0-9]+/g,'_').replace(/^_|_$/g,'')
+  const a=document.createElement('a')
+  const url=URL.createObjectURL(new Blob([html],{type:'text/html;charset=utf-8'}))
+  a.href=url;a.download=`Ficha_${slug}_${new Date().toISOString().slice(0,10)}.html`;a.click()
+  URL.revokeObjectURL(url)
+}
+
+function exportFichaPDF(doc,logoUri){
+  const w=window.open('','_blank')
+  if(!w)return
+  w.document.write(fichaHTMLDoc(doc,logoUri,false));w.document.close()
+}
+
 function Reports({contacts,leads,isSuperAdmin}){
   const closed=leads.filter(l=>l.etapa===5).length
   const totalCap=contacts.reduce((s,c)=>s+(Number(c.investment_capital||c._capital)||0),0)

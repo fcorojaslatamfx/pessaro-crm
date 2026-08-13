@@ -161,6 +161,23 @@ CREATE POLICY "Staff can read config" ON whatsapp_config
 **JWT:** `verify_jwt: false` (Meta no envía JWT)
 **Archivo:** `index.ts`
 
+> ⚠️ **El código de abajo es el diseño original.** La versión viva es
+> `supabase/functions/whatsapp-webhook/index.ts` (**v14**, desplegada 2026-08-12).
+> Cambios posteriores a este listado:
+> - **v13**: descarga de media inbound (image/document/video/audio) a Storage y push notifications fan-out.
+> - **v14**: eventos de plantilla `message_template_status_update` y `template_category_update`.
+>   Van en su propio `change` (sin `messages` ni `statuses`), así que se atienden antes del bloque
+>   de mensajes. El payload **no trae `components`**, por eso el handler relee la plantilla completa
+>   por su `message_template_id` antes del upsert; sin eso una plantilla recién aprobada entraría
+>   con `body_text` vacío y `variables_count = 0`, y el envío fallaría por parámetros faltantes.
+>   El estado del evento pisa al de la relectura, porque la API de lectura de Meta a veces todavía
+>   devuelve `PENDING` cuando el evento ya dice `APPROVED`.
+>
+> **Configuración obligatoria en Meta**: suscribir el campo `message_template_status_update`
+> (y opcionalmente `template_category_update`) en App → WhatsApp → Configuración → Webhooks →
+> Administrar. Sin esa casilla Meta nunca envía el evento y el catálogo sólo se refresca con el
+> auto-sync del `TemplatePicker` (super_admin, al abrir, si tiene más de 30 min).
+
 ```typescript
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
@@ -306,6 +323,24 @@ serve(async (req) => {
 
 **Nombre de función:** `whatsapp-send`
 **JWT:** `verify_jwt: true` (solo usuarios autenticados del CRM)
+
+> ⚠️ **El código de abajo es el diseño original.** La versión viva es
+> `supabase/functions/whatsapp-send/index.ts` (**v16**, desplegada 2026-08-12), con seis actions:
+> `send_text`, `send_template`, `send_media`, `start_chat`, `sync_templates` y `send_campaign`.
+> Lo que no aparece en este listado:
+> - **v13**: ownership de chat (asesor sólo escribe en chats asignados) y `start_chat`.
+> - **v14**: `sync_templates` — trae el catálogo desde `GET /{WABA_ID}/message_templates` con
+>   paginación y lo refleja en `whatsapp_templates`. Las que ya no existen en Meta se marcan
+>   `status='DELETED'` en vez de borrarse, por la FK de `whatsapp_campaigns.template_id`.
+>   Requiere el secret `WA_WABA_ID`. Sólo super_admin.
+> - **v15**: opt-out en backend (ninguna action envía a un número en `whatsapp_opt_outs`),
+>   componente `header` de imagen armado desde el catálogo, y `send_campaign`.
+> - **v16**: `send_campaign` acepta `target_filter.contact_group_id` y arma los destinatarios desde
+>   `crm_contact_group_members → crm_contacts` en vez de `campaign_leads`. Excluyente con los
+>   filtros de variante/etapa, que sólo existen en `campaign_leads`. En ese modo
+>   `whatsapp_messages.lead_id` va **nulo**: su FK apunta a `campaign_leads` y el id del contacto
+>   no vive ahí. Dedup por teléfono, exclusión de bajas y tope de 1000 destinatarios aplican igual
+>   en ambos modos. Lanzar campañas sigue siendo exclusivo de super_admin.
 
 ```typescript
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"

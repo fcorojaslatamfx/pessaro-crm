@@ -80,6 +80,8 @@ export default function CampaignSender({ user }) {
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
 
+  const [contactGroups, setContactGroups] = useState([])
+
   const [form, setForm] = useState({
     name: '',
     template_id: '',
@@ -88,6 +90,7 @@ export default function CampaignSender({ user }) {
     etapas: [],
     scheduled_at: '',
     header_image_url: '',
+    contact_group_id: '',   // vacío = campaign_leads; con valor = grupo de contactos
   })
 
   const tplSeleccionada = templates.find(t => t.id === form.template_id)
@@ -98,10 +101,16 @@ export default function CampaignSender({ user }) {
       supabase.from('whatsapp_templates').select('*').eq('status', 'APPROVED'),
       supabase.from('campaigns').select('id,name').order('name'),
       supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false }),
-    ]).then(([t, c, wc]) => {
+      supabase.from('crm_contact_groups').select('id,name,color').order('name'),
+      supabase.from('crm_contact_group_members').select('group_id'),
+    ]).then(([t, c, wc, g, gm]) => {
       setTemplates(t.data || [])
       setCampaigns(c.data || [])
       setWaCampaigns(wc.data || [])
+      // El conteo va acá y no en la base para no agregar una vista sólo por esto
+      const counts = {}
+      for (const m of gm.data || []) counts[m.group_id] = (counts[m.group_id] || 0) + 1
+      setContactGroups((g.data || []).map(x => ({ ...x, count: counts[x.id] || 0 })))
       if ((t.data || []).length > 0) setForm(f => ({ ...f, template_id: t.data[0].id }))
       setLoading(false)
     })
@@ -127,9 +136,15 @@ export default function CampaignSender({ user }) {
     setSending(true)
     setResult(null)
 
+    // Un grupo de contactos y los filtros de lead son excluyentes: el grupo
+    // apunta a crm_contacts y variant/etapa sólo existen en campaign_leads.
     const targetFilter = {}
-    if (form.variant_key) targetFilter.variant = form.variant_key
-    if (form.etapas.length) targetFilter.etapa = form.etapas
+    if (form.contact_group_id) {
+      targetFilter.contact_group_id = form.contact_group_id
+    } else {
+      if (form.variant_key) targetFilter.variant = form.variant_key
+      if (form.etapas.length) targetFilter.etapa = form.etapas
+    }
 
     const { data: wc, error: wcErr } = await supabase.from('whatsapp_campaigns').insert({
       name: form.name,
@@ -161,7 +176,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '' })
         // Reload
         const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
         setWaCampaigns(wcs || [])
@@ -234,17 +249,33 @@ export default function CampaignSender({ user }) {
             )}
 
             <div>
+              <Lbl>Destinatarios</Lbl>
+              <Sel value={form.contact_group_id} onChange={v => setForm(f => ({ ...f, contact_group_id: v }))}
+                options={[
+                  { value: '', label: 'Leads de campaña (filtrados abajo)' },
+                  ...contactGroups.map(g => ({ value: g.id, label: `Grupo: ${g.name} (${g.count} contacto${g.count !== 1 ? 's' : ''})` })),
+                ]} />
+              <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0' }}>
+                {form.contact_group_id
+                  ? 'Se enviará a los contactos del grupo. Los filtros de lead no aplican.'
+                  : contactGroups.length === 0
+                    ? 'Aún no hay grupos de contactos. Créalos en el módulo Contactos.'
+                    : 'También puedes enviar a un grupo de contactos del CRM.'}
+              </p>
+            </div>
+
+            <div>
               <Lbl>Campaña CRM (opcional)</Lbl>
               <Sel value={form.campaign_id} onChange={v => setForm(f => ({ ...f, campaign_id: v }))}
                 options={[{ value: '', label: 'Sin campaña específica' }, ...campaigns.map(c => ({ value: c.id, label: c.name }))]} />
             </div>
 
-            <div>
+            {!form.contact_group_id && <div>
               <Lbl>Variante (opcional)</Lbl>
               <Input value={form.variant_key} onChange={v => setForm(f => ({ ...f, variant_key: v }))} placeholder="ej: minimalist, navy…" />
-            </div>
+            </div>}
 
-            <div>
+            {!form.contact_group_id && <div>
               <Lbl>Filtrar por etapa de lead</Lbl>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {[1, 2, 3, 4, 5].map(n => {
@@ -264,7 +295,7 @@ export default function CampaignSender({ user }) {
                 })}
               </div>
               <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0' }}>Sin selección = todos los leads</p>
-            </div>
+            </div>}
 
             <div>
               <Lbl>Programar envío (opcional)</Lbl>

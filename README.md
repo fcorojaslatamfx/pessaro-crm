@@ -112,7 +112,17 @@ Los secretos de servidor (`WA_PERMANENT_TOKEN`, `WA_VERIFY_TOKEN`, `SUPABASE_SER
 
 ## Estado actual / trabajo reciente
 
-El repo está en desarrollo activo. Los commits más recientes (`git log`) se concentran en el **módulo de Soporte (Tickets con verificación OTP)**, lanzado el 2026-07-21 y todavía en ajustes:
+El repo está en desarrollo activo.
+
+**2026-08-12 — WhatsApp: plantillas y campañas por grupo; Contactos: grupos y ficha.**
+
+1. `fix(wa): la plantilla aprobada en Meta ya no se queda fuera del CRM` — el catálogo `whatsapp_templates` sólo se refrescaba con un sync manual cuyo botón estaba sin commitear, así que en producción no había forma de actualizarlo. `whatsapp-webhook` v14 procesa ahora `message_template_status_update` y `template_category_update` (relee la plantilla completa por su id, porque el evento no trae `components`), y el `TemplatePicker` hace auto-sync al abrir si el catálogo tiene más de 30 min. **Requiere suscribir `message_template_status_update` en Meta App → WhatsApp → Webhooks.**
+2. `feat(contactos): grupos + ficha con historial consolidado` — nuevas tablas `crm_contact_groups` y `crm_contact_group_members` (grupo del asesor, super_admin ve todos), filtro por grupo y panel de miembros. La ficha del contacto consolida en una línea de tiempo única las notas, `contact_activity_log`, WhatsApp, leads de campaña, formularios web, tickets, tareas y cuenta de cliente, y se exporta a HTML y PDF (patrón `@media print`, sin dependencias nuevas).
+3. `whatsapp-send` v16 — `send_campaign` acepta `target_filter.contact_group_id` para enviar a un grupo de contactos en vez de a `campaign_leads`.
+
+Pendientes conocidos de este bloque: lanzar campañas sigue siendo exclusivo de super_admin, y los `contact_submissions` (formularios web) no se pueden agrupar hasta convertirlos en contactos.
+
+**2026-07-21 — Módulo de Soporte (Tickets con verificación OTP)**, todavía en ajustes:
 
 1. `feat(soporte): modulo de tickets de soporte con verificacion OTP` — alta del módulo (portal + inbox + Edge Functions).
 2. `feat(soporte): integracion portal cliente <-> CRM (SPEC S10, sin OTP)` — reforzó la integración portal↔CRM.

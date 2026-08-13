@@ -1,5 +1,13 @@
-// whatsapp-send v15
+// whatsapp-send v16
 // Actions: send_text, send_template, send_media, start_chat, sync_templates, send_campaign
+//
+// CAMBIOS v16:
+//  - send_campaign acepta target_filter.contact_group_id: los destinatarios
+//      salen de un grupo de contactos del CRM (crm_contacts vía
+//      crm_contact_group_members) en vez de campaign_leads. Excluyente con los
+//      filtros de variante/etapa, que sólo existen en campaign_leads.
+//      En ese modo whatsapp_messages.lead_id va nulo (su FK apunta a
+//      campaign_leads y el id del contacto no vive ahí).
 //
 // CAMBIOS v15:
 //  - OPT-OUT: ninguna action envía a un número presente en whatsapp_opt_outs.
@@ -564,14 +572,33 @@ serve(async (req) => {
       }
 
       // 2) Destinatarios según target_filter
-      let q = supabase.from('campaign_leads').select('id, full_name, phone, variant, etapa').not('phone', 'is', null)
+      //    Dos orígenes posibles y excluyentes:
+      //      - contact_group_id → contactos de un grupo del CRM (crm_contacts)
+      //      - resto de filtros  → leads de campaña (campaign_leads)
       const tf = wc.target_filter || {}
-      if (tf.variant) q = q.eq('variant', tf.variant)
-      if (Array.isArray(tf.etapa) && tf.etapa.length) q = q.in('etapa', tf.etapa)
-      if (wc.campaign_id) q = q.eq('campaign_id', wc.campaign_id)
+      const fromGroup = !!tf.contact_group_id
+      let leads: any[] | null = null
+      let leadsErr: any = null
 
-      const { data: leads, error: leadsErr } = await q
-      if (leadsErr) return json({ error: `Error cargando leads: ${leadsErr.message}` }, 500)
+      if (fromGroup) {
+        // Va con service role, así que RLS no aplica; el permiso ya se validó
+        // arriba (send_campaign es sólo super_admin).
+        const { data, error } = await supabase
+          .from('crm_contact_group_members')
+          .select('crm_contacts(id, full_name, phone)')
+          .eq('group_id', tf.contact_group_id)
+        leadsErr = error
+        leads = (data || []).map((r: any) => r.crm_contacts).filter((c: any) => c && c.phone)
+      } else {
+        let q = supabase.from('campaign_leads').select('id, full_name, phone, variant, etapa').not('phone', 'is', null)
+        if (tf.variant) q = q.eq('variant', tf.variant)
+        if (Array.isArray(tf.etapa) && tf.etapa.length) q = q.in('etapa', tf.etapa)
+        if (wc.campaign_id) q = q.eq('campaign_id', wc.campaign_id)
+        const r = await q
+        leads = r.data
+        leadsErr = r.error
+      }
+      if (leadsErr) return json({ error: `Error cargando destinatarios: ${leadsErr.message}` }, 500)
 
       // 3) Dedup por teléfono normalizado — un mismo número puede estar en
       //    varios leads y no queremos mandarle el mismo mensaje dos veces.
@@ -636,7 +663,9 @@ serve(async (req) => {
               template_name:   tpl.template_name,
               content:         { template_name: tpl.template_name, components },
               status:          'sent',
-              lead_id:         lead.id,
+              // lead_id tiene FK contra campaign_leads: en un envío por grupo el
+              // id es de crm_contacts y el insert fallaría.
+              lead_id:         fromGroup ? null : lead.id,
               campaign_id:     wc.campaign_id || null,
               wa_campaign_id:  wa_campaign_id,
             })

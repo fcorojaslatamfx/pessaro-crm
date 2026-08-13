@@ -85,6 +85,9 @@ ldlflxujrjihiybrcree
 | `campaign_leads` | id, phone, email, source, status, campaign_id | Leads de campañas (WhatsApp + emails) |
 | `crm_notes` | id, contact_id, content, created_by, created_at | Notas dinámicas sobre contactos |
 | `crm_staff_profiles` | id, user_id, display_name, role, referral_code, team_id, pessaro_email, phone | Perfiles de staff (asesor, admin, super_admin) |
+| `crm_contact_groups` 🆕 2026-08-12 | id, name, description, color, user_id, UNIQUE(user_id,name) | Grupos de contactos por asesor (super_admin ve todos) |
+| `crm_contact_group_members` 🆕 2026-08-12 | group_id, contact_id, added_by, added_at (PK compuesta) | Pertenencia N:N de `crm_contacts` a grupos |
+| `contact_activity_log` | id, contact_id, user_id, activity_type, description, metadata | Bitácora por contacto; alimenta la ficha |
 
 #### Campañas
 | Tabla | Columnas clave | Propósito |
@@ -150,6 +153,14 @@ siguiendo el patrón de whatsapp-attachments.
 crm_contacts:
 ├─ SELECT:  auth.uid() = user_id (solo su propios contactos)
 └─ INSERT:  auth.uid() = user_id (solo puede crear para sí mismo)
+
+crm_contact_groups: (NUEVO 2026-08-12)
+├─ SELECT/INSERT/UPDATE/DELETE: auth.uid() = user_id OR is_super_admin()
+└─ Efecto:  El grupo es del asesor que lo crea; el SA ve y administra los de todos.
+
+crm_contact_group_members: (NUEVO 2026-08-12)
+├─ ALL:     EXISTS (grupo padre visible para auth.uid() OR is_super_admin())
+└─ Efecto:  La membresía hereda el permiso del grupo: si ves el grupo, editas quién está dentro.
 
 email_tracking: (ACTUALIZADO 2026-06-24)
 ├─ SELECT:  is_super_admin() OR sent_by = auth.uid()
