@@ -1,3 +1,9 @@
+// whatsapp-webhook v15
+// Cambios respecto a v14:
+//   - client_phone se guarda SOLO EN DIGITOS. Antes se anteponia '+' a msg.from,
+//     lo que dejaba el sistema en dos formatos incompatibles con el CRM.
+//     Ver migracion 20260813_telefonos_solo_digitos.sql.
+//
 // whatsapp-webhook v14
 // Cambios respecto a v13:
 //   - Plantillas en tiempo real: se procesan los eventos
@@ -348,7 +354,10 @@ serve(async (req) => {
       if (changes.messages?.length) {
         for (const msg of changes.messages) {
           const fromPhone = msg.from
-          const clientPhone = `+${fromPhone}`
+          // Meta ya manda sólo dígitos. Antes se le anteponía '+' y ese era el
+          // formato guardado en todo el sistema; ahora el formato único del CRM
+          // es sólo dígitos, así que se guarda tal cual llega.
+          const clientPhone = String(fromPhone).replace(/\D/g, '')
           const contactName = changes.contacts?.[0]?.profile?.name || ''
 
           let contentData: Record<string, unknown> = {}

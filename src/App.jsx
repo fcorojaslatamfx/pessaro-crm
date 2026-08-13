@@ -117,6 +117,11 @@ const TEMPLATES=[
 const fmt    = n => new Intl.NumberFormat('es-CL',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n||0)
 const fmtDate= d => d ? new Date(d).toLocaleDateString('es-CL') : '—'
 const uid    = () => Math.random().toString(36).slice(2,9)
+// Formato único de móvil en todo el CRM: sólo dígitos, sin '+' ni espacios.
+// Es el formato que espera Meta y el que usan las claves de WhatsApp
+// (whatsapp_messages/assignments/opt_outs), así que evita que el mismo número
+// quede duplicado según de dónde venga (manual, CSV, landing, webhook).
+const soloDigitos = v => String(v ?? '').replace(/\D/g, '')
 
 // ─── BASE COMPONENTS ──────────────────────────────────────────────────────────
 function Badge({label,color}){
@@ -977,14 +982,15 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     const e={}
     if(!form.full_name.trim())e.full_name='Obligatorio'
     if(!form.email.trim()||!form.email.includes('@'))e.email='Email válido obligatorio'
-    if(!form.phone.trim())e.phone='Obligatorio'
+    if(!soloDigitos(form.phone))e.phone='Indica el móvil en dígitos (ej: 56912345678)'
     setFormErr(e); return !Object.keys(e).length
   }
 
   const saveContact=async()=>{
     if(!validate())return
     setSaving(true)
-    const{data,error}=await supabase.from('crm_contacts').insert({...form,user_id:user.id,source:'manual'}).select().single()
+    const{data,error}=await supabase.from('crm_contacts')
+      .insert({...form,phone:soloDigitos(form.phone),user_id:user.id,source:'manual'}).select().single()
     setSaving(false)
     if(error){setFormErr({email:error.message});return}
     setContacts(p=>[data,...p])
@@ -1178,6 +1184,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     const nn=v=>{const s=typeof v==='string'?v.trim():v; return s===''||s===undefined?null:s}
     const payload={
       ...editForm,
+      phone:soloDigitos(editForm.phone),
       birth_date:nn(editForm.birth_date),
       account_opened_at:nn(editForm.account_opened_at),
       account_kind:nn(editForm.account_kind),
@@ -1255,7 +1262,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       const cols=parseLine(line)
       const n=cols[ni]||''
       const e=(cols[ei]||'').toLowerCase()
-      const p=cols[pi]||''
+      // El CSV puede traer '+56 9 1234 5678'; se guarda siempre en dígitos
+      const p=soloDigitos(cols[pi]||'')
       if(!n||!e||!p){errs.push(`Fila ${i+2}: faltan campos requeridos`);return}
       rows.push({
         full_name:n,
@@ -1388,7 +1396,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     {tab==='nuevo'&&<GlassCard accent={P.purple} style={{marginBottom:20}}>
       <p style={{fontWeight:700,color:P.text,marginBottom:18,margin:'0 0 18px'}}>Nuevo contacto</p>
       <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14}}>
-        {[['full_name','Nombre completo *','Juan García'],['email','Email *','juan@empresa.com'],['phone','Teléfono *','+56 9...']].map(([f,l,p])=>(
+        {[['full_name','Nombre completo *','Juan García'],['email','Email *','juan@empresa.com'],['phone','Móvil *','56912345678']].map(([f,l,p])=>(
           <div key={f}>
             <Lbl>{l}</Lbl>
             <Input value={form[f]} onChange={v=>setForm(x=>({...x,[f]:v}))} placeholder={p} type={f==='email'?'email':'text'}
@@ -1413,9 +1421,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       <p style={{fontWeight:700,color:P.text,marginBottom:6,margin:'0 0 6px'}}>Importar contactos (CSV o TXT)</p>
       <p style={{fontSize:12,color:P.muted,marginBottom:14,margin:'0 0 14px'}}>Columnas requeridas: <strong style={{color:P.text}}>nombre, correo, telefono</strong> · opcionales: <strong style={{color:P.text}}>direccion, notas</strong>. Separador detectado automáticamente (coma, tab, punto y coma).</p>
       <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
-        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion,notas\nJuan García,juan@ejemplo.com,+56 9 1234 5678,Av. Ejemplo 123,Cliente referido\nMaría López,maria@ejemplo.com,+56 9 8765 4321,,Interesada en PAMM');a.download='plantilla_contactos.csv';a.click()}}
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/csv;charset=utf-8,'+encodeURIComponent('nombre,correo,telefono,direccion,notas\nJuan García,juan@ejemplo.com,56912345678,Av. Ejemplo 123,Cliente referido\nMaría López,maria@ejemplo.com,56987654321,,Interesada en PAMM');a.download='plantilla_contactos.csv';a.click()}}
           style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla CSV</button>
-        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent('nombre\tcorreo\ttelefono\tdireccion\tnotas\nJuan García\tjuan@ejemplo.com\t+56 9 1234 5678\tAv. Ejemplo 123\tCliente referido\nMaría López\tmaria@ejemplo.com\t+56 9 8765 4321\t\tInteresada en PAMM');a.download='plantilla_contactos.txt';a.click()}}
+        <button onClick={()=>{const a=document.createElement('a');a.href='data:text/plain;charset=utf-8,'+encodeURIComponent('nombre\tcorreo\ttelefono\tdireccion\tnotas\nJuan García\tjuan@ejemplo.com\t56912345678\tAv. Ejemplo 123\tCliente referido\nMaría López\tmaria@ejemplo.com\t56987654321\t\tInteresada en PAMM');a.download='plantilla_contactos.txt';a.click()}}
           style={{fontSize:12,color:P.blue,background:P.blueDim,border:`1px solid ${P.blue}30`,borderRadius:6,padding:'5px 12px',cursor:'pointer'}}>⬇ Plantilla TXT</button>
       </div>
       <div onDragOver={e=>{e.preventDefault();setDragOver(true)}} onDragLeave={()=>setDragOver(false)}
@@ -2470,7 +2478,7 @@ return <div key={r} style={{marginBottom:12}}>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12}}>
           <div><Lbl>Nombre *</Lbl><Input value={addForm.full_name} onChange={v=>setAddForm(p=>({...p,full_name:v}))} placeholder="Nombre completo"/></div>
           <div><Lbl>Email *</Lbl><Input value={addForm.email} onChange={v=>setAddForm(p=>({...p,email:v}))} placeholder="email@ejemplo.com"/></div>
-          <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="+56 9..."/></div>
+          <div><Lbl>Teléfono</Lbl><Input value={addForm.phone} onChange={v=>setAddForm(p=>({...p,phone:v}))} placeholder="56912345678"/></div>
           <div><Lbl>Capital</Lbl><Sel value={addForm.investment_range} onChange={v=>setAddForm(p=>({...p,investment_range:v}))} options={[{value:'',label:'Seleccionar'},{value:'1k-5k',label:'1k-5k'},{value:'5k-20k',label:'5k-20k'},{value:'20k-50k',label:'20k-50k'},{value:'50k+',label:'50k+'}]}/></div>
           <div><Lbl>Equipo</Lbl><Sel value={addForm.team} onChange={v=>setAddForm(p=>({...p,team:v}))} options={[{value:'',label:'Sin equipo'},{value:'radex',label:'Radex'},{value:'tradeview',label:'Tradeview'}]}/></div>
           <div><Lbl>Landing</Lbl><Sel value={addForm.variant} onChange={v=>setAddForm(p=>({...p,variant:v}))} options={campaignVariants.length>0?campaignVariants.map(v=>({value:v.variant_key,label:v.label})):[{value:'navy',label:'Navy'},{value:'editorial',label:'Editorial'},{value:'bold',label:'Bold'},{value:'minimalist',label:'Minimalist'}]}/></div>
@@ -4553,7 +4561,7 @@ function Equipo({user,isSuperAdmin,teamId}){
           <div><Lbl>Email personal *</Lbl><Input value={form.email} onChange={v=>setForm(p=>({...p,email:v}))} placeholder="usuario@gmail.com" type="email"/></div>
           <div><Lbl>Nombre completo *</Lbl><Input value={form.display_name} onChange={v=>setForm(p=>({...p,display_name:v}))} placeholder="Juan García"/></div>
           <div><Lbl>Email @pessaro.cl</Lbl><Input value={form.pessaro_email} onChange={v=>setForm(p=>({...p,pessaro_email:v}))} placeholder="juan@pessaro.cl" type="email"/></div>
-          <div><Lbl>Teléfono</Lbl><Input value={form.phone} onChange={v=>setForm(p=>({...p,phone:v}))} placeholder="+56 9 1234 5678"/></div>
+          <div><Lbl>Teléfono</Lbl><Input value={form.phone} onChange={v=>setForm(p=>({...p,phone:v}))} placeholder="56912345678"/></div>
           <div style={{gridColumn:'1/-1'}}><Lbl>Cargo</Lbl><Input value={form.title} onChange={v=>setForm(p=>({...p,title:v}))} placeholder="Asesor · Pessaro Capital"/></div>
           {isSuperAdmin&&<>
             <div><Lbl>Rol en el sistema</Lbl>
