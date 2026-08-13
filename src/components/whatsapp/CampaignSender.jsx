@@ -27,6 +27,7 @@ const STATUS_COLOR = {
   sending: C.orange,
   completed: C.green,
   paused: C.orange,
+  failed: C.red,
 }
 
 const STATUS_LABEL = {
@@ -35,7 +36,22 @@ const STATUS_LABEL = {
   sending: 'Enviando…',
   completed: 'Completada',
   paused: 'Pausada',
+  failed: 'Fallida',
 }
+
+// El <input type="datetime-local"> entrega una hora SIN zona ('2026-08-13T09:25').
+// Si se guardaba tal cual, Postgres la interpretaba como UTC y la campaña quedaba
+// programada 4 h antes de lo que el usuario había elegido (Chile es UTC-4/-3).
+// new Date(local).toISOString() la convierte al instante correcto.
+function localAISO(valor) {
+  if (!valor) return null
+  const d = new Date(valor)
+  return isNaN(d) ? null : d.toISOString()
+}
+
+const fmtFechaHora = v => v
+  ? new Date(v).toLocaleString('es-CL', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  : '—'
 
 const ETAPA_LABEL = { 1: 'Lead', 2: 'Contactado', 3: 'Propuesta', 4: 'Negociación', 5: 'Cerrado' }
 
@@ -79,6 +95,9 @@ export default function CampaignSender({ user }) {
   const [sending, setSending] = useState(false)
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
+  const [sendingId, setSendingId] = useState(null)   // campaña que se está disparando
+  const [confirmSend, setConfirmSend] = useState(null) // confirmación en dos pasos
+  const [rowMsg, setRowMsg] = useState(null)         // {id, type, text}
 
   const [contactGroups, setContactGroups] = useState([])
 
@@ -153,7 +172,7 @@ export default function CampaignSender({ user }) {
       variant_key: form.variant_key || null,
       target_filter: Object.keys(targetFilter).length ? targetFilter : null,
       header_image_url: form.header_image_url.trim() || null,
-      scheduled_at: form.scheduled_at || null,
+      scheduled_at: localAISO(form.scheduled_at),
       status: form.scheduled_at ? 'scheduled' : 'draft',
       created_by: user?.id || null,
     }).select().single()
@@ -162,35 +181,61 @@ export default function CampaignSender({ user }) {
 
     // If no scheduled date, send immediately
     if (!form.scheduled_at) {
-      const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
-      const { data: { session } } = await supabase.auth.getSession()
-      const res = await fetch(`${SUPABASE_URL}/functions/v1/whatsapp-send`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${session?.access_token}`,
-        },
-        body: JSON.stringify({ action: 'send_campaign', wa_campaign_id: wc.id }),
-      })
-      const r = await res.json()
+      const r = await dispararCampana(wc.id)
       setSending(false)
       if (r.success) {
         setResult(r)
         setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '' })
-        // Reload
-        const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
-        setWaCampaigns(wcs || [])
+        await recargarCampanas()
         setTab('historial')
       } else {
         setError(r.error || 'Error al enviar campaña')
       }
     } else {
       setSending(false)
-      setResult({ scheduled: true })
-      const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
-      setWaCampaigns(wcs || [])
+      setResult({ scheduled: true, at: localAISO(form.scheduled_at) })
+      await recargarCampanas()
       setTab('historial')
     }
+  }
+
+  async function recargarCampanas() {
+    const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
+    setWaCampaigns(wcs || [])
+  }
+
+  // Llama a la edge function con el JWT del usuario (send_campaign es super_admin)
+  async function dispararCampana(waCampaignId) {
+    const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
+    const { data: { session } } = await supabase.auth.getSession()
+    try {
+      const res = await fetch(`${SUPABASE_URL}/functions/v1/whatsapp-send`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ action: 'send_campaign', wa_campaign_id: waCampaignId }),
+      })
+      return await res.json()
+    } catch (e) {
+      return { success: false, error: e.message || 'Error de red al llamar a whatsapp-send' }
+    }
+  }
+
+  // Envío manual desde el historial: sirve para las que quedaron en borrador y
+  // para adelantar una programada sin esperar al planificador.
+  async function enviarAhora(wc) {
+    if (confirmSend !== wc.id) { setConfirmSend(wc.id); return }
+    setConfirmSend(null)
+    setSendingId(wc.id)
+    setRowMsg(null)
+    const r = await dispararCampana(wc.id)
+    setSendingId(null)
+    setRowMsg(r.success
+      ? { id: wc.id, type: 'ok', text: `Enviada: ${r.sent} de ${r.total}${r.failed ? ` · ${r.failed} fallidos` : ''}${r.skipped_opt_out ? ` · ${r.skipped_opt_out} con baja` : ''}` }
+      : { id: wc.id, type: 'err', text: r.error || 'No se pudo enviar' })
+    await recargarCampanas()
   }
 
   if (loading) {
@@ -301,7 +346,9 @@ export default function CampaignSender({ user }) {
               <Lbl>Programar envío (opcional)</Lbl>
               <input type="datetime-local" value={form.scheduled_at} onChange={e => setForm(f => ({ ...f, scheduled_at: e.target.value }))}
                 style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 8, padding: '9px 12px', color: C.text, fontSize: 13, outline: 'none', width: '100%', fontFamily: 'inherit', boxSizing: 'border-box' }} />
-              <p style={{ fontSize: 11, color: C.muted, margin: '4px 0 0' }}>Vacío = enviar ahora</p>
+              <p style={{ fontSize: 11, color: C.muted, margin: '4px 0 0' }}>
+                Vacío = enviar ahora. La hora es la tuya ({Intl.DateTimeFormat().resolvedOptions().timeZone}); el planificador la despacha con hasta 5 minutos de margen.
+              </p>
             </div>
 
             {error && (
@@ -320,7 +367,10 @@ export default function CampaignSender({ user }) {
             )}
             {result?.scheduled && (
               <div style={{ background: C.blueDim, border: `1px solid ${C.blue}30`, borderRadius: 8, padding: '10px 12px' }}>
-                <p style={{ color: C.blue, fontSize: 13, margin: 0 }}>✓ Campaña programada correctamente</p>
+                <p style={{ color: C.blue, fontSize: 13, margin: 0 }}>✓ Campaña programada para {fmtFechaHora(result.at)}</p>
+                <p style={{ color: C.textSub, fontSize: 11, margin: '4px 0 0' }}>
+                  El planificador revisa cada 5 minutos. También puedes adelantarla con «Enviar ahora» en el historial.
+                </p>
               </div>
             )}
 
@@ -350,19 +400,55 @@ export default function CampaignSender({ user }) {
           )}
           {waCampaigns.map(wc => {
             const sc = STATUS_COLOR[wc.status] || C.muted
+            // Borrador y programada todavía se pueden disparar a mano
+            const disparable = wc.status === 'draft' || wc.status === 'scheduled'
+            const vencida = wc.status === 'scheduled' && wc.scheduled_at && new Date(wc.scheduled_at) <= new Date()
+            const msg = rowMsg?.id === wc.id ? rowMsg : null
             return (
               <div key={wc.id} style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, padding: 18 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                  <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12, gap: 12, flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0 }}>
                     <p style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{wc.name}</p>
                     <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted }}>
                       {wc.whatsapp_templates?.template_name || '—'} · {new Date(wc.created_at).toLocaleDateString('es-CL')}
                     </p>
+                    {wc.scheduled_at && (
+                      <p style={{ margin: '3px 0 0', fontSize: 11, color: vencida ? C.orange : C.blue }}>
+                        📅 Programada para {fmtFechaHora(wc.scheduled_at)}
+                        {vencida ? ' · se despachará en el próximo ciclo (cada 5 min)' : ''}
+                      </p>
+                    )}
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 700, color: sc, background: sc + '20', border: `1px solid ${sc}35`, borderRadius: 4, padding: '3px 8px', textTransform: 'uppercase' }}>
-                    {STATUS_LABEL[wc.status] || wc.status}
-                  </span>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    {disparable && (
+                      <button onClick={() => enviarAhora(wc)} disabled={sendingId === wc.id}
+                        style={{
+                          padding: '6px 12px', borderRadius: 8, fontSize: 12, fontWeight: 700, fontFamily: 'inherit',
+                          cursor: sendingId === wc.id ? 'not-allowed' : 'pointer',
+                          background: confirmSend === wc.id ? C.orangeDim : C.greenDim,
+                          color: confirmSend === wc.id ? C.orange : C.green,
+                          border: `1px solid ${confirmSend === wc.id ? C.orange : C.green}45`,
+                        }}>
+                        {sendingId === wc.id ? 'Enviando…' : confirmSend === wc.id ? '¿Enviar ahora?' : '🚀 Enviar ahora'}
+                      </button>
+                    )}
+                    {confirmSend === wc.id && (
+                      <button onClick={() => setConfirmSend(null)}
+                        style={{ padding: '6px 10px', borderRadius: 8, fontSize: 12, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, cursor: 'pointer', fontFamily: 'inherit' }}>
+                        Cancelar
+                      </button>
+                    )}
+                    <span style={{ fontSize: 10, fontWeight: 700, color: sc, background: sc + '20', border: `1px solid ${sc}35`, borderRadius: 4, padding: '3px 8px', textTransform: 'uppercase' }}>
+                      {STATUS_LABEL[wc.status] || wc.status}
+                    </span>
+                  </div>
                 </div>
+
+                {msg && (
+                  <p style={{ margin: '0 0 10px', fontSize: 12, color: msg.type === 'ok' ? C.green : C.red, background: msg.type === 'ok' ? C.greenDim : C.redDim, borderRadius: 8, padding: '9px 12px' }}>
+                    {msg.type === 'ok' ? '✓ ' : '⚠ '}{msg.text}
+                  </p>
+                )}
 
                 {wc.total_recipients > 0 && (
                   <div style={{ display: 'flex', background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 8, padding: '10px 8px' }}>
