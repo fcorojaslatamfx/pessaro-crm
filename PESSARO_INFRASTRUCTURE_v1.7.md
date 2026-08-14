@@ -5,7 +5,13 @@
 **Versión:** 1.7 — Consolidada (CRM + Website + Educación)  
 **Estado general:** 🟢 Operativo en producción
 
-> ⚠️ **Este documento es el punto de control único del proyecto.** Fusiona `PESSARO_CRM_INFRASTRUCTURE.md` (v1.6) + `PESSARO_CL_ACTUALIZACION_2026_07_02.md` en una única fuente de verdad. Toda nueva herramienta, feature o modificación debe partir de lo aquí documentado.
+> 🛑 **Este documento ya no es la fuente de verdad. Es una foto consolidada del 2026-08-13.**
+>
+> Nació para fusionar `PESSARO_CRM_INFRASTRUCTURE.md` (v1.6) + `PESSARO_CL_ACTUALIZACION_2026_07_02.md` en un punto de control único, pero el mantenimiento real siguió ocurriendo en `PESSARO_CRM_INFRASTRUCTURE.md`, que es **el documento vivo**. Tener dos «fuentes únicas» es tener cero: comprobado el 2026-08-14, a esta le faltaban el análisis diario, los artículos automatizados, los KPIs de ventas y `support_ticket_events`.
+>
+> **Para el CRM, consulta `PESSARO_CRM_INFRASTRUCTURE.md`.** Lo que esta versión aporta y la otra no es la parte de **sitio público y Educación** (`pessaro_CL`), útil como referencia histórica. Antes de fiarte de cualquier dato de aquí, contrástalo con el documento vivo o con la base.
+>
+> **Novedades posteriores a esta foto** (detalle en `CHANGELOG_CRM.md` y en el documento vivo): análisis diario de instrumentos (`analisis_instrumentos` + tabla de staff, cron `analisis-diario-instrumentos`), artículos exclusivos automatizados con fuentes citadas (cron `articulos-exclusivos`), ventas P2P/B2B con etapa comercial y RPC `sales_kpis()`, auditoría de tickets (`support_ticket_events`), y la regla de que las columnas `date` se calculan y muestran en horario local.
 
 
 > 📌 **Actualización 2026-08-13** — Cambios posteriores a la última revisión completa de este

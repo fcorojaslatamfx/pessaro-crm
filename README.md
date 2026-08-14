@@ -23,7 +23,7 @@ Repos hermanos: `pessaro_CL` (sitio público pessaro.cl y portal de clientes, fu
 - **Aislamiento de datos por rol**: cada asesor ve solo sus propios contactos, chats, emails, leads y KPIs; super admin ve todo.
 - **WAFinance** (parcial/en curso): chat en vivo con OTP embebido en `crm.pessaro.cl/chat/:referralCode`. Invitación con vista previa OG **dinámica**: `WAFinanceInviteButton` arma el link `/invite/:referralCode?img=N`, que Vercel reescribe a `api/invite.js` (serverless) — este genera meta tags `og:title/og:image/og:url` a medida (imagen de galería 1-5 o default) y redirige (HTTP refresh) al chat real; `index.html` solo trae el OG estático de fallback para el link directo sin invitación.
 
-Para el detalle completo de tablas, Edge Functions, roles e integraciones, ver `PESSARO_CRM_INFRASTRUCTURE.md` (documento vivo, más actualizado) y `PESSARO_INFRASTRUCTURE_v1.7.md`.
+Para el detalle completo de tablas, Edge Functions, roles e integraciones, ver **`PESSARO_CRM_INFRASTRUCTURE.md`** — es el documento vivo y el único que se mantiene al día. `PESSARO_INFRASTRUCTURE_v1.7.md` es una foto consolidada del 2026-08-13 que conserva la parte de sitio público y Educación; para el CRM está desfasada.
 
 ## Stack tecnológico
 

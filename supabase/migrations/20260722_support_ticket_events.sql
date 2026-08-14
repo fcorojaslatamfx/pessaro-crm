@@ -2,7 +2,8 @@
 -- Migración: support_ticket_events (auditoría de cierre/reapertura)
 -- Origen:    Prompt Claude Code — Cierre/Reapertura de tickets + auditoría con fechas
 --            (referencia SPEC_SOPORTE_TICKETS_OTP v1.2)
--- Estado:    NO EJECUTADA — la aplicará Francisco vía apply_migration
+-- Estado:    APLICADA en producción (verificado 2026-08-14: existen la tabla, el
+--            trigger trg_support_ticket_events y las dos policies)
 -- Reglas:    (1) Cerrar ticket: super_admin Y asesor asignado.
 --            (2) Reabrir ticket cerrado: SOLO super_admin.
 --            (3) Todo cambio de estado/asignación queda registrado con fecha y autor.
