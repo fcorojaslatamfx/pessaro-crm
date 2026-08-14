@@ -1,5 +1,93 @@
 # Pessaro Capital CRM — Changelog
 
+## [2026-08-14] — El análisis del CRM volvía a fecharse un día antes que el portal
+
+### Síntoma
+
+El desplegable del **Análisis Diario** del CRM mostraba `13-08-2026 · hoy` mientras el portal de clientes, leyendo **las mismas filas**, fechaba `14 de agosto · hoy`. El rótulo se contradecía a sí mismo: el `· hoy` sale de comparar la cadena cruda contra el día local, y esa comparación sí daba `2026-08-14`.
+
+### Causa
+
+`fmtDate()` hacía `new Date('2026-08-14')`. Una fecha suelta —sin hora— la parsea JavaScript como **medianoche UTC**; al pintarla en hora de Chile (UTC−4) retrocede a las 20:00 del día anterior. Todas las columnas de tipo `date` salían un día atrás.
+
+No era un problema de datos ni del planificador: BTC 62.874, ETH 1.872,24, NAS100 732,07 y SPX500 777,88 coincidían en CRM y portal. Sólo estaba mal la etiqueta.
+
+Es el **mismo error, en la otra mitad del recorrido** que el arreglo del 2026-08-13: allí se corrigió cómo se *calcula* el día (`toISOString()` → horario local); aquí, cómo se *muestra*.
+
+### Cambios
+
+- `fmtDate()` arma los días de calendario (`YYYY-MM-DD`) en horario local y deja intactas las marcas `timestamptz`, que sí deben convertirse a la zona del usuario. Corrige de paso **fecha de nacimiento**, **fecha de movimiento** y **fecha límite de tareas**, que son columnas `date` y venían mostrándose un día antes.
+- `fd()`, el formateador de la ficha exportada a HTML/PDF, recibe el mismo arreglo: sin él la ficha habría quedado contradiciendo a la pantalla en nacimiento, apertura de cuenta y fechas de movimiento.
+- Comprobado con `TZ=America/Santiago`: `'2026-08-14'` pasa de `13-08-2026` a `14-08-2026`, y `'2026-08-14T13:04:00Z'` sigue dando `14-08-2026`.
+
+### Regla para no repetirlo
+
+> Una columna `date` es un **día de calendario**, no un instante. Nunca pasa por `new Date(cadena)` sin hora, ni por `toISOString()`. Vale igual para el CRM y para el portal (`pessaro_CL`), que muestran la misma tabla: ver `ANALISIS_DIARIO_INSTRUMENTOS.md` §8.
+
+### Pendiente detectado ese día
+
+El 2026-08-14 sólo se publicaron **5 de los 9 instrumentos** (BTC/USD, ETH/USD, NAS100, SPX500, WTI/USD). Los cuatro que faltan —EUR/USD, GBP/USD, USD/JPY y XAU/USD— son **exactamente los cuatro de Twelve Data**; el día anterior salieron los nueve. El cron corrió y terminó bien (`analisis-diario-instrumentos`, 12:00 UTC, `succeeded`), así que apunta al proveedor de datos, no al planificador. Queda por revisar la cuota/respuesta de Twelve Data.
+
+---
+
+## [2026-08-13 · segunda parte] — Análisis diario, artículos con fuentes citadas, KPIs de ventas y dos fallos silenciosos
+
+Todo esto es posterior al commit de documentación de ese día, así que no estaba recogido aquí.
+
+### Análisis diario de instrumentos
+
+- 9 instrumentos (divisas, metales, energía, índices y cripto) analizados cada mañana y publicados en el **portal de clientes** y en el **panel del asesor**. No se envía por WhatsApp ni por ningún otro canal push.
+- **Los números no los inventa el modelo:** soporte, resistencia, tendencia y precio de referencia los calcula el código sobre series de precios reales; `claude-opus-5` sólo redacta las dos narrativas. Un instrumento que no pasa **todas** las validaciones no se publica.
+- **Dos tablas, no una.** RLS es row-level, no column-level: una sola tabla con `SELECT` para `authenticated` habría dado a los clientes del portal —que autentican contra este mismo proyecto— la lectura técnica interna. Por eso `analisis_instrumentos` (pública para autenticados) y `analisis_instrumentos_staff` (sólo `is_crm_staff()`).
+- Aviso de carácter educativo **obligatorio por esquema** (`NOT NULL` + CHECK de longitud): no se puede insertar un análisis sin él.
+- Edge function `generar-analisis-diario` + pg_cron `analisis-diario-instrumentos` (`0 12 * * *` UTC). Detalle completo en `ANALISIS_DIARIO_INSTRUMENTOS.md`.
+
+### Artículos exclusivos automatizados con fuentes citadas
+
+- Los 4 artículos del portal eran la siembra de marzo de 2026: firmados por analistas que **no son personas del equipo**, con referencias de hace cinco meses y con la columna `content` que el portal nunca renderizaba. La migración los despublica.
+- Mismo reparto de trabajo que el análisis diario: **las fuentes las trae el código, no el modelo.** La función lee feeds RSS reales, extrae titular, medio, URL y fecha, y guarda esos registros tal como vienen. Al modelo se le pasan como material y sólo redacta el comentario propio. Un modelo al que se le pide «cita a Bloomberg» produce URLs plausibles pero inventadas, y una referencia falsa publicada a clientes de una firma de asesoría es peor que no tener el artículo.
+- Fuentes comprobadas una a una: Federal Reserve y SEC (dominio público), MarketWatch, CNBC e Investing.com. Descartadas: IMF y BLS devuelven 403, el Banco Central de Chile no publica RSS y el feed del BCE trae un solo ítem.
+- Se cita y se enlaza (titular, medio, fecha, enlace); **no se reproduce** el texto de la nota original. Firma institucional «Pessaro Capital»: la responsabilidad editorial la asume la empresa en vez de atribuirla a un analista inventado.
+- Validación antes de publicar: longitud de cuerpo y bajada, categoría del enum, mínimo de dos fuentes, **ausencia de URLs en el cuerpo** (al modelo se le prohíben, así que una URL delata que se la inventó) y ausencia de lenguaje de recomendación.
+- **Ya está desplegado y corriendo**: job `articulos-exclusivos`, 12:30 UTC los **lunes, miércoles y viernes** (`30 12 * * 1,3,5`). Comprobado el 2026-08-14: publicó un artículo con **8 fuentes de 5 medios**.
+
+### Ventas: perfil P2P/B2B, etapa comercial y KPIs del asesor
+
+- `crm_contacts` gana `contact_type` (P2P|B2B), `company_name`, `company_tax_id`, `sales_stage` (7 etapas), `estimated_value` y `next_followup_at`. Índice único parcial `(user_id, company_tax_id)`: el mismo asesor no debería tener dos fichas de la misma empresa; dos asesores distintos sí.
+- **No se creó `crm_sales_activities`.** Ya existía `contact_activity_log` con la misma forma, que escribe `logActivity()` y lee `buildTimeline()` para la ficha y los export; una tabla paralela habría partido el historial del contacto en dos. Se extendió con `occurred_at` y `outcome`, y su CHECK con `'reunion'` — que no estaba, así que registrar una reunión habría reventado con 23514.
+- `occurred_at` aparte de `created_at`: uno es cuándo ocurrió la gestión y otro cuándo se registró. El asesor anota el lunes la llamada del viernes y el KPI del mes tiene que contarla en su mes.
+- **`sales_stage` es ortogonal a `status` y no se sincronizan solos.** `status = 'inactivo'` lo usan las automatizaciones de WhatsApp para dar de baja: un negocio perdido no puede sacar al contacto de las campañas por su cuenta.
+- RPC `sales_kpis(p_user_id, p_from, p_to)`, security definer con el alcance decidido dentro: el asesor obtiene sólo lo suyo pida lo que pida; admin y super admin pueden pedir el de un asesor o el del equipo, y ven **agregados**, no filas. Se agrega en SQL y no en el navegador: traerse la cartera entera para sumarla en el cliente funciona con 39 contactos y deja de funcionar con 4.000.
+- **Dos tasas en vez de una**, porque «tasa de conversión» a secas es ambigua: cierre (ganados sobre resueltos) y conversión de cartera (ganados sobre todo). Pipeline **ponderado por probabilidad de etapa**: la suma cruda trata igual un prospecto frío que una propuesta enviada.
+- UI en `src/components/sales/`, autocontenida, siguiendo el patrón de `components/webcontent` y `components/whatsapp` en vez de extraerle los primitivos al monolito de `App.jsx`. En B2B aparecen razón social y RUT (validación por módulo 11 **como aviso, no como bloqueo**: la columna admite identificadores extranjeros).
+- Todo lo comercial está cerrado tras `!esSub`: los formularios web que el super admin ve mezclados llevan id `sub_<uuid>` y no son filas de `crm_contacts`; escribirles habría reventado con 22P02.
+- `Input()` de `App.jsx` pasa a propagar `...rest`: sin eso el `onBlur` de la ficha se perdía y los campos no guardaban al salir.
+
+### Las notas de la ficha no se guardaban desde el 2026-06-18
+
+- Escribir una nota y pulsar «+» no hacía nada: ni error a la vista ni nota en la lista.
+- **Causa:** `fn_log_note_added()`, el trigger `AFTER INSERT` sobre `crm_notes`, insertaba `NEW.contact_id`. Esa columna no existe en `crm_notes` — la suya se llama `crm_contact_id`. La función reventaba con 42703 y, al ir en la misma transacción, **se llevaba por delante el INSERT de la nota**.
+- Alcance medido antes de tocar nada: **0 notas de contacto** guardadas en toda la vida de la tabla; la última nota de cualquier tipo era del 2026-06-18.
+- Por qué nadie lo vio: `addNote()` hacía `console.error` y salía. El botón parecía inerte y el error sólo estaba en la consola del navegador. Ahora el error se enseña en la ficha.
+- Se retiró el `logActivity()` manual de `addNote()`: con el trigger arreglado habría dejado dos actividades por cada nota. Una nota de formulario web o de lead tiene `crm_contact_id` null, así que ahí el trigger no registra nada en vez de fallar.
+
+### El panel de análisis se vaciaba cada noche
+
+- Por la tarde-noche el Análisis Diario aparecía vacío con «revisa el planificador», aunque el planificador había publicado bien; se arreglaba solo por la mañana, lo que hacía el fallo aún más confuso.
+- **Causa:** el componente calculaba el día con `new Date().toISOString()`, que es UTC. Desde las ~20:00 de Chile el día UTC ya había cambiado y la consulta pedía el día siguiente: 0 filas.
+- El día pasa a calcularse en horario local, el panel abre en el **último día publicado** en vez de exigir que sea hoy, el aviso del planificador sale sólo si **no hay ningún** análisis publicado, y se añade selector de **histórico** (la tabla guardaba todos los días desde el alta; sólo faltaba poder verlos).
+
+### Migraciones de este bloque
+
+| Archivo | Qué hace |
+|---|---|
+| `20260813_analisis_instrumentos.sql` | `analisis_instrumentos` + `analisis_instrumentos_staff`, RLS separado, disclaimer obligatorio |
+| `20260813_articulos_exclusivos_automatizados.sql` | `sources`/`disclaimer`/`generated_by`/`validacion`, CHECK de fuentes, despublica la siembra de marzo |
+| `20260813_ventas_b2b_y_kpis.sql` | Campos comerciales en `crm_contacts`, `occurred_at`/`outcome`, RPC `sales_kpis()` |
+| `20260813_fix_trigger_notas.sql` | `fn_log_note_added()` usa `crm_contact_id` |
+
+---
+
 ## [2026-08-13] — Ficha del cliente, certificados de staff, campañas unificadas y automatizaciones de WhatsApp
 
 ### Contexto
