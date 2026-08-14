@@ -119,7 +119,18 @@ const TEMPLATES=[
 ]
 
 const fmt    = n => new Intl.NumberFormat('es-CL',{style:'currency',currency:'USD',maximumFractionDigits:0}).format(n||0)
-const fmtDate= d => d ? new Date(d).toLocaleDateString('es-CL') : '—'
+// Una fecha suelta ('2026-08-14') la parsea JS como medianoche UTC, y al
+// pintarla en hora de Chile (UTC-4) retrocede al día anterior: el análisis del
+// día salía rotulado con el de ayer mientras el portal lo fechaba bien. Las
+// columnas 'date' (fecha del análisis, birth_date, movement_date, due_date) son
+// días de calendario, no instantes, así que se arman en horario local. Las
+// marcas timestamptz siguen convirtiéndose como siempre.
+const fmtDate= d => {
+  if(!d)return '—'
+  const soloDia=typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)
+  const dt=soloDia?new Date(`${d}T00:00:00`):new Date(d)
+  return dt.toLocaleDateString('es-CL')
+}
 const uid    = () => Math.random().toString(36).slice(2,9)
 // Formato único de móvil en todo el CRM: sólo dígitos, sin '+' ni espacios.
 // Es el formato que espera Meta y el que usan las claves de WhatsApp
@@ -4338,7 +4349,10 @@ function buildFichaDoc(c,groups,memberships,notes,activities,ficha,getAdvisorNam
 function fichaHTMLDoc(doc,logoUri,standalone){
   const esc=s=>String(s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
   const now=new Date().toLocaleString('es-CL',{day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})
-  const fd=v=>v?new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}):'—'
+  // Mismo cuidado que en fmtDate: nacimiento, apertura y fechas de movimiento
+  // son días de calendario, y parsearlos como UTC los dejaba un día atrás.
+  const fd=v=>v?new Date(/^\d{4}-\d{2}-\d{2}$/.test(String(v))?`${v}T00:00:00`:v)
+    .toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'}):'—'
   const fdt=v=>v?`${new Date(v).toLocaleDateString('es-CL',{day:'2-digit',month:'short',year:'numeric'})} · ${new Date(v).toLocaleTimeString('es-CL',{hour:'2-digit',minute:'2-digit'})}`:''
   const k=doc.contacto
   const datos=[['Email',k.email],['Número móvil',k.telefono],['Fecha de nacimiento',k.nacimiento?fd(k.nacimiento):''],
