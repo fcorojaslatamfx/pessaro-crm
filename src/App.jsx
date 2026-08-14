@@ -780,35 +780,65 @@ function NoStaffScreen({onBackToLogin}){
 // requisito legal del sitio, no un adorno.
 function AnalisisDiario(){
   const[filas,setFilas]=useState([])
+  const[fechas,setFechas]=useState([])   // días publicados, el más reciente primero
+  const[fecha,setFecha]=useState(null)   // día que se está viendo
   const[cargando,setCargando]=useState(true)
   const[abierto,setAbierto]=useState(null)
   const isMob=useWindowSize()<768
 
-  const cargar=useCallback(async()=>{
+  // Fecha local, no UTC. Con toISOString() el CRM pedía el día UTC: entre las
+  // ~20:00 de Chile y medianoche el día ya había cambiado allá y el análisis del
+  // día desaparecía de la pantalla con un «revisa el planificador» que no venía
+  // a cuento. La tabla se fecha con el día en que se publicó, no en UTC.
+  const hoyLocal=()=>{
+    const d=new Date()
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+  }
+
+  // Días disponibles. Se piden aparte para poder navegar el histórico: la tabla
+  // guarda todos los días desde el alta.
+  const cargarFechas=useCallback(async()=>{
     try{
-      const hoy=new Date().toISOString().slice(0,10)
+      const{data,error}=await supabase
+        .from('analisis_instrumentos').select('fecha')
+        .order('fecha',{ascending:false}).limit(400)
+      if(error)throw error
+      const unicas=[...new Set((data||[]).map(r=>r.fecha))]
+      setFechas(unicas)
+      // Se abre en el último día publicado, no en "hoy": si el cron se retrasa
+      // se ve el anterior fechado, que es mejor que un panel vacío.
+      setFecha(f=>f&&unicas.includes(f)?f:(unicas[0]||null))
+    }catch(e){console.error('analisis fechas:',e)}
+  },[])
+
+  const cargar=useCallback(async()=>{
+    if(!fecha){setCargando(false);return}
+    setCargando(true)
+    try{
       const{data,error}=await supabase
         .from('analisis_instrumentos')
         .select('*, analisis_instrumentos_staff(analisis_staff)')
-        .eq('fecha',hoy)
+        .eq('fecha',fecha)
         .order('instrumento')
       if(error)throw error
       setFilas(data||[])
     }catch(e){console.error('analisis diario:',e)}
     finally{setCargando(false)}
-  },[])
+  },[fecha])
 
+  useEffect(()=>{cargarFechas()},[cargarFechas])
   useEffect(()=>{cargar()},[cargar])
 
   // Realtime: cuando la edge function publica el análisis de la mañana, la
   // pantalla se actualiza sola sin recargar.
   useEffect(()=>{
+    const refrescar=()=>{cargarFechas();cargar()}
     const canal=supabase.channel('analisis-diario')
-      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos'},()=>cargar())
-      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos_staff'},()=>cargar())
+      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos'},refrescar)
+      .on('postgres_changes',{event:'*',schema:'public',table:'analisis_instrumentos_staff'},refrescar)
       .subscribe()
     return()=>{supabase.removeChannel(canal)}
-  },[cargar])
+  },[cargar,cargarFechas])
 
   const COLOR={ALCISTA:P.green,BAJISTA:P.red,NEUTRA:P.muted}
   const FLECHA={ALCISTA:'▲',BAJISTA:'▼',NEUTRA:'▬'}
@@ -822,13 +852,32 @@ function AnalisisDiario(){
         Análisis diario de instrumentos
       </p>
       <span style={{fontSize:10.5,color:P.muted,marginLeft:'auto'}}>
-        {cargando?'cargando…':filas.length?`${filas.length} instrumentos · ${fmtDate(filas[0].fecha)}`:'sin análisis de hoy'}
+        {cargando?'cargando…':filas.length?`${filas.length} instrumentos`:'sin análisis'}
       </span>
+      {/* Histórico: la tabla guarda todos los días desde el alta. */}
+      {fechas.length>0&&<select value={fecha||''} onChange={e=>{setFecha(e.target.value);setAbierto(null)}}
+        style={{background:'rgba(255,255,255,0.05)',border:`1px solid ${P.border}`,borderRadius:7,
+          padding:'4px 8px',color:P.text,fontSize:10.5,outline:'none',fontFamily:'inherit',cursor:'pointer'}}>
+        {fechas.map(f=>(
+          <option key={f} value={f} style={{background:P.surface}}>
+            {fmtDate(f)}{f===hoyLocal()?' · hoy':''}
+          </option>
+        ))}
+      </select>}
     </div>
 
-    {!cargando&&filas.length===0&&(
+    {/* Sólo se avisa del planificador si de verdad no hay nada publicado. Un día
+        anterior a la vista no es un fallo del cron, es el histórico. */}
+    {!cargando&&fechas.length===0&&(
       <p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:'0 0 14px'}}>
-        El análisis se publica cada mañana. Si no aparece, revisa el planificador.
+        Todavía no hay ningún análisis publicado. Si esto persiste, revisa el planificador.
+      </p>
+    )}
+    {!cargando&&fechas.length>0&&fecha!==hoyLocal()&&(
+      <p style={{fontSize:11,color:P.orange,margin:'0 0 12px'}}>
+        {fecha===fechas[0]
+          ? 'Último análisis publicado. El de hoy aparecerá cuando corra el planificador de la mañana.'
+          : 'Estás viendo un análisis del histórico.'}
       </p>
     )}
 
