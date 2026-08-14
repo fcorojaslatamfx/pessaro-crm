@@ -4,4 +4,19 @@ dist
 .env.local
 .vercel
 
+# SQL con secretos sustituidos para pegar en el SQL Editor. Nunca al repo.
 cron_articulos.LOCAL.sql
+*.LOCAL.sql
+
+# Prompts y specs de trabajo. Son instrucciones de una tarea concreta, no
+# documentación del proyecto: lo que sobrevive de ellos ya está en el código,
+# en CHANGELOG_CRM.md y en PESSARO_CRM_INFRASTRUCTURE.md. Además este repo es
+# PÚBLICO en GitHub, y describen roles, reglas de negocio y flujo interno.
+Prompt*
+prompt*
+SPEC_* v*.md
+
+# Capturas y material suelto. Todo lo que cae en public/ se publica tal cual en
+# crm.pessaro.cl, así que una captura del CRM ahí queda accesible a cualquiera.
+public/Captura de pantalla*
+public/*.pdf

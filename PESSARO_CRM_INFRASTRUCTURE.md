@@ -162,6 +162,7 @@ ldlflxujrjihiybrcree
 | `support_tickets` | id, ticket_number (PSR-#####), contact_id, client_email, client_phone, client_name, subject, category, priority, status, assigned_to (FK crm_staff_profiles.id), team_id, otp_verified | Tickets de soporte creados por clientes vía portal público |
 | `support_ticket_messages` | id, ticket_id, sender_type (client/staff/system), sender_staff_id, content, attachment_path | Hilo de mensajes por ticket |
 | `support_otp_sessions` | id, client_email, client_phone, channel (email/sms), code_hash (SHA-256), attempts, expires_at, verified_at, session_token | Sesiones OTP del portal de soporte (patrón WAFinance) |
+| `support_ticket_events` 🆕 2026-07-22 | id, ticket_id, event_type (creado/estado/asignacion/cerrado/reabierto), old_value, new_value, actor_staff_id (NULL = cliente o sistema), created_at | Historial auditable por ticket. Lo escribe **sólo el trigger** `trg_support_ticket_events`, así que registra el cambio venga de donde venga: frontend, edge function o SQL directo |
 
 #### Otros
 | Tabla | Columnas clave | Propósito |
@@ -227,9 +228,18 @@ variant_advisors:
 whatsapp_messages:
 ├─ SELECT:  role = 'super_admin' OR (assigned_to en whatsapp_assignments)
 
-support_tickets: (NUEVO 2026-07-21)
-├─ SELECT/UPDATE:  is_super_admin() OR (is_crm_staff() AND assigned_to = mi perfil)
+support_tickets: (NUEVO 2026-07-21, endurecida 2026-07-22)
+├─ SELECT:  is_super_admin() OR (is_crm_staff() AND assigned_to = mi perfil)
+├─ UPDATE:  is_super_admin() OR (is_crm_staff() AND assigned_to = mi perfil AND status <> 'cerrado')
 └─ Efecto:  Cada asesor ve/edita solo los tickets asignados a él. SA ve todos.
+            El "AND status <> 'cerrado'" es lo que impide reabrir: reabrir un
+            ticket cerrado queda reservado al super_admin, y la regla vive en la
+            policy, no en el botón.
+
+support_ticket_events: (NUEVO 2026-07-22)
+├─ SELECT:  is_crm_staff()
+└─ Sin INSERT/UPDATE/DELETE para nadie: la tabla la escribe sólo el trigger
+   (SECURITY DEFINER). Un historial que se puede editar no es auditoría.
 
 support_ticket_messages: (NUEVO 2026-07-21)
 ├─ SELECT/INSERT:  is_super_admin() OR (is_crm_staff() AND EXISTS ticket asignado al staff)
