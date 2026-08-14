@@ -1,9 +1,30 @@
 # 📋 Pessaro Capital CRM — Infraestructura Definitiva
 
 **Creado:** 2026-02-25  
-**Última actualización:** 2026-08-13  
-**Estado general:** 🟢 Operativo (WhatsApp + Campañas + Contactos + Emails + Soporte)
+**Última actualización:** 2026-08-14  
+**Estado general:** 🟢 Operativo (WhatsApp + Campañas + Contactos + Emails + Soporte + Contenido automatizado)
 
+
+> 📌 **Actualización 2026-08-14** — Detalle en `CHANGELOG_CRM.md`:
+> - **Análisis diario de instrumentos**: tablas `analisis_instrumentos` y
+>   `analisis_instrumentos_staff` (RLS separado, el cliente del portal no lee la técnica),
+>   edge function `generar-analisis-diario` y job de pg_cron `analisis-diario-instrumentos`
+>   (`0 12 * * *` UTC). Documento propio: `ANALISIS_DIARIO_INSTRUMENTOS.md`.
+> - **Artículos exclusivos automatizados**: edge function `generar-articulos-referencias` y job
+>   `articulos-exclusivos` (12:30 UTC, lunes/miércoles/viernes). Las fuentes las trae el código de feeds RSS reales y se
+>   citan enlazadas; el modelo no aporta referencias. Requiere `ARTICULOS_CRON_SECRET`.
+> - **Ventas**: `crm_contacts` gana `contact_type` (P2P/B2B), `company_name`, `company_tax_id`,
+>   `sales_stage`, `estimated_value` y `next_followup_at`; `contact_activity_log` gana
+>   `occurred_at` y `outcome`; nueva RPC `sales_kpis()` (security definer, alcance por rol).
+> - **Fechas**: regla transversal — las columnas `date` son días de calendario y se calculan y
+>   muestran en **horario local**, nunca vía `toISOString()` ni `new Date(cadena)` sin hora.
+>   Dos fallos seguidos salieron de ahí (panel vacío de noche, y el CRM fechando un día antes
+>   que el portal).
+> - **Corregido**: el trigger `fn_log_note_added()` usaba `NEW.contact_id`, columna inexistente
+>   en `crm_notes`; reventaba con 42703 y anulaba el INSERT de la nota en la misma transacción.
+>   **0 notas de contacto** guardadas entre el 2026-06-18 y el 2026-08-13.
+> - **Pendiente**: el 2026-08-14 el análisis publicó 5 de 9 instrumentos; los cuatro ausentes son
+>   los de Twelve Data. Revisar cuota del proveedor.
 
 > 📌 **Actualización 2026-08-13** — Cambios posteriores a la última revisión completa de este
 > documento, detallados en `CHANGELOG_CRM.md`:
@@ -57,6 +78,8 @@
 - ✅ Análisis: reportes, KPIs, previsiones
 - ✅ **Aislamiento de datos por rol** (2026-06-24): cada asesor ve solo SUS contactos, emails, leads y KPIs
 - ✅ **Soporte (Tickets OTP)** (2026-07-21): portal público `/soporte` para clientes (verificación OTP email) + inbox de staff en el CRM, aislado por asesor asignado
+- ✅ **Ventas** (2026-08-13): perfil P2P/B2B, etapa comercial de 7 pasos, monto estimado, próximo seguimiento y KPIs del asesor calculados en SQL (`sales_kpis()`)
+- ✅ **Contenido automatizado** (2026-08-13): análisis diario de 9 instrumentos y artículos exclusivos con fuentes citadas, ambos con los datos calculados/traídos por código y el modelo limitado a redactar
 - 🔜 **WAFinance** — Chat en vivo integrado al CRM con:
   - Formulario de registro + OTP email verification (5 min expiry)
   - Lead auto-insertado en campaign_leads (advisor_referral_code)
@@ -103,7 +126,14 @@ ldlflxujrjihiybrcree
 | `crm_staff_profiles` | id, user_id, display_name, role, referral_code, team_id, pessaro_email, phone | Perfiles de staff (asesor, admin, super_admin) |
 | `crm_contact_groups` 🆕 2026-08-12 | id, name, description, color, user_id, UNIQUE(user_id,name) | Grupos de contactos por asesor (super_admin ve todos) |
 | `crm_contact_group_members` 🆕 2026-08-12 | group_id, contact_id, added_by, added_at (PK compuesta) | Pertenencia N:N de `crm_contacts` a grupos |
-| `contact_activity_log` | id, contact_id, user_id, activity_type, description, metadata | Bitácora por contacto; alimenta la ficha |
+| `contact_activity_log` | id, contact_id, user_id, activity_type, description, metadata, **occurred_at**, **outcome** 🆕 2026-08-13 | Bitácora por contacto; alimenta la ficha y los KPIs de ventas. `occurred_at` = cuándo ocurrió la gestión, `created_at` = cuándo se registró |
+| `crm_client_movements` 🆕 2026-08-13 | id, contact_id, kind, amount, movement_date, note | Depósitos y retiros de la ficha del cliente |
+
+#### Contenido automatizado — 🆕 2026-08-13
+| Tabla | Columnas clave | Propósito |
+|-------|---|---|
+| `analisis_instrumentos` | id, instrumento, fecha (`date`), tendencia, soporte, resistencia, analisis_cliente, precio_referencia, fuente_datos, datos_at, validacion, disclaimer | Análisis diario visible para clientes y staff. `UNIQUE(instrumento, fecha)`. Disclaimer obligatorio por esquema |
+| `analisis_instrumentos_staff` | id, analisis_id (FK única), analisis_staff | Lectura técnica interna. `SELECT` sólo si `is_crm_staff()` — **RLS es row-level, no column-level**, por eso va en tabla aparte |
 
 #### Campañas
 | Tabla | Columnas clave | Propósito |
@@ -334,6 +364,30 @@ Rutas frontend: /soporte (portal cliente), /soporte/ticket/:ticketNumber (hilo),
 ⏳ Pendiente Fase 2: mensatek_send (SMS OTP + avisos vía Mensatek, verify_jwt: true) — ver §Mejoras pendientes
 ```
 
+#### Contenido automatizado — 🆕 2026-08-13
+```
+generar-analisis-diario:
+├─ verify_jwt: true → el secreto va en el BODY (ANALISIS_CRON_SECRET), porque el
+│  Authorization tiene que llevar un JWT válido (la anon key del cron)
+├─ Los niveles los calcula el CÓDIGO sobre series reales (Twelve Data / Alpaca /
+│  CoinGecko); claude-opus-5 sólo redacta las dos narrativas
+├─ Lo que no valida no se publica; el resultado queda en la columna `validacion`
+├─ Guarda contra doble gasto: sin `forzar`, un instrumento ya publicado hoy no se
+│  vuelve a redactar. `dry_run` calcula y valida sin llamar al modelo
+└─ Concurrencia en tandas de 3: en serie, 9 instrumentos superaban los 150 s de
+   límite de la edge function y la ejecución se cortaba a medias
+
+generar-articulos-referencias:
+├─ verify_jwt: true → ARTICULOS_CRON_SECRET en el body (mismo patrón)
+├─ Las FUENTES las trae el código de feeds RSS reales (Federal Reserve, SEC,
+│  MarketWatch, CNBC, Investing.com) y se guardan literales; el modelo sólo
+│  redacta el comentario propio. Un modelo al que se le pide "cita a Bloomberg"
+│  inventa URLs plausibles, y una referencia falsa publicada a clientes de una
+│  firma de asesoría es peor que no tener el artículo
+└─ Valida antes de publicar: ≥2 fuentes, sin URLs en el cuerpo, sin lenguaje de
+   recomendación, categoría del enum, longitudes mínimas
+```
+
 #### Otros Edge Functions críticos
 ```
 password_recovery_2026_06_18 (v1):
@@ -364,6 +418,33 @@ unified_forms_complete_2026_02_25_20_30 (v45):
 inbox_manager_2026_04_26 (v11):
 ├─ Proveedor: Maneja sistema de tareas internas
 ```
+
+### ⏰ Jobs de pg_cron
+
+| Job | Horario (UTC) | Qué dispara | Estado |
+|---|---|---|---|
+| `wa-campanas-programadas` | `*/5 * * * *` | `whatsapp-send` → `run_due_campaigns` | 🟢 Operativo |
+| `analisis-diario-instrumentos` | `0 12 * * *` | `generar-analisis-diario` | 🟢 Operativo |
+| `articulos-exclusivos` | `30 12 * * 1,3,5` (lun/mié/vie) | `generar-articulos-referencias` | 🟢 Operativo |
+| `followup-leads-diario` | `0 13 * * *` | Seguimiento de leads | 🟢 Activo |
+| `task-reminders-daily` | `0 12 * * *` | Recordatorios de tareas | 🔴 Roto (ver abajo) |
+
+**Patrón de autorización.** Las funciones tienen `verify_jwt` activo, así que el `Authorization` lleva la anon key y **el secreto propio va en el body** (`WA_CRON_SECRET`, `ANALISIS_CRON_SECRET`, `ARTICULOS_CRON_SECRET`). Se eligió un secreto propio en vez de la service role key para no dejarla escrita en `cron.job`, que es legible por cualquiera con acceso a la base.
+
+> ⚠️ **pg_cron evalúa en UTC** y no admite zona por job. `0 12 * * *` = 08:00 en Chile en horario estándar y 09:00 durante el horario de verano (UTC−3, aprox. septiembre–abril). Cambiar `cron.timezone` globalmente desplazaría también los demás jobs.
+
+> ⚠️ **Un job `succeeded` no significa que el trabajo saliera bien**: pg_cron sólo dispara la petición HTTP. El 2026-08-14 el análisis terminó `succeeded` y publicó 5 de 9 instrumentos. Para saber qué pasó de verdad hay que mirar las filas publicadas (`ANALISIS_DIARIO_INSTRUMENTOS.md` §5) o `net._http_response`.
+
+```sql
+-- ¿Corrió? ¿Qué respondió?
+select j.jobname, d.status, d.start_time, d.return_message
+from cron.job_run_details d join cron.job j on j.jobid = d.jobid
+order by d.start_time desc limit 10;
+
+select id, status_code, created, content::text from net._http_response order by id desc limit 5;
+```
+
+`task-reminders-daily` usa `current_setting('app.settings.service_role_key')`, que **no está definido en esta base**: manda un `Bearer` vacío y lleva tiempo fallando.
 
 ---
 
@@ -917,6 +998,16 @@ Tablas: support_tickets, support_ticket_messages, support_otp_sessions
    - Esfuerzo estimado: ~15-19 horas (incluye botón WhatsApp)
    - Implementación: Claude Code + Claude Design
    - Ver sección [WAFinance](#wafinance) para arquitectura completa
+
+4. **Twelve Data: el análisis publicó 5 de 9 instrumentos** 🆕 2026-08-14
+   - Faltaron EUR/USD, GBP/USD, USD/JPY y XAU/USD: exactamente los cuatro de ese proveedor
+   - El día anterior salieron los nueve y el cron terminó `succeeded`, así que apunta a la cuota del proveedor, no al planificador
+   - Efecto: el portal y el CRM muestran un análisis incompleto, sin ningún aviso de que falta la mitad de las divisas
+   - Acción: revisar plan/cuota de Twelve Data y decidir si conviene un aviso cuando se publiquen menos instrumentos de los configurados
+
+5. **`task-reminders-daily` lleva tiempo fallando**
+   - Usa `current_setting('app.settings.service_role_key')`, que no está definido en esta base: manda un `Bearer` vacío
+   - Detectado al montar el planificador de campañas (2026-08-13)
 
 ### 🟡 Importantes (mejoran UX)
 

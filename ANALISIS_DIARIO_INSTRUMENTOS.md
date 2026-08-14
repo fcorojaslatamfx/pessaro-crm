@@ -1,7 +1,7 @@
 # Análisis Diario de Instrumentos
 
 > **Proyecto Supabase:** `ldlflxujrjihiybrcree` (compartido entre `pessaro-crm` y `pessaro_CL`)
-> **Alta:** 2026-08-13
+> **Alta:** 2026-08-13 · **Última actualización:** 2026-08-14 (§8, reglas de fecha)
 
 Análisis diario automático de 9 instrumentos (divisas, metales, energía, índices y cripto), publicado en el **portal de clientes** (pessaro.cl) y en el **panel del asesor** (crm.pessaro.cl). No se envía por WhatsApp ni por ningún otro canal push.
 
@@ -91,7 +91,10 @@ La tabla ya está en la publicación `supabase_realtime`, así que funcionan las
 ### Lectura simple
 
 ```js
-const hoy = new Date().toISOString().slice(0, 10)
+// El día, en horario local. NO uses toISOString(): es UTC, y desde las ~20:00
+// de Chile pediría el día siguiente y devolvería 0 filas (ver §8).
+const d = new Date()
+const hoy = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 const { data, error } = await supabase
   .from('analisis_instrumentos')
@@ -121,6 +124,8 @@ useEffect(() => {
 2. **No consultes `analisis_instrumentos_staff`.** RLS devolverá 0 filas para un cliente; la tabla no es para el portal.
 3. **No pidas `analisis_staff`** en el `select`: esa columna no existe en la tabla pública.
 4. Muestra `precio_referencia` y `datos_at` si el diseño lo permite — dan contexto y hacen honesto el análisis.
+5. **Abre en el último día publicado, no en «hoy» a secas.** Si el cron se retrasa, ver el día anterior con su fecha es mejor que un panel vacío. Trae primero los días disponibles (`select fecha … order by fecha desc`) y usa el primero como valor inicial.
+6. **Trata `fecha` como día de calendario en horario local** — es de tipo `date`, no un instante. Ver §8.
 
 ---
 
@@ -161,7 +166,13 @@ select status_code, content::text from net._http_response order by id desc limit
 -- ¿Qué hay publicado hoy?
 select instrumento, tendencia, soporte, resistencia, precio_referencia, fuente_datos
 from analisis_instrumentos where fecha = current_date order by instrumento;
+
+-- ¿Salieron los nueve? (comparado con los días anteriores)
+select fecha, count(*), string_agg(instrumento, ', ' order by instrumento)
+from analisis_instrumentos group by fecha order by fecha desc limit 5;
 ```
+
+> ⚠️ **Una publicación incompleta no es un fallo del cron.** El job puede terminar `succeeded` —sólo dispara la petición HTTP— y aun así faltar instrumentos, porque lo que no valida no se publica y una fuente caída deja fuera a los suyos. El **2026-08-14** salieron **5 de 9**: faltaron EUR/USD, GBP/USD, USD/JPY y XAU/USD, que son **exactamente los cuatro de Twelve Data**. Si faltan los de un mismo proveedor, mira la cuota de ese proveedor antes que el planificador.
 
 ---
 
@@ -179,4 +190,32 @@ Los índices y el WTI se aproximan mediante ETF (SPY, QQQ, USO), que es lo que y
 
 ## 7. Fuera de alcance
 
-Backtesting de los niveles, histórico navegable más allá del día actual, gráficos, y análisis intradía. La tabla guarda todos los días, así que el histórico está disponible cuando se quiera construir esa vista.
+Backtesting de los niveles, gráficos y análisis intradía.
+
+El **histórico navegable sí existe** desde el 2026-08-13: la tabla guardaba todos los días desde el alta, y tanto el panel del CRM como el portal tienen ya su selector de día.
+
+---
+
+## 8. Fechas: día de calendario, en horario local
+
+`analisis_instrumentos.fecha` es de tipo **`date`**: el día en que se publicó el análisis, no un instante. Esa distinción ha costado dos fallos en dos días, uno a cada lado del recorrido, y ambos con el mismo origen — tratar un día de calendario como si fuera un momento en el tiempo.
+
+| Fallo | Dónde | Qué pasaba |
+|---|---|---|
+| **2026-08-13** — el panel se vaciaba cada noche | Al **consultar** | El día se calculaba con `new Date().toISOString()`, que es UTC. Desde las ~20:00 de Chile el día UTC ya había cambiado y la consulta pedía el día siguiente: 0 filas y un «revisa el planificador» que no venía a cuento. Se arreglaba solo por la mañana. |
+| **2026-08-14** — el CRM fechaba un día antes que el portal | Al **mostrar** | `new Date('2026-08-14')` parsea medianoche **UTC**; pintado en hora de Chile (UTC−4) retrocede a las 20:00 del día anterior. El desplegable decía `13-08-2026 · hoy` con las mismas filas que el portal fechaba como 14 de agosto. |
+
+Las dos reglas, que valen igual para `crm.pessaro.cl` y para el portal de `pessaro_CL`:
+
+```js
+// Calcular el día: en local, nunca toISOString()
+const d = new Date()
+const hoy = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+// Mostrar el día: forzar la hora, para que no lo parsee como UTC
+const fmt = f => new Date(`${f}T00:00:00`).toLocaleDateString('es-CL')
+```
+
+Las marcas `timestamptz` —`datos_at`, `created_at`— son lo contrario: sí son instantes y **deben** convertirse a la zona del usuario, así que van con `new Date(v)` tal cual.
+
+Comprobación rápida en cualquiera de los dos repos, con `TZ=America/Santiago`: `'2026-08-14'` tiene que dar **14-08-2026**, y `'2026-08-14T13:04:00Z'`, también.
