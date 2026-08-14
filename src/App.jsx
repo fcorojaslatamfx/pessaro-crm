@@ -14,6 +14,9 @@ import SupportInbox from './components/support/SupportInbox.jsx'
 import WebContentHub from './components/webcontent/WebContentHub.jsx'
 import ContactsHub from './components/clients/ClientsPortalKYC.jsx'
 import EducationAdmin from './components/education/EducationAdmin.jsx'
+import SalesMetrics from './components/sales/SalesMetrics.jsx'
+import { SALES_STAGES, STAGE_LABEL as SALES_STAGE_LABEL, STAGE_COLOR as SALES_STAGE_COLOR,
+  TIPO_LABEL, TIPO_COLOR, ACTIVIDADES, normalizaRut, rutValido } from './components/sales/ui.jsx'
 
 // ─── ERROR BOUNDARY ───────────────────────────────────────────────────────────
 class ErrorBoundary extends Component {
@@ -146,12 +149,14 @@ function StatCard({label,value,sub,Icon,accent=P.purple}){
     {sub&&<p style={{fontSize:11,color:P.muted,marginTop:4,margin:'4px 0 0'}}>{sub}</p>}
   </GlassCard>
 }
-function Input({value,onChange,placeholder,type='text',style={}}){
+// ...rest deja pasar onBlur, min, step y demás al input real. Sin esto, la
+// ficha comercial no podría guardar al salir del campo: el handler se perdía.
+function Input({value,onChange,placeholder,type='text',style={},...rest}){
   const[showPwd,setShowPwd]=useState(false)
   const isPwd=type==='password'
   if(!isPwd){
     return <input type={type} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
-      style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',...style}}/>
+      style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',width:'100%',fontFamily:'inherit',boxSizing:'border-box',...style}} {...rest}/>
   }
   return <div style={{position:'relative',width:'100%'}}>
     <input type={showPwd?'text':'password'} value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder}
@@ -947,6 +952,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
   const[statusFilter,setStatusFilter]=useState('todos')
+  // Segmentación comercial: tipo de contacto y etapa de venta
+  const[tipoFilter,setTipoFilter]=useState('todos')
+  const[stageFilter,setStageFilter]=useState('todos')
   const[staffList,setStaffList]=useState([])
   const[userFilter,setUserFilter]=useState('todos')
   const[tab,setTab]=useState('lista')
@@ -982,6 +990,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[groupSearch,setGroupSearch]=useState('')
   const[confirmDeleteGroup,setConfirmDeleteGroup]=useState(null) // borrar pide confirmación en el propio botón
   const[groupErr,setGroupErr]=useState('')
+  // Gestión comercial dentro de la ficha
+  const[actForm,setActForm]=useState({tipo:'llamada',notas:'',resultado:'',fecha:new Date().toISOString().slice(0,10)})
+  const[actSaving,setActSaving]=useState(false)
+  const[comErr,setComErr]=useState('')
   // Ficha: historial consolidado del contacto (WhatsApp, lead, tickets, tareas, cuenta)
   const[ficha,setFicha]=useState(null)
   const[loadingFicha,setLoadingFicha]=useState(false)
@@ -1094,7 +1106,14 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     const mst=statusFilter==='todos'||(statusFilter==='activos'&&c.status!=='inactivo')||c.status===statusFilter
     const mu=userFilter==='todos'||c.user_id===userFilter
     const mg=groupFilter==='todos'||(memberships[c.id]||[]).includes(groupFilter)
-    return ms&&mst&&mu&&mg
+    // Los formularios web (sub_) no tienen perfil comercial: al filtrar por tipo
+    // o etapa quedan fuera en vez de colarse como si fueran P2P sin etapa.
+    const esSub=String(c.id).startsWith('sub_')
+    const mt=tipoFilter==='todos'||(!esSub&&(c.contact_type||'P2P')===tipoFilter)
+    const me=stageFilter==='todos'
+      ||(stageFilter==='pendientes'&&!esSub&&!String(c.sales_stage||'').startsWith('CERRADO'))
+      ||(!esSub&&c.sales_stage===stageFilter)
+    return ms&&mst&&mu&&mg&&mt&&me
   })
 
   const validate=()=>{
@@ -1282,6 +1301,40 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         if(selected?.id===id)setActivities(p=>[{id:Date.now().toString(),activity_type:'estado_cambiado',description:`Estado cambiado a: ${status}`,created_at:new Date().toISOString()},...p])
       }
     }catch(e){console.error('updateStatus:',e)}
+  }
+
+  // ── Gestión comercial ──────────────────────────────────────────────────────
+  // Un parche genérico sobre crm_contacts con actualización optimista. Los
+  // formularios web (sub_) no tienen fila real, así que ni se intenta.
+  const patchComercial=async(contactId,patch,descripcion)=>{
+    if(String(contactId).startsWith('sub_'))return
+    const{error}=await supabase.from('crm_contacts').update(patch).eq('id',contactId)
+    if(error){setComErr(error.message);return}
+    setComErr('')
+    setContacts(p=>p.map(c=>c.id===contactId?{...c,...patch}:c))
+    if(selected?.id===contactId)setSelected(p=>({...p,...patch}))
+    if(descripcion){
+      logActivity(user.id,contactId,'estado_cambiado',descripcion,patch)
+      if(selected?.id===contactId)setActivities(p=>[{id:Date.now().toString(),activity_type:'estado_cambiado',description:descripcion,created_at:new Date().toISOString()},...p])
+    }
+  }
+
+  // Registrar una gestión. occurred_at es cuándo ocurrió de verdad: el asesor
+  // anota el lunes la llamada del viernes y el KPI del mes debe contarla bien.
+  const registrarActividad=async contactId=>{
+    if(String(contactId).startsWith('sub_'))return
+    const desc=actForm.notas.trim()
+    if(!desc){setComErr('Escribe una nota de la gestión');return}
+    setActSaving(true);setComErr('')
+    const fecha=actForm.fecha?new Date(`${actForm.fecha}T12:00:00`).toISOString():new Date().toISOString()
+    const{data,error}=await supabase.from('contact_activity_log').insert({
+      contact_id:contactId,user_id:user.id,activity_type:actForm.tipo,
+      description:desc,occurred_at:fecha,outcome:actForm.resultado.trim()||null,metadata:{},
+    }).select().single()
+    setActSaving(false)
+    if(error){setComErr(error.message);return}
+    setActivities(p=>[data,...p])
+    setActForm({tipo:'llamada',notas:'',resultado:'',fecha:new Date().toISOString().slice(0,10)})
   }
 
   const handleAssigneeChange=async(contactId,newAdvisorId)=>{
@@ -1647,9 +1700,19 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       </div>
     })()}
 
-    <div style={{display:'flex',gap:10,marginBottom:16}}>
+    {/* KPIs del asesor. Los calcula la RPC sales_kpis() en SQL, no el navegador. */}
+    {tab==='lista'&&<SalesMetrics user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} staffList={staffList}/>}
+
+    <div style={{display:'flex',gap:10,marginBottom:16,flexWrap:'wrap'}}>
       <Input value={search} onChange={setSearch} placeholder="Buscar nombre, email o teléfono..." style={{maxWidth:300}}/>
       <Sel value={statusFilter} onChange={setStatusFilter} style={{maxWidth:160}} options={[{value:'todos',label:'Todos (incl. spam)'},{value:'activos',label:'Activos (excl. spam)'},...STATUS_OPT]}/>
+      <Sel value={tipoFilter} onChange={setTipoFilter} style={{maxWidth:150}}
+        options={[{value:'todos',label:'P2P y B2B'},{value:'P2P',label:'Sólo personas'},{value:'B2B',label:'Sólo empresas'}]}/>
+      {/* "Sin cerrar" es el filtro del día a día: deja a la vista lo que todavía
+          se puede mover, que es donde el asesor tiene que poner el foco. */}
+      <Sel value={stageFilter} onChange={setStageFilter} style={{maxWidth:190}}
+        options={[{value:'todos',label:'Todas las etapas'},{value:'pendientes',label:'Sin cerrar'},
+          ...SALES_STAGES.map(s=>({value:s.id,label:s.label}))]}/>
       {isSuperAdmin&&staffList.length>0&&<Sel value={userFilter} onChange={setUserFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los asesores'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
       {groups.length>0&&<Sel value={groupFilter} onChange={setGroupFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los grupos'},...groups.map(g=>({value:g.id,label:`${g.name} (${Object.values(memberships).filter(ids=>ids.includes(g.id)).length})`}))]}/>}
       <Btn variant="ghost" onClick={load} style={{padding:'9px 12px'}}>↺</Btn>
@@ -1659,7 +1722,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       <div style={{overflowX:'auto'}}>
       <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
         <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
-          {[...(isSuperAdmin?['Asesor']:[]),(isSuperAdmin?'Capital':''),'Nombre','Email','Teléfono','Estado','Origen',''].filter(Boolean).map(h=>(
+          {[...(isSuperAdmin?['Asesor']:[]),(isSuperAdmin?'Capital':''),'Nombre','Email','Teléfono','Etapa','Estado','Origen',''].filter(Boolean).map(h=>(
             <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
           ))}
         </tr></thead>
@@ -1696,6 +1759,16 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                   <span>{c.phone}</span>
                   {optOuts.has(soloDigitos(c.phone))&&<Badge label="no contactar" color={P.red}/>}
                 </div>
+              </td>
+              {/* Etapa comercial. Los formularios web (sub_) no tienen fila real
+                  en crm_contacts, así que no tienen etapa que mostrar. */}
+              <td style={{padding:'12px 18px'}}>
+                {String(c.id).startsWith('sub_')
+                  ?<span style={{fontSize:11,color:P.muted}}>—</span>
+                  :<div style={{display:'flex',gap:4,alignItems:'center',flexWrap:'wrap'}}>
+                    <Badge label={SALES_STAGE_LABEL[c.sales_stage||'PROSPECTO']||'Prospecto'} color={SALES_STAGE_COLOR[c.sales_stage||'PROSPECTO']||P.muted}/>
+                    {(c.contact_type||'P2P')==='B2B'&&<Badge label="B2B" color={TIPO_COLOR.B2B}/>}
+                   </div>}
               </td>
               <td style={{padding:'12px 18px'}}><Badge label={c.status} color={SCOLOR_MAP[c.status]||P.muted}/></td>
               <td style={{padding:'12px 18px'}}><div style={{display:'flex',gap:4,flexWrap:'wrap',alignItems:'center'}}><Badge label={c.source||'crm'} color={c.source==='csv'?P.blue:c.source==='formulario'?P.orange:P.muted}/>{c._origStatus==='new'&&<Badge label="nuevo" color={P.orange}/>}</div></td>
@@ -2050,6 +2123,133 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                   <Btn onClick={addNote} disabled={!noteText.trim()}>+</Btn>
                 </div>
               </FSection>
+
+              {/* ── Seguimiento comercial ─────────────────────────────────────
+                  Reacciona al tipo de contacto: en B2B aparecen los campos de
+                  empresa, en P2P no. Los formularios web (sub_) no tienen fila
+                  real en crm_contacts, así que la sección entera no se muestra. */}
+              {!esSub&&(()=>{
+                const tipo=selected.contact_type||'P2P'
+                const etapa=selected.sales_stage||'PROSPECTO'
+                const rut=selected.company_tax_id||''
+                const rutOk=!rut||rutValido(rut)
+                const venc=selected.next_followup_at&&new Date(selected.next_followup_at)<new Date()
+                return <FSection title="Seguimiento comercial" icon="📈" accent={P.green}
+                  right={<Badge label={TIPO_LABEL[tipo]} color={TIPO_COLOR[tipo]}/>}>
+
+                  {comErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 10px'}}>{comErr}</p>}
+
+                  <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Tipo de contacto</p>
+                  <div style={{display:'flex',gap:6,marginBottom:14}}>
+                    {['P2P','B2B'].map(t=>(
+                      <button key={t} onClick={()=>patchComercial(selected.id,{contact_type:t},`Tipo de contacto: ${TIPO_LABEL[t]}`)}
+                        style={{padding:'5px 12px',borderRadius:7,fontSize:11,cursor:'pointer',fontWeight:600,fontFamily:'inherit',
+                          background:tipo===t?TIPO_COLOR[t]+'30':'rgba(255,255,255,0.04)',
+                          color:tipo===t?TIPO_COLOR[t]:P.muted,
+                          border:`1px solid ${tipo===t?TIPO_COLOR[t]+'50':P.border}`}}>
+                        {TIPO_LABEL[t]}
+                      </button>
+                    ))}
+                  </div>
+
+                  {tipo==='B2B'&&<div style={{marginBottom:14}}>
+                    <FGrid min={200}>
+                      <div>
+                        <Lbl>Razón social</Lbl>
+                        <Input value={selected.company_name||''} onChange={v=>setSelected(p=>({...p,company_name:v}))}
+                          onBlur={e=>patchComercial(selected.id,{company_name:e.target.value.trim()||null})}
+                          placeholder="Inversiones Andes SpA"/>
+                      </div>
+                      <div>
+                        <Lbl>RUT de la empresa</Lbl>
+                        <Input value={rut} onChange={v=>setSelected(p=>({...p,company_tax_id:v}))}
+                          onBlur={e=>{const n=normalizaRut(e.target.value);patchComercial(selected.id,{company_tax_id:n||null})}}
+                          placeholder="77863269-1"
+                          style={!rutOk?{borderColor:P.orange}:{}}/>
+                        {/* Aviso, no bloqueo: la columna admite identificadores
+                            extranjeros que no cumplen el módulo 11 chileno. */}
+                        {!rutOk&&<p style={{fontSize:10,color:P.orange,margin:'4px 0 0'}}>El dígito verificador no cuadra. Se guarda igual.</p>}
+                      </div>
+                    </FGrid>
+                  </div>}
+
+                  <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Etapa de venta</p>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:14}}>
+                    {SALES_STAGES.map(s=>(
+                      <button key={s.id} onClick={()=>patchComercial(selected.id,{sales_stage:s.id},`Etapa de venta: ${s.label}`)}
+                        style={{padding:'5px 11px',borderRadius:7,fontSize:11,cursor:'pointer',fontWeight:600,fontFamily:'inherit',
+                          background:etapa===s.id?s.color+'30':'rgba(255,255,255,0.04)',
+                          color:etapa===s.id?s.color:P.muted,
+                          border:`1px solid ${etapa===s.id?s.color+'50':P.border}`}}>
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* El status no se toca solo: 'inactivo' lo usan las automatizaciones
+                      de WhatsApp para dar de baja al contacto, así que cerrar un negocio
+                      no puede sacarlo de las campañas por su cuenta. Se sugiere. */}
+                  {etapa==='CERRADO_GANADO'&&selected.status!=='cliente'&&
+                    <p style={{fontSize:11,color:P.muted,margin:'0 0 14px'}}>
+                      Negocio ganado y el estado sigue en «{selected.status}».{' '}
+                      <button onClick={()=>updateStatus(selected.id,'cliente')}
+                        style={{background:'none',border:'none',color:P.green,cursor:'pointer',fontSize:11,fontWeight:600,textDecoration:'underline',padding:0,fontFamily:'inherit'}}>
+                        Marcar como cliente
+                      </button>
+                    </p>}
+
+                  <FGrid min={200}>
+                    <div>
+                      <Lbl>Monto estimado (USD)</Lbl>
+                      <Input type="number" value={selected.estimated_value??''} onChange={v=>setSelected(p=>({...p,estimated_value:v}))}
+                        onBlur={e=>patchComercial(selected.id,{estimated_value:e.target.value===''?null:Number(e.target.value)})}
+                        placeholder="25000"/>
+                    </div>
+                    <div>
+                      <Lbl>Próximo seguimiento</Lbl>
+                      <Input type="date" value={(selected.next_followup_at||'').slice(0,10)}
+                        onChange={v=>patchComercial(selected.id,{next_followup_at:v?new Date(`${v}T12:00:00`).toISOString():null})}/>
+                      {venc&&<p style={{fontSize:10,color:P.red,margin:'4px 0 0'}}>Vencido</p>}
+                    </div>
+                  </FGrid>
+
+                  {/* Registrar gestión sin salir de la ficha */}
+                  <div style={{marginTop:16,paddingTop:14,borderTop:`1px solid ${P.border}`}}>
+                    <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 9px'}}>Registrar gestión</p>
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+                      {ACTIVIDADES.map(a=>(
+                        <button key={a.id} onClick={()=>setActForm(p=>({...p,tipo:a.id}))}
+                          style={{padding:'5px 11px',borderRadius:7,fontSize:11,cursor:'pointer',fontWeight:600,fontFamily:'inherit',
+                            background:actForm.tipo===a.id?P.purpleDim:'rgba(255,255,255,0.04)',
+                            color:actForm.tipo===a.id?P.purpleLight:P.muted,
+                            border:`1px solid ${actForm.tipo===a.id?P.purpleBorder:P.border}`}}>
+                          {a.icon} {a.label}
+                        </button>
+                      ))}
+                    </div>
+                    <FGrid min={160}>
+                      <div>
+                        <Lbl>Cuándo ocurrió</Lbl>
+                        <Input type="date" value={actForm.fecha} onChange={v=>setActForm(p=>({...p,fecha:v}))}/>
+                      </div>
+                      <div>
+                        <Lbl>Resultado</Lbl>
+                        <Input value={actForm.resultado} onChange={v=>setActForm(p=>({...p,resultado:v}))} placeholder="Contestó, reagendó..."/>
+                      </div>
+                    </FGrid>
+                    <div style={{marginTop:10}}>
+                      <Lbl>Nota</Lbl>
+                      <textarea value={actForm.notas} onChange={e=>setActForm(p=>({...p,notas:e.target.value}))}
+                        rows={2} placeholder="Qué se habló y qué queda comprometido"
+                        style={{width:'100%',background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'9px 12px',color:P.text,fontSize:13,outline:'none',fontFamily:'inherit',boxSizing:'border-box',resize:'vertical'}}/>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'flex-end',marginTop:10}}>
+                      <Btn onClick={()=>registrarActividad(selected.id)} disabled={actSaving||!actForm.notas.trim()}>
+                        {actSaving?'Guardando...':'Registrar gestión'}
+                      </Btn>
+                    </div>
+                  </div>
+                </FSection>
+              })()}
 
               <FSection title="Gestión" icon="⚙️" accent={P.blue}>
                 <p style={{fontSize:9.5,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:700,margin:'0 0 7px'}}>Estado</p>
