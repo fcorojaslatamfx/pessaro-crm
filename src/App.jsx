@@ -961,6 +961,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[selected,setSelected]=useState(null)
   const[notes,setNotes]=useState([])
   const[noteText,setNoteText]=useState('')
+  const[noteErr,setNoteErr]=useState('')
   const[form,setForm]=useState({full_name:'',email:'',phone:'',address:'',status:'activo',notes:''})
   const[formErr,setFormErr]=useState({})
   const[saving,setSaving]=useState(false)
@@ -1242,7 +1243,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   }
 
   const openContact=async c=>{
-    setSelected(c);setNotes([]);setNoteText('');setActivities([])
+    setSelected(c);setNotes([]);setNoteText('');setNoteErr('');setComErr('');setActivities([])
     loadFicha(c)
     try{
       let q=supabase.from('crm_notes').select('*').order('created_at',{ascending:false})
@@ -1271,17 +1272,19 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const addNote=async()=>{
     if(!noteText.trim()||!selected)return
     const isSub=selected.id.startsWith('sub_')
-    const payload={content:noteText}
+    const payload={content:noteText,created_by:user.id}
     if(isSub) payload.contact_submission_id=selected.id.replace('sub_','')
     else payload.crm_contact_id=selected.id
     const{data,error}=await supabase.from('crm_notes').insert(payload).select().single()
-    if(error){console.error('addNote:',error);return}
+    // El error se enseña. Antes sólo iba a console.error y el botón parecía no
+    // hacer nada: así estuvo la nota rota desde el 2026-06-18 sin que se notara.
+    if(error){console.error('addNote:',error);setNoteErr(error.message);return}
+    setNoteErr('')
     if(data){
       setNotes(p=>[data,...p]);setNoteText('')
-      if(!selected.id.startsWith('sub_')){
-        logActivity(user.id,selected.id,'nota_agregada','Nota agregada',{})
-        setActivities(p=>[{id:Date.now().toString(),activity_type:'nota_agregada',description:'Nota agregada',created_at:new Date().toISOString()},...p])
-      }
+      // La actividad la escribe el trigger fn_log_note_added en la base; aquí
+      // sólo se refleja en pantalla para no esperar a recargar la ficha.
+      if(!isSub)setActivities(p=>[{id:Date.now().toString(),activity_type:'nota_agregada',description:'Nota agregada al contacto',created_at:new Date().toISOString()},...p])
     }
   }
 
@@ -2118,8 +2121,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                     </div>
                   ))}
                 </div>}
+                {noteErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 8px'}}>No se pudo guardar la nota: {noteErr}</p>}
                 <div style={{display:'flex',gap:8}}>
-                  <Input value={noteText} onChange={setNoteText} placeholder="Añadir nota..." style={{flex:1}}/>
+                  <Input value={noteText} onChange={setNoteText} placeholder="Añadir nota..." style={{flex:1}}
+                    onKeyDown={e=>{if(e.key==='Enter'&&noteText.trim())addNote()}}/>
                   <Btn onClick={addNote} disabled={!noteText.trim()}>+</Btn>
                 </div>
               </FSection>
