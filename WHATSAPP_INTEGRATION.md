@@ -2,7 +2,7 @@
 
 > **Stack:** Supabase Edge Functions (Deno/TS) + React + Supabase PostgreSQL + Realtime
 > **Proyecto Supabase:** `ldlflxujrjihiybrcree`
-> **CRM repo:** `pessaro-crm` → `crr.pessaro.cl`
+> **CRM repo:** `pessaro-crm` → `crm.pessaro.cl`
 > **Edge Functions existentes:** `unified_forms_complete_2026_02_25_20_30` (v37)
 
 ---
