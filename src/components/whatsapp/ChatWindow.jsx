@@ -130,6 +130,93 @@ function StatusTicks({ status }) {
   return null
 }
 
+// ── Catálogo de plantillas ────────────────────────────────────────────────
+// Una sola carga para toda la bandeja, compartida por promesa: aunque haya diez
+// burbujas de plantilla en pantalla, la consulta se hace una vez.
+let catalogoPromesa = null
+function cargarCatalogo() {
+  if (!catalogoPromesa) {
+    catalogoPromesa = supabase
+      .from('whatsapp_templates')
+      .select('template_name, language, body_text, footer_text, header_type, buttons')
+      .then(({ data }) => {
+        const m = new Map()
+        for (const t of data || []) if (!m.has(t.template_name)) m.set(t.template_name, t)
+        return m
+      })
+      .catch(() => new Map())
+  }
+  return catalogoPromesa
+}
+
+function usePlantilla(nombre) {
+  const [tpl, setTpl] = useState(null)
+  useEffect(() => {
+    if (!nombre) return
+    let vivo = true
+    cargarCatalogo().then(m => { if (vivo) setTpl(m.get(nombre) || null) })
+    return () => { vivo = false }
+  }, [nombre])
+  return tpl
+}
+
+// Reconstruye el mensaje que realmente vio el destinatario. Todo el dato ya
+// está guardado y no hay que preguntarle nada a Meta:
+//   - whatsapp_messages.content.components → la imagen del encabezado y los
+//     valores con los que se rellenaron las variables ({{1}} = "Ivan")
+//   - whatsapp_templates → el cuerpo con los {{n}}, el pie y los botones
+// Antes la burbuja mostraba sólo `📋 nombre_de_la_plantilla`, así que revisar una
+// campaña desde el CRM obligaba a abrir WhatsApp en el teléfono.
+function TemplateContent({ msg }) {
+  const tpl = usePlantilla(msg.template_name)
+  const comps = Array.isArray(msg.content?.components) ? msg.content.components : []
+  const imagen = comps.find(c => c.type === 'header')?.parameters?.[0]?.image?.link || null
+  const valores = (comps.find(c => c.type === 'body')?.parameters || []).map(p => p?.text ?? '')
+
+  // Sin catálogo (plantilla borrada en Meta, o sin sincronizar) se cae al
+  // comportamiento anterior en vez de dejar la burbuja vacía.
+  if (!tpl) {
+    return (
+      <p style={{ margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5 }}>
+        📋 {msg.template_name || 'plantilla'}
+      </p>
+    )
+  }
+
+  const cuerpo = String(tpl.body_text || '').replace(
+    /\{\{\s*(\d+)\s*\}\}/g,
+    (_, n) => valores[Number(n) - 1] ?? `{{${n}}}`,
+  )
+  const botones = Array.isArray(tpl.buttons) ? tpl.buttons : []
+
+  return (
+    <div style={{ minWidth: 210 }}>
+      {imagen && (
+        <img
+          src={imagen}
+          alt=""
+          style={{ width: '100%', maxWidth: 260, borderRadius: 8, display: 'block', marginBottom: 8 }}
+        />
+      )}
+      <p style={{ margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {cuerpo}
+      </p>
+      {tpl.footer_text && (
+        <p style={{ margin: '6px 0 0', fontSize: 11, color: C.muted }}>{tpl.footer_text}</p>
+      )}
+      {botones.length > 0 && (
+        <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {botones.map((b, i) => (
+            <div key={i} style={{ fontSize: 12, color: C.green, textAlign: 'center', padding: '3px 0' }}>
+              ↩ {b.text}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function MessageBubble({ msg }) {
   const out = msg.direction === 'outbound'
   const hasMedia = (msg.message_type === 'image' || msg.message_type === 'document') && !!msg.media_storage_path
@@ -138,9 +225,33 @@ function MessageBubble({ msg }) {
   let body
   if (hasMedia) {
     body = <MediaContent msg={msg} />
+  } else if (msg.message_type === 'template') {
+    body = <TemplateContent msg={msg} />
   } else {
-    const text = msg.content?.text || (msg.message_type === 'template' ? `📋 ${msg.template_name || 'plantilla'}` : `[${msg.message_type}]`)
-    body = <p style={{ margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{text}</p>
+    // `content.title` es donde llega el texto del botón cuando la persona
+    // responde a un mensaje interactivo. Sin ese respaldo la burbuja mostraba
+    // `[interactive]` y no se sabía qué había pulsado.
+    const text =
+      msg.content?.text ||
+      msg.content?.title ||
+      `[${msg.message_type}]`
+    // Los mensajes interactivos que manda el bot guardan sus botones en
+    // content.buttons; se dibujan igual que los de una plantilla.
+    const botonesPropios = Array.isArray(msg.content?.buttons) ? msg.content.buttons : []
+    body = (
+      <>
+        <p style={{ margin: 0, fontSize: 13, color: C.text, lineHeight: 1.5, wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{text}</p>
+        {botonesPropios.length > 0 && (
+          <div style={{ marginTop: 8, borderTop: `1px solid ${C.border}`, paddingTop: 6, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {botonesPropios.map((b, i) => (
+              <div key={i} style={{ fontSize: 12, color: C.green, textAlign: 'center', padding: '3px 0' }}>
+                ↩ {typeof b === 'string' ? b : b?.text || b?.titulo}
+              </div>
+            ))}
+          </div>
+        )}
+      </>
+    )
   }
 
   return (
