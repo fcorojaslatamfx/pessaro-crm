@@ -68,7 +68,14 @@ function initials(name) {
   return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)
 }
 
-export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, staffProfile, assignments, staffList, myContacts, currentUserId }) {
+export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, staffProfile, assignments, staffList, myContacts, currentUserId, onBulkAssign }) {
+  // Asignación de chats en bloque: repartir una bandeja de cuarenta
+  // conversaciones de a una es media hora de clics.
+  const [selMode, setSelMode] = useState(false)
+  const [selPhones, setSelPhones] = useState([])
+  const [bulkStaff, setBulkStaff] = useState('')
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkMsg, setBulkMsg] = useState(null)
   const [allMessages, setAllMessages] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
@@ -170,6 +177,63 @@ export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, s
             boxSizing: 'border-box', marginBottom: 8,
           }}
         />
+        {/* Asignar varios chats de una vez. Sólo super admin: repartir la
+            bandeja es suyo, igual que la asignación de a una. */}
+        {isSuperAdmin && (
+          <div style={{ marginBottom: 8 }}>
+            <button onClick={() => { setSelMode(v => !v); setSelPhones([]); setBulkMsg(null) }}
+              style={{
+                width: '100%', padding: '6px 10px', borderRadius: 7, fontSize: 11, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                background: selMode ? C.purpleDim : 'rgba(255,255,255,0.04)',
+                color: selMode ? C.purple : C.muted,
+                border: `1px solid ${selMode ? 'rgba(108,92,231,0.35)' : C.border}`,
+              }}>
+              {selMode ? '✕ Salir de la selección' : '⇄ Asignar varios chats'}
+            </button>
+            {selMode && (
+              <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => setSelPhones(filtered.map(c => c.phone))}
+                    style={{ flex: 1, padding: '5px 6px', borderRadius: 6, fontSize: 10.5, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(255,255,255,0.04)', color: C.textSub, border: `1px solid ${C.border}` }}>
+                    Todos ({filtered.length})
+                  </button>
+                  <button onClick={() => setSelPhones([])}
+                    style={{ flex: 1, padding: '5px 6px', borderRadius: 6, fontSize: 10.5, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(255,255,255,0.04)', color: C.textSub, border: `1px solid ${C.border}` }}>
+                    Ninguno
+                  </button>
+                </div>
+                <select value={bulkStaff} onChange={e => setBulkStaff(e.target.value)}
+                  style={{ background: 'rgba(255,255,255,0.04)', border: `1px solid ${C.border}`, borderRadius: 7, padding: '6px 8px', color: C.text, fontSize: 11.5, outline: 'none', fontFamily: 'inherit' }}>
+                  <option value="" style={{ background: C.surface }}>Asignar a…</option>
+                  {(staffList || []).map(s => <option key={s.id} value={s.id} style={{ background: C.surface }}>{s.display_name}</option>)}
+                </select>
+                <button
+                  disabled={bulkBusy || !selPhones.length || !bulkStaff}
+                  onClick={async () => {
+                    setBulkBusy(true); setBulkMsg(null)
+                    try {
+                      await onBulkAssign?.(selPhones, bulkStaff)
+                      const nombre = getStaff(bulkStaff)?.display_name || 'el asesor'
+                      setBulkMsg({ tipo: 'ok', texto: `${selPhones.length} chat(s) asignados a ${nombre}.` })
+                      setSelPhones([])
+                    } catch (e) {
+                      setBulkMsg({ tipo: 'err', texto: e.message || 'No se pudo asignar' })
+                    } finally { setBulkBusy(false) }
+                  }}
+                  style={{
+                    padding: '7px 10px', borderRadius: 7, fontSize: 11.5, fontWeight: 700, fontFamily: 'inherit',
+                    cursor: bulkBusy || !selPhones.length || !bulkStaff ? 'not-allowed' : 'pointer',
+                    background: !selPhones.length || !bulkStaff ? 'rgba(255,255,255,0.05)' : C.purple,
+                    color: !selPhones.length || !bulkStaff ? C.muted : '#fff', border: 'none',
+                  }}>
+                  {bulkBusy ? 'Asignando…' : `Asignar ${selPhones.length} chat${selPhones.length !== 1 ? 's' : ''}`}
+                </button>
+                {bulkMsg && <p style={{ fontSize: 10.5, margin: 0, color: bulkMsg.tipo === 'ok' ? C.green : C.red }}>{bulkMsg.texto}</p>}
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Section tabs (Chats activos vs Mis contactos sin chat) */}
         <div style={{ display: 'flex', gap: 4, marginBottom: isSuperAdmin && section === 'chats' ? 8 : 0 }}>
           <button onClick={() => setSection('chats')}
@@ -235,10 +299,13 @@ export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, s
               const active = conv.phone === selectedPhone
               const assignment = getAssignment(conv.phone)
               const assignedStaff = assignment ? getStaff(assignment.assigned_to) : null
+              const marcado = selPhones.includes(conv.phone)
               return (
                 <button
                   key={conv.phone}
-                  onClick={() => onSelect(conv.phone, conv.name)}
+                  onClick={() => selMode
+                    ? setSelPhones(p => marcado ? p.filter(x => x !== conv.phone) : [...p, conv.phone])
+                    : onSelect(conv.phone, conv.name)}
                   style={{
                     width: '100%', display: 'flex', alignItems: 'center', gap: 10,
                     padding: '11px 14px',
@@ -251,6 +318,9 @@ export default function WhatsAppInbox({ selectedPhone, onSelect, isSuperAdmin, s
                   onMouseEnter={e => { if (!active) e.currentTarget.style.background = 'rgba(255,255,255,0.03)' }}
                   onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
                 >
+                  {selMode && (
+                    <span style={{ fontSize: 14, flexShrink: 0, color: marcado ? C.green : C.muted }}>{marcado ? '☑' : '☐'}</span>
+                  )}
                   <div style={{ position: 'relative', flexShrink: 0 }}>
                     <div style={{
                       width: 38, height: 38, borderRadius: '50%',

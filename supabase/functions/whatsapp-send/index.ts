@@ -260,7 +260,13 @@ async function runCampaign(
   //      - contact_group_id → contactos de un grupo del CRM (crm_contacts)
   //      - resto de filtros  → leads de campaña (campaign_leads)
   const tf = wc.target_filter || {}
-  const fromGroup = !!tf.contact_group_id
+  // contact_group_ids (grupo + subgrupos marcados) es lo que manda el CRM desde
+  // que existen los subgrupos; contact_group_id se sigue leyendo para las
+  // campañas creadas antes, que sólo tienen ese campo.
+  const grupos: string[] = Array.isArray(tf.contact_group_ids) && tf.contact_group_ids.length
+    ? tf.contact_group_ids.filter(Boolean)
+    : (tf.contact_group_id ? [tf.contact_group_id] : [])
+  const fromGroup = grupos.length > 0
   let leads: any[] | null = null
   let leadsErr: any = null
 
@@ -269,7 +275,7 @@ async function runCampaign(
     const { data, error } = await supabase
       .from('crm_contact_group_members')
       .select('crm_contacts(id, full_name, phone)')
-      .eq('group_id', tf.contact_group_id)
+      .in('group_id', grupos)
     leadsErr = error
     leads = (data || []).map((r: any) => r.crm_contacts).filter((c: any) => c && c.phone)
   } else {
