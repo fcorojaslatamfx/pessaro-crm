@@ -1145,6 +1145,11 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[trFilter,setTrFilter]=useState({desde:'',hasta:'',grupo:'todos'})
   const[transferMsg,setTransferMsg]=useState(null) // {type,text}
   const[transferMode,setTransferMode]=useState(false) // la lista de miembros pasa a selección múltiple
+  // Subgrupos creados desde dentro del grupo padre
+  const[creandoSub,setCreandoSub]=useState(false)
+  const[subForm,setSubForm]=useState({name:'',color:GROUP_COLORS[1]})
+  const[subErr,setSubErr]=useState('')
+  const[subBusy,setSubBusy]=useState(false)
   // Filtros dentro del grupo, para armar la membresía en bloque
   const MEMBER_FILTER_0={estado:'todos',tipo:'todos',etapa:'todos',fecha:'todos',asesor:'todos',grupo:'todos',pertenencia:'todos'}
   const[memberFilter,setMemberFilter]=useState(MEMBER_FILTER_0)
@@ -1244,6 +1249,27 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       p_note:null,p_copiar:false,
     })
     if(error){console.error('toggleMember:',error);loadGroups()}
+  }
+
+  // Crear un subgrupo desde dentro del grupo padre: el padre no se elige, se
+  // hereda de dónde estás parado. Así no hay forma de equivocarse de padre.
+  const crearSubgrupo=async(padreId)=>{
+    const name=subForm.name.trim()
+    if(!name){setSubErr('Ponle un nombre al subgrupo');return}
+    setSubErr('');setSubBusy(true)
+    try{
+      const{error}=await supabase.from('crm_contact_groups').insert({
+        name,color:subForm.color,parent_id:padreId,user_id:user.id,
+        group_type:groups.find(g=>g.id===padreId)?.group_type||'mixto',
+      })
+      if(error)throw error
+      setSubForm({name:'',color:GROUP_COLORS[1]})
+      setCreandoSub(false)
+      await loadGroups()
+    }catch(e){
+      console.error('crearSubgrupo:',e)
+      setSubErr(e.code==='23505'?'Ya tienes un grupo con ese nombre.':(e.message||'No se pudo crear'))
+    }finally{setSubBusy(false)}
   }
 
   // Historial de traspasos. Se carga al abrir la pestaña, no al montar: es una
@@ -2328,6 +2354,55 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             </Btn>
           </div>
 
+          {/* Subgrupos de ESTE grupo. Se crean aquí, no en el formulario de
+              abajo: el padre es el grupo en el que ya estás. */}
+          {!transferMode&&!g.parent_id&&(()=>{
+            const hijos=groups.filter(x=>x.parent_id===g.id)
+            return <div style={{marginBottom:12,padding:'11px 13px',background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10}}>
+              <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                <span style={{fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.09em',fontWeight:700}}>Subgrupos ({hijos.length})</span>
+                <Btn variant="ghost" onClick={()=>{setCreandoSub(v=>!v);setSubErr('')}} style={{fontSize:11,padding:'5px 10px',marginLeft:'auto'}}>
+                  {creandoSub?'Cancelar':'+ Crear subgrupo aquí'}
+                </Btn>
+              </div>
+              {hijos.length>0&&<div style={{display:'flex',gap:6,flexWrap:'wrap',marginTop:9}}>
+                {hijos.map(h=>{
+                  const n=Object.values(memberships).filter(ids=>ids.includes(h.id)).length
+                  return <button key={h.id} onClick={()=>{setManagingGroup(h.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null);setCreandoSub(false)}}
+                    title="Abrir este subgrupo"
+                    style={{padding:'4px 10px',borderRadius:20,fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
+                      background:h.color+'22',color:h.color,border:`1px solid ${h.color}55`}}>
+                    ↳ {h.name} ({n})
+                  </button>
+                })}
+              </div>}
+              {creandoSub&&<div style={{marginTop:10}}>
+                <Input value={subForm.name} onChange={v=>{setSubForm(p=>({...p,name:v}));if(subErr)setSubErr('')}}
+                  placeholder={`Nombre del subgrupo (dentro de ${g.name})`} style={{marginBottom:8}}/>
+                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+                  {GROUP_COLORS.map(col=>(
+                    <button key={col} onClick={()=>setSubForm(p=>({...p,color:col}))}
+                      style={{width:22,height:22,borderRadius:'50%',background:col,cursor:'pointer',
+                        border:subForm.color===col?'2px solid #fff':'2px solid transparent'}}/>
+                  ))}
+                </div>
+                {subErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 8px'}}>{subErr}</p>}
+                <Btn onClick={()=>crearSubgrupo(g.id)} disabled={subBusy} style={{fontSize:11,padding:'6px 12px'}}>
+                  {subBusy?'Creando…':`+ Crear dentro de «${g.name}»`}
+                </Btn>
+              </div>}
+            </div>
+          })()}
+          {/* En un subgrupo se recuerda de quién cuelga, para no perderse */}
+          {!transferMode&&g.parent_id&&(()=>{
+            const padre=groups.find(x=>x.id===g.parent_id)
+            if(!padre)return null
+            return <p style={{fontSize:11.5,color:P.muted,margin:'0 0 12px'}}>
+              Subgrupo de <button onClick={()=>{setManagingGroup(padre.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}}
+                style={{background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:11.5,color:padre.color,fontWeight:600,textDecoration:'underline dotted',textUnderlineOffset:2}}>{padre.name}</button>
+            </p>
+          })()}
+
           {transferMode?<div>
             {destinos.length===0
               ?<p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:'0 0 12px'}}>Necesitas al menos otro grupo para poder traspasar. Crea uno desde «← Volver».</p>
@@ -2526,7 +2601,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         </div>
         <div style={{borderTop:`1px solid ${P.border}`,paddingTop:16}}>
           <Lbl>{editingGroup?'Editar grupo':'Nuevo grupo'}</Lbl>
-          <Input value={groupForm.name} onChange={v=>setGroupForm(p=>({...p,name:v}))} placeholder="Nombre del grupo" style={{marginBottom:8}}/>
+          {/* El error se limpia al escribir: si no, el aviso de «falta el
+              nombre» seguía en pantalla después de haberlo puesto y parecía
+              que el formulario mentía. */}
+          <Input value={groupForm.name} onChange={v=>{setGroupForm(p=>({...p,name:v}));if(groupErr)setGroupErr('')}} placeholder="Nombre del grupo" style={{marginBottom:8}}/>
           <Input value={groupForm.description} onChange={v=>setGroupForm(p=>({...p,description:v}))} placeholder="Descripción (opcional)" style={{marginBottom:10}}/>
           {/* Etiqueta del grupo, no una restricción: sirve para saber de un
               vistazo si la cartera es de personas o de empresas al elegir
@@ -2535,12 +2613,14 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             <Sel value={groupForm.group_type} onChange={v=>setGroupForm(p=>({...p,group_type:v}))}
               options={[{value:'mixto',label:'Personas y empresas (mixto)'},{value:'P2P',label:'Grupo de personas'},{value:'B2B',label:'Grupo de empresas'}]}/>
           </div>
-          {/* Sólo un nivel: se ofrecen como padre los grupos que no son ya
-              subgrupos, y nunca el propio grupo que se está editando. */}
+          {/* Sólo aparece al EDITAR, para reorganizar un grupo que ya existe.
+              Los subgrupos se crean desde dentro del grupo padre: tenerlo aquí
+              además obligaba a acordarse de elegir el padre y sobraba una
+              decisión en el formulario de crear. */}
           {(()=>{
             const posibles=groups.filter(g=>!g.parent_id&&g.id!==editingGroup&&!groups.some(h=>h.parent_id===editingGroup&&h.id===g.id))
             const tieneHijos=editingGroup&&groups.some(g=>g.parent_id===editingGroup)
-            if(!posibles.length)return null
+            if(!posibles.length||!editingGroup)return null
             return <div style={{marginBottom:10}}>
               <Sel value={groupForm.parent_id} onChange={v=>setGroupForm(p=>({...p,parent_id:v}))}
                 options={[{value:'',label:'Grupo principal (sin padre)'},...posibles.map(g=>({value:g.id,label:`Subgrupo de: ${g.name}`}))]}/>
