@@ -1135,9 +1135,6 @@ function Contacts({user,isSuperAdmin,staffProfile}){
 
   useEffect(()=>{loadGroups()},[loadGroups])
 
-  // El historial se trae al abrir su pestaña, no al montar el CRM
-  useEffect(()=>{if(showGroups&&groupTab==='historial'&&!managingGroup)loadTransfers()},[showGroups,groupTab,managingGroup,loadTransfers])
-
   // Quién pidió no recibir mensajes. Sólo cuentan las bajas sin reactivar.
   useEffect(()=>{(async()=>{
     try{
@@ -1199,6 +1196,12 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     }catch(e){console.error('loadTransfers:',e);setTransfers([])}
     finally{setLoadingTransfers(false)}
   },[])
+
+  // El historial se trae al abrir su pestaña, no al montar el CRM.
+  // Va DESPUÉS de loadTransfers a propósito: el array de dependencias se
+  // evalúa durante el render, así que declararlo antes lo dejaba en la zona
+  // muerta temporal y el módulo entero reventaba al entrar en Contactos.
+  useEffect(()=>{if(showGroups&&groupTab==='historial'&&!managingGroup)loadTransfers()},[showGroups,groupTab,managingGroup,loadTransfers])
 
   // Traspaso en lote desde la pantalla de miembros del grupo
   const doTransfer=async()=>{
