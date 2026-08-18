@@ -113,8 +113,10 @@ export default function CampaignSender({ user }) {
     header_image_url: '',
     contact_group_id: '',   // vacío = campaign_leads; con valor = grupo de contactos
     body_variable: '',      // vacío = primer nombre de cada destinatario
-    dedupe_scope: 'campaign', // a quién NO se le vuelve a escribir
-    dedupe_days: '30',        // ventana en días para template/global
+    // Por defecto no se le escribe a quien ya recibió CUALQUIER campaña en los
+    // últimos 30 días. Es la regla de la casa; se puede aflojar por campaña.
+    dedupe_scope: 'global',
+    dedupe_days: '30',
   })
 
   // Previsualización: cuántos recibirían realmente el mensaje
@@ -251,7 +253,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '', dedupe_scope: 'campaign', dedupe_days: '30' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '', dedupe_scope: 'global', dedupe_days: '30' })
         await recargarCampanas()
         setTab('historial')
       } else {
@@ -331,7 +333,7 @@ export default function CampaignSender({ user }) {
         target_filter: wc.target_filter,
         header_image_url: wc.header_image_url,
         body_variable: wc.body_variable,
-        dedupe_scope: wc.dedupe_scope || 'campaign',
+        dedupe_scope: wc.dedupe_scope || 'global',
         dedupe_days: wc.dedupe_days,
         status: 'draft',
         created_by: user?.id || null,
