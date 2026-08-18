@@ -1147,7 +1147,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[transferMode,setTransferMode]=useState(false) // la lista de miembros pasa a selección múltiple
   // Subgrupos creados desde dentro del grupo padre
   const[creandoSub,setCreandoSub]=useState(false)
-  const[subForm,setSubForm]=useState({name:'',color:GROUP_COLORS[1]})
+  const[subForm,setSubForm]=useState({name:'',color:GROUP_COLORS[1],cuantos:'30'})
   const[subErr,setSubErr]=useState('')
   const[subBusy,setSubBusy]=useState(false)
   // Filtros dentro del grupo, para armar la membresía en bloque
@@ -1267,17 +1267,26 @@ function Contacts({user,isSuperAdmin,staffProfile}){
 
   // Crear un subgrupo desde dentro del grupo padre: el padre no se elige, se
   // hereda de dónde estás parado. Así no hay forma de equivocarse de padre.
-  const crearSubgrupo=async(padreId)=>{
+  const crearSubgrupo=async(padreId,idsQueSeLleva)=>{
     const name=subForm.name.trim()
     if(!name){setSubErr('Ponle un nombre al subgrupo');return}
     setSubErr('');setSubBusy(true)
     try{
-      const{error}=await supabase.from('crm_contact_groups').insert({
+      const{data:nuevo,error}=await supabase.from('crm_contact_groups').insert({
         name,color:subForm.color,parent_id:padreId,user_id:user.id,
         group_type:groups.find(g=>g.id===padreId)?.group_type||'mixto',
-      })
+      }).select().single()
       if(error)throw error
-      setSubForm({name:'',color:GROUP_COLORS[1]})
+      // Nace con su gente dentro: crear el subgrupo vacío y repartir después
+      // obligaba a marcar contactos de a uno entre doscientos.
+      if(idsQueSeLleva?.length){
+        const{error:e2}=await supabase.rpc('transfer_contacts_between_groups',{
+          p_contact_ids:idsQueSeLleva,p_from_group:null,p_to_group:nuevo.id,
+          p_note:`Alta al crear el subgrupo «${name}»`,p_copiar:false,
+        })
+        if(e2)throw e2
+      }
+      setSubForm({name:'',color:GROUP_COLORS[1],cuantos:'30'})
       setCreandoSub(false)
       await loadGroups()
     }catch(e){
@@ -2413,21 +2422,54 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                   </button>
                 })}
               </div>}
-              {creandoSub&&<div style={{marginTop:10}}>
-                <Input value={subForm.name} onChange={v=>{setSubForm(p=>({...p,name:v}));if(subErr)setSubErr('')}}
-                  placeholder={`Nombre del subgrupo (dentro de ${g.name})`} style={{marginBottom:8}}/>
-                <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-                  {GROUP_COLORS.map(col=>(
-                    <button key={col} onClick={()=>setSubForm(p=>({...p,color:col}))}
-                      style={{width:22,height:22,borderRadius:'50%',background:col,cursor:'pointer',
-                        border:subForm.color===col?'2px solid #fff':'2px solid transparent'}}/>
-                  ))}
+              {creandoSub&&(()=>{
+                // Reparto: se toman los que aún no están en ningún subgrupo, en
+                // el orden de la lista de abajo. Así se puede trocear el grupo
+                // en tandas seguidas: 30 al primero, los 30 siguientes al otro.
+                const libres=miembros.filter(c=>!hijos.some(h=>(memberships[c.id]||[]).includes(h.id)))
+                const n=Math.max(0,Math.min(Number(subForm.cuantos)||0,libres.length))
+                const seLleva=libres.slice(0,n)
+                return <div style={{marginTop:10}}>
+                  <Input value={subForm.name} onChange={v=>{setSubForm(p=>({...p,name:v}));if(subErr)setSubErr('')}}
+                    placeholder={`Nombre del subgrupo (dentro de ${g.name})`} style={{marginBottom:8}}/>
+                  <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+                    {GROUP_COLORS.map(col=>(
+                      <button key={col} onClick={()=>setSubForm(p=>({...p,color:col}))}
+                        style={{width:22,height:22,borderRadius:'50%',background:col,cursor:'pointer',
+                          border:subForm.color===col?'2px solid #fff':'2px solid transparent'}}/>
+                    ))}
+                  </div>
+                  <Lbl>Cuántos contactos se lleva</Lbl>
+                  <div style={{display:'flex',gap:6,alignItems:'center',flexWrap:'wrap',marginBottom:8}}>
+                    <div style={{width:90}}>
+                      <Input type="number" value={subForm.cuantos} onChange={v=>setSubForm(p=>({...p,cuantos:v}))} placeholder="30"/>
+                    </div>
+                    {[10,30,50,100].filter(x=>x<libres.length).map(x=>(
+                      <button key={x} onClick={()=>setSubForm(p=>({...p,cuantos:String(x)}))}
+                        style={{padding:'5px 10px',borderRadius:6,fontSize:11,cursor:'pointer',fontFamily:'inherit',
+                          background:String(x)===String(subForm.cuantos)?P.purpleDim:'rgba(255,255,255,0.04)',
+                          color:String(x)===String(subForm.cuantos)?P.purpleLight:P.muted,
+                          border:`1px solid ${String(x)===String(subForm.cuantos)?P.purpleBorder:P.border}`}}>{x}</button>
+                    ))}
+                    <button onClick={()=>setSubForm(p=>({...p,cuantos:String(libres.length)}))}
+                      style={{padding:'5px 10px',borderRadius:6,fontSize:11,cursor:'pointer',fontFamily:'inherit',
+                        background:'rgba(255,255,255,0.04)',color:P.muted,border:`1px solid ${P.border}`}}>Todos ({libres.length})</button>
+                    <button onClick={()=>setSubForm(p=>({...p,cuantos:'0'}))}
+                      style={{padding:'5px 10px',borderRadius:6,fontSize:11,cursor:'pointer',fontFamily:'inherit',
+                        background:'rgba(255,255,255,0.04)',color:P.muted,border:`1px solid ${P.border}`}}>Ninguno</button>
+                  </div>
+                  <p style={{fontSize:11,color:P.muted,margin:'0 0 8px',lineHeight:1.6}}>
+                    Quedan <strong style={{color:P.textSub}}>{libres.length}</strong> sin subgrupo en «{g.name}».
+                    {n>0
+                      ?<> Se llevará los <strong style={{color:P.textSub}}>{n} primeros</strong>: {seLleva.slice(0,3).map(c=>c.full_name).join(', ')}{n>3?` y ${n-3} más`:''}.</>
+                      :<> No se llevará a nadie: podrás agregarlos después.</>}
+                  </p>
+                  {subErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 8px'}}>{subErr}</p>}
+                  <Btn onClick={()=>crearSubgrupo(g.id,seLleva.map(c=>c.id))} disabled={subBusy} style={{fontSize:11,padding:'6px 12px'}}>
+                    {subBusy?'Creando…':n>0?`+ Crear con ${n} contacto${n!==1?'s':''}`:`+ Crear vacío dentro de «${g.name}»`}
+                  </Btn>
                 </div>
-                {subErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 8px'}}>{subErr}</p>}
-                <Btn onClick={()=>crearSubgrupo(g.id)} disabled={subBusy} style={{fontSize:11,padding:'6px 12px'}}>
-                  {subBusy?'Creando…':`+ Crear dentro de «${g.name}»`}
-                </Btn>
-              </div>}
+              })()}
             </div>
           })()}
           {/* En un subgrupo se recuerda de quién cuelga, para no perderse */}
@@ -2526,6 +2568,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
               </Btn>
             </div>
             {bulkMsg&&<span style={{fontSize:11.5,color:bulkMsg.type==='ok'?P.green:P.red,width:'100%'}}>{bulkMsg.text}</span>}
+            {/* El ☑ confundía: parecía una selección pendiente de confirmar */}
+            <span style={{fontSize:10.5,color:P.muted,width:'100%'}}>La marca ☑ indica quién ya pertenece al grupo, no una selección.</span>
           </div>
           <div style={{maxHeight:340,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
             {lista.map(c=>{
