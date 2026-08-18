@@ -100,23 +100,33 @@ function envoltorio(titulo: string, cuerpo: string) {
 // Diagonal con el correo en cada página, y un pie con el ID de descarga y la
 // fecha. Va por encima del contenido, translúcida, para que estorbe poco al
 // leer pero no se pueda recortar sin que se note.
+const MARCA = 'Pessaro Capital'
+
 async function estampar(bytes: Uint8Array, email: string, code: string): Promise<Uint8Array<ArrayBuffer>> {
   const pdf = await PDFDocument.load(bytes)
   const font = await pdf.embedFont(StandardFonts.Helvetica)
+  const fontMarca = await pdf.embedFont(StandardFonts.HelveticaBold)
   const fecha = new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })
+  // La diagonal dice de quién es el documento; el pie, a quién se le entregó.
+  // Separarlos deja la marca legible y conserva la trazabilidad de la copia.
   const pie = `Descargado por ${email} · ${fecha} · ID ${code} · Uso exclusivo del destinatario`
 
   for (const page of pdf.getPages()) {
     const { width, height } = page.getSize()
 
-    const size = Math.min(28, Math.max(12, width / (email.length * 0.62)))
-    const ancho = font.widthOfTextAtSize(email, size)
-    // El texto sale desde una esquina hacia arriba a 45°: se desplaza media
+    // Ocupa ~62 % de la diagonal, así queda igual de proporcionada en vertical
+    // y en apaisado en vez de salirse en una y perderse en la otra.
+    const objetivo = Math.hypot(width, height) * 0.62
+    // Se mide con la MISMA fuente con la que se dibuja: la negrita es más
+    // ancha que la normal y el tamaño saldría corto.
+    const size = objetivo / fontMarca.widthOfTextAtSize(MARCA, 100) * 100
+    const ancho = fontMarca.widthOfTextAtSize(MARCA, size)
+    // El texto sale desde su origen hacia arriba a 45°: se retrocede media
     // diagonal para que quede centrado en la página.
-    page.drawText(email, {
+    page.drawText(MARCA, {
       x: width / 2 - (ancho / 2) * Math.SQRT1_2,
       y: height / 2 - (ancho / 2) * Math.SQRT1_2,
-      size, font, color: rgb(0.45, 0.45, 0.5), opacity: 0.22, rotate: degrees(45),
+      size, font: fontMarca, color: rgb(0.45, 0.45, 0.5), opacity: 0.12, rotate: degrees(45),
     })
 
     const piePx = 6.5
