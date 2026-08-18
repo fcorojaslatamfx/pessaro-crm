@@ -1094,6 +1094,11 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[trFilter,setTrFilter]=useState({desde:'',hasta:'',grupo:'todos'})
   const[transferMsg,setTransferMsg]=useState(null) // {type,text}
   const[transferMode,setTransferMode]=useState(false) // la lista de miembros pasa a selección múltiple
+  // Filtros dentro del grupo, para armar la membresía en bloque
+  const MEMBER_FILTER_0={estado:'todos',tipo:'todos',etapa:'todos',fecha:'todos',asesor:'todos',grupo:'todos',pertenencia:'todos'}
+  const[memberFilter,setMemberFilter]=useState(MEMBER_FILTER_0)
+  const[bulkBusy,setBulkBusy]=useState(false)
+  const[bulkMsg,setBulkMsg]=useState(null) // {type,text}
   // Campañas WABA que ya recibió el contacto abierto en la ficha
   const[campanas,setCampanas]=useState([])
   // Gestión comercial dentro de la ficha
@@ -1202,6 +1207,28 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   // evalúa durante el render, así que declararlo antes lo dejaba en la zona
   // muerta temporal y el módulo entero reventaba al entrar en Contactos.
   useEffect(()=>{if(showGroups&&groupTab==='historial'&&!managingGroup)loadTransfers()},[showGroups,groupTab,managingGroup,loadTransfers])
+
+  // Alta o baja en bloque de todo lo que cumple el filtro. Va por la misma RPC
+  // que el resto, así que también queda en el historial de movimientos.
+  const bulkMembership=async(groupId,ids,agregar)=>{
+    if(!ids.length)return
+    setBulkBusy(true);setBulkMsg(null)
+    try{
+      const{data,error}=await supabase.rpc('transfer_contacts_between_groups',{
+        p_contact_ids:ids,
+        p_from_group:agregar?null:groupId,
+        p_to_group:agregar?groupId:null,
+        p_note:agregar?'Alta en bloque desde los filtros del grupo':'Baja en bloque desde los filtros del grupo',
+        p_copiar:false,
+      })
+      if(error)throw error
+      await loadGroups()
+      setBulkMsg({type:'ok',text:`${data?.movidos||0} contacto(s) ${agregar?'agregados':'quitados'}${data?.omitidos?` · ${data.omitidos} omitidos`:''}.`})
+    }catch(e){
+      console.error('bulkMembership:',e)
+      setBulkMsg({type:'err',text:e.message||'No se pudo aplicar el cambio'})
+    }finally{setBulkBusy(false)}
+  }
 
   // Traspaso en lote desde la pantalla de miembros del grupo
   const doTransfer=async()=>{
@@ -2096,20 +2123,43 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         // Sólo contactos reales: los formularios web todavía no son crm_contacts
         const reales=contacts.filter(c=>!String(c.id).startsWith('sub_'))
         const q=groupSearch.trim().toLowerCase()
-        const lista=q?reales.filter(c=>`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(q)):reales
-        const miembros=reales.filter(c=>(memberships[c.id]||[]).includes(g.id))
+        // Mismos criterios que el listado principal: con cientos de contactos,
+        // el buscador de texto solo no alcanza para armar un grupo.
+        const coincide=c=>{
+          if(q&&!`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(q))return false
+          const f=memberFilter
+          if(f.estado!=='todos'&&!(f.estado==='activos'?c.status!=='inactivo':c.status===f.estado))return false
+          if(f.tipo!=='todos'&&(c.contact_type||'P2P')!==f.tipo)return false
+          if(f.etapa!=='todos'&&!(f.etapa==='pendientes'
+            ?!String(c.sales_stage||'').startsWith('CERRADO')
+            :c.sales_stage===f.etapa))return false
+          const desde=desdeRango(f.fecha)
+          if(desde&&!(c.created_at&&new Date(c.created_at)>=desde))return false
+          if(f.asesor!=='todos'&&c.user_id!==f.asesor)return false
+          if(f.grupo!=='todos'&&!(memberships[c.id]||[]).includes(f.grupo))return false
+          return true
+        }
+        const esMiembro=c=>(memberships[c.id]||[]).includes(g.id)
+        const miembros=reales.filter(esMiembro)
         const dentro=miembros.length
+        const listaBase=reales.filter(coincide)
+        // La pertenencia se aplica al final: los botones en bloque necesitan
+        // saber cuántos del filtro faltan y cuántos ya están.
+        const porAgregar=listaBase.filter(c=>!esMiembro(c))
+        const porQuitar=listaBase.filter(esMiembro)
+        const lista=memberFilter.pertenencia==='fuera'?porAgregar
+          :memberFilter.pertenencia==='dentro'?porQuitar:listaBase
         // En modo traspaso sólo se ven los que están dentro: no se puede
         // trasladar desde un grupo a alguien que no pertenece a él.
-        const listaMiembros=q?miembros.filter(c=>`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(q)):miembros
+        const listaMiembros=miembros.filter(coincide)
         const destinos=groups.filter(x=>x.id!==g.id)
         return <div>
           <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
-            <Btn variant="ghost" onClick={()=>{setManagingGroup(null);setGroupSearch('');setTransferMode(false);setPicked([]);setTransferMsg(null)}} style={{fontSize:11,padding:'5px 10px'}}>← Volver</Btn>
+            <Btn variant="ghost" onClick={()=>{setManagingGroup(null);setGroupSearch('');setTransferMode(false);setPicked([]);setTransferMsg(null);setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}} style={{fontSize:11,padding:'5px 10px'}}>← Volver</Btn>
             <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
             <span style={{fontSize:14,fontWeight:700,color:P.text}}>{g.name}</span>
             <span style={{fontSize:11,color:P.muted}}>{dentro} de {reales.length} contactos</span>
-            <Btn variant="ghost" onClick={()=>{setTransferMode(v=>!v);setPicked([]);setGroupSearch('');setTransferMsg(null)}}
+            <Btn variant="ghost" onClick={()=>{setTransferMode(v=>!v);setPicked([]);setGroupSearch('');setTransferMsg(null);setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}}
               style={{fontSize:11,padding:'5px 10px',marginLeft:'auto',color:transferMode?P.purple:P.textSub}}
               title="Mover o copiar contactos de este grupo a otro, dejando historial">
               {transferMode?'✕ Salir del traspaso':'⇄ Traspasar a otro grupo'}
@@ -2157,7 +2207,46 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                 </div>
               </>}
           </div>:<>
-          <Input value={groupSearch} onChange={setGroupSearch} placeholder="Buscar contacto para agregar o quitar..." style={{marginBottom:12}}/>
+          <Input value={groupSearch} onChange={setGroupSearch} placeholder="Buscar contacto para agregar o quitar..." style={{marginBottom:8}}/>
+
+          {/* Filtros del listado: armar un grupo de 200 contactos a mano no es
+              viable, así que se filtra igual que en la lista y se agrega en bloque. */}
+          <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:8}}>
+            <Sel value={memberFilter.pertenencia} onChange={v=>setMemberFilter(p=>({...p,pertenencia:v}))} style={{maxWidth:165,flex:'1 1 130px'}}
+              options={[{value:'todos',label:'Dentro y fuera'},{value:'fuera',label:'Sólo los que faltan'},{value:'dentro',label:'Sólo los del grupo'}]}/>
+            <Sel value={memberFilter.fecha} onChange={v=>setMemberFilter(p=>({...p,fecha:v}))} style={{maxWidth:165,flex:'1 1 130px'}} options={RANGOS_FECHA}/>
+            <Sel value={memberFilter.estado} onChange={v=>setMemberFilter(p=>({...p,estado:v}))} style={{maxWidth:165,flex:'1 1 130px'}}
+              options={[{value:'todos',label:'Todos los estados'},{value:'activos',label:'Activos (excl. spam)'},...STATUS_OPT]}/>
+            <Sel value={memberFilter.etapa} onChange={v=>setMemberFilter(p=>({...p,etapa:v}))} style={{maxWidth:165,flex:'1 1 130px'}}
+              options={[{value:'todos',label:'Todas las etapas'},{value:'pendientes',label:'Sin cerrar'},...SALES_STAGES.map(s=>({value:s.id,label:s.label}))]}/>
+            <Sel value={memberFilter.tipo} onChange={v=>setMemberFilter(p=>({...p,tipo:v}))} style={{maxWidth:165,flex:'1 1 130px'}}
+              options={[{value:'todos',label:'P2P y B2B'},{value:'P2P',label:'Sólo personas'},{value:'B2B',label:'Sólo empresas'}]}/>
+            {destinos.length>0&&<Sel value={memberFilter.grupo} onChange={v=>setMemberFilter(p=>({...p,grupo:v}))} style={{maxWidth:190,flex:'1 1 150px'}}
+              options={[{value:'todos',label:'De cualquier grupo'},...destinos.map(x=>({value:x.id,label:`Que estén en: ${x.name}`}))]}/>}
+            {isSuperAdmin&&staffList.length>0&&<Sel value={memberFilter.asesor} onChange={v=>setMemberFilter(p=>({...p,asesor:v}))} style={{maxWidth:190,flex:'1 1 150px'}}
+              options={[{value:'todos',label:'Todos los asesores'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
+            {JSON.stringify(memberFilter)!==JSON.stringify(MEMBER_FILTER_0)&&
+              <Btn variant="ghost" onClick={()=>{setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}} style={{fontSize:11,padding:'8px 10px'}}>✕ Limpiar</Btn>}
+          </div>
+
+          {/* Aplicar a todo lo que coincide, sin ir uno por uno */}
+          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap',marginBottom:12,padding:'9px 12px',
+            background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8}}>
+            <span style={{fontSize:11.5,color:P.textSub}}>
+              {lista.length} coinciden · <strong style={{color:P.green}}>{porAgregar.length}</strong> fuera del grupo · <strong style={{color:g.color}}>{porQuitar.length}</strong> dentro
+            </span>
+            <div style={{display:'flex',gap:6,marginLeft:'auto',flexWrap:'wrap'}}>
+              <Btn variant="ghost" onClick={()=>bulkMembership(g.id,porAgregar.map(c=>c.id),true)} disabled={bulkBusy||!porAgregar.length}
+                style={{fontSize:11,padding:'6px 10px',color:porAgregar.length?P.green:P.muted}}>
+                {bulkBusy?'…':`+ Agregar ${porAgregar.length}`}
+              </Btn>
+              <Btn variant="ghost" onClick={()=>bulkMembership(g.id,porQuitar.map(c=>c.id),false)} disabled={bulkBusy||!porQuitar.length}
+                style={{fontSize:11,padding:'6px 10px',color:porQuitar.length?P.red:P.muted}}>
+                {bulkBusy?'…':`− Quitar ${porQuitar.length}`}
+              </Btn>
+            </div>
+            {bulkMsg&&<span style={{fontSize:11.5,color:bulkMsg.type==='ok'?P.green:P.red,width:'100%'}}>{bulkMsg.text}</span>}
+          </div>
           <div style={{maxHeight:340,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
             {lista.map(c=>{
               const on=(memberships[c.id]||[]).includes(g.id)
@@ -2242,7 +2331,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                   {isSuperAdmin&&g.user_id!==user.id?` · ${getAdvisorName(g.user_id)}`:''}
                 </p>
               </div>
-              <Btn variant="ghost" onClick={()=>setManagingGroup(g.id)} style={{fontSize:11,padding:'5px 10px'}}>Contactos</Btn>
+              <Btn variant="ghost" onClick={()=>{setManagingGroup(g.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null);setTransferMode(false);setPicked([])}} style={{fontSize:11,padding:'5px 10px'}}>Contactos</Btn>
               <Btn variant="ghost" onClick={()=>{setEditingGroup(g.id);setGroupForm({name:g.name,description:g.description||'',color:g.color})}} style={{fontSize:11,padding:'5px 10px'}}>✏️</Btn>
               <Btn variant="ghost" onClick={()=>{if(confirmDeleteGroup===g.id)deleteGroup(g.id);else setConfirmDeleteGroup(g.id)}}
                 style={{fontSize:11,padding:'5px 10px',color:confirmDeleteGroup===g.id?P.red:P.muted}}>
