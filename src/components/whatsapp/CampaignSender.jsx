@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { supabase } from '../../lib/supabase.js'
+import { useMediaFiles, publicUrl } from '../webcontent/MediaLibrary.jsx'
 
 const C = {
   bg: '#0d0f17',
@@ -86,6 +87,82 @@ function MetricBadge({ label, value, color }) {
   )
 }
 
+// Selector de imágenes de la biblioteca de medios (Contenido Web). Va en su
+// propio componente para que useMediaFiles() consulte la tabla sólo cuando se
+// abre, y no en cada visita a Campañas.
+function SelectorImagen({ onPick, onClose }) {
+  const { files, loading } = useMediaFiles()
+  const [copiada, setCopiada] = useState(null)
+  // WhatsApp sólo acepta imagen en el encabezado: los vídeos no pintan nada aquí
+  const imagenes = files.filter(f => (f.mime_type || '').startsWith('image/'))
+
+  async function copiar(url, id) {
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiada(id)
+      setTimeout(() => setCopiada(null), 1800)
+    } catch { setCopiada('err') }
+  }
+
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, width: 'min(780px,100%)', maxHeight: '82vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
+          <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>Biblioteca de medios</h3>
+          <span style={{ fontSize: 11, color: C.muted }}>{imagenes.length} imagen{imagenes.length !== 1 ? 'es' : ''}</span>
+          <button onClick={onClose} style={{ marginLeft: 'auto', background: 'none', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', fontFamily: 'inherit' }}>✕</button>
+        </div>
+        <div style={{ padding: 20, overflowY: 'auto' }}>
+          {loading
+            ? <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>Cargando…</p>
+            : imagenes.length === 0
+              ? <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>No hay imágenes en la biblioteca. Súbelas desde Contenido Web → Biblioteca de medios.</p>
+              : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(150px,1fr))', gap: 12 }}>
+                  {imagenes.map(f => {
+                    const url = publicUrl(f.file_path)
+                    // Meta sólo acepta JPG y PNG en el encabezado. El bucket
+                    // admite además webp, gif y svg: si se elige uno de esos,
+                    // el envío falla en Meta, no aquí, así que se avisa antes.
+                    const aptaWa = ['image/jpeg', 'image/png'].includes(f.mime_type)
+                    return (
+                      <div key={f.id} style={{ border: `1px solid ${aptaWa ? C.border : C.orange + '55'}`, borderRadius: 10, overflow: 'hidden', background: 'rgba(255,255,255,0.02)' }}>
+                        <div onClick={() => onPick(url)} title="Usar esta imagen"
+                          style={{ height: 100, background: '#0a0c13', cursor: 'pointer', overflow: 'hidden' }}>
+                          <img src={url} alt={f.alt_text || f.original_name} loading="lazy"
+                            style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />
+                        </div>
+                        <div style={{ padding: '7px 9px' }}>
+                          <p title={f.original_name}
+                            style={{ margin: 0, fontSize: 10.5, color: C.textSub, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.original_name}</p>
+                          {!aptaWa && (
+                            <p style={{ margin: '3px 0 0', fontSize: 9.5, color: C.orange, lineHeight: 1.3 }}>
+                              ⚠ {(f.mime_type || '').replace('image/', '').toUpperCase()} · WhatsApp sólo acepta JPG y PNG
+                            </p>
+                          )}
+                          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                            <button onClick={() => onPick(url)}
+                              style={{ flex: 1, padding: '4px 6px', borderRadius: 6, fontSize: 10.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                                background: C.greenDim, color: C.green, border: `1px solid ${C.green}30` }}>Usar</button>
+                            <button onClick={() => copiar(url, f.id)} title="Copiar la URL"
+                              style={{ padding: '4px 8px', borderRadius: 6, fontSize: 10.5, fontFamily: 'inherit', cursor: 'pointer',
+                                background: 'rgba(255,255,255,0.05)', color: copiada === f.id ? C.green : C.muted, border: `1px solid ${C.border}` }}>
+                              {copiada === f.id ? '✓' : '📋'}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>}
+          {copiada === 'err' && <p style={{ fontSize: 11, color: C.red, margin: '10px 0 0' }}>El navegador bloqueó el portapapeles. Pulsa «Usar» y copia la URL desde el campo.</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function CampaignSender({ user }) {
   const [tab, setTab] = useState('crear')
   const [templates, setTemplates] = useState([])
@@ -102,6 +179,8 @@ export default function CampaignSender({ user }) {
   const [rowMsg, setRowMsg] = useState(null)         // {id, type, text}
 
   const [contactGroups, setContactGroups] = useState([])
+  const [showMedia, setShowMedia] = useState(false)   // selector de imagen del encabezado
+  const [copiado, setCopiado] = useState(null)        // 'ok' | 'err'
 
   const [form, setForm] = useState({
     name: '',
@@ -198,6 +277,18 @@ export default function CampaignSender({ user }) {
     return () => { vivo = false; clearTimeout(t) }
   }, [tab, form.contact_group_id, form.variant_key, form.etapas, form.campaign_id,
       form.dedupe_scope, form.dedupe_days, form.template_id, templates])
+
+  // El portapapeles necesita contexto seguro (https); si el navegador lo niega
+  // se avisa en el propio botón en vez de fallar en silencio.
+  async function copiarUrl() {
+    const url = (form.header_image_url || '').trim()
+    if (!url) return
+    try {
+      await navigator.clipboard.writeText(url)
+      setCopiado('ok')
+    } catch { setCopiado('err') }
+    setTimeout(() => setCopiado(null), 1800)
+  }
 
   function toggleEtapa(n) {
     setForm(f => ({
@@ -421,6 +512,23 @@ export default function CampaignSender({ user }) {
               <div>
                 <Lbl>Imagen del encabezado</Lbl>
                 <Input value={form.header_image_url} onChange={v => setForm(f => ({ ...f, header_image_url: v }))} placeholder="https://..." />
+                {/* Escribir la URL a mano obligaba a ir a Contenido Web, abrir la
+                    imagen y copiarla del navegador. Se elige de la biblioteca. */}
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <button onClick={() => setShowMedia(true)}
+                    style={{ padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer',
+                      background: C.purpleDim, color: C.purple, border: `1px solid rgba(108,92,231,0.35)` }}>
+                    🖼 Elegir de la biblioteca
+                  </button>
+                  <button onClick={copiarUrl} disabled={!form.header_image_url.trim()}
+                    title="Copiar la URL al portapapeles"
+                    style={{ padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, fontFamily: 'inherit',
+                      cursor: form.header_image_url.trim() ? 'pointer' : 'not-allowed',
+                      background: 'rgba(255,255,255,0.05)', color: form.header_image_url.trim() ? C.textSub : C.muted,
+                      border: `1px solid ${C.border}` }}>
+                    {copiado === 'ok' ? '✓ Copiada' : copiado === 'err' ? '✕ No se pudo' : '📋 Copiar URL'}
+                  </button>
+                </div>
                 <p style={{ color: C.muted, fontSize: 11, margin: '6px 0 0', lineHeight: 1.5 }}>
                   <strong style={{ color: C.orange }}>{tplSeleccionada.template_name}</strong> lleva encabezado de imagen: WhatsApp la exige en cada envío, así que es obligatoria. URL pública HTTPS.
                 </p>
@@ -677,6 +785,13 @@ export default function CampaignSender({ user }) {
             )
           })}
         </div>
+      )}
+
+      {showMedia && (
+        <SelectorImagen
+          onClose={() => setShowMedia(false)}
+          onPick={url => { setForm(f => ({ ...f, header_image_url: url })); setShowMedia(false) }}
+        />
       )}
     </div>
   )
