@@ -10,6 +10,8 @@ import WAFinanceChatInbox from './components/whatsapp/WAFinanceChatInbox.jsx'
 import WAFinanceInviteButton from './components/whatsapp/WAFinanceInviteButton.jsx'
 import SupportPortal from './pages/SupportPortal.jsx'
 import SupportTicketView from './pages/SupportTicketView.jsx'
+import DocumentoSala from './pages/DocumentoSala.jsx'
+import DocumentosHub from './components/documentos/DocumentosHub.jsx'
 import SupportInbox from './components/support/SupportInbox.jsx'
 import WebContentHub from './components/webcontent/WebContentHub.jsx'
 import ContactsHub from './components/clients/ClientsPortalKYC.jsx'
@@ -6321,6 +6323,10 @@ export default function App(){
   if(window.location.pathname.startsWith('/soporte/ticket/'))return<SupportTicketView/>
   if(window.location.pathname==='/soporte'||window.location.pathname.startsWith('/soporte/'))return<SupportPortal/>
 
+  // Sala de documentos de una reunión. Pública a propósito: el invitado no
+  // tiene cuenta. El control de acceso es el OTP contra la lista de invitados.
+  if(window.location.pathname.startsWith('/documento/'))return<DocumentoSala/>
+
   if(checking)return<div style={{minHeight:'100vh',background:P.bg,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{width:28,height:28,border:`3px solid ${P.border}`,borderTop:`3px solid ${P.purple}`,borderRadius:'50%',animation:'spin 0.8s linear infinite'}}/></div>
   if(showPasswordReset)return<PasswordReset onDone={()=>{setShowPasswordReset(false);supabase.auth.signOut();window.location.href='/'}}/>
   if(noStaffError)return<NoStaffScreen onBackToLogin={()=>{setNoStaffError(false)}}/>
@@ -6371,6 +6377,9 @@ export default function App(){
     ...(canAccess('reports')  ?['reports']:[]),
     ...(canAccess('equipo')   ?['equipo']:[]),
     ...(canAccess('campaigns')?['campaigns']:[]),
+    // Las salas de documentos las arma cualquier miembro del staff: quien
+    // convoca la reunión es quien reparte el material.
+    'documentos',
     ...(isSuperAdmin          ?['webcontent']:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?['education']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
@@ -6388,6 +6397,7 @@ export default function App(){
     canAccess('emails')   ?{id:'emails',   label:'Emails',    icon:'✉'}:null,
     canAccess('reports')  ?{id:'reports',  label:'Reportes',  icon:'▦'}:null,
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
+    {id:'documentos',label:'Documentos',icon:'📁',color:P.orange},
     ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?[{id:'education',label:'Educación',icon:'🎓',color:P.green}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
@@ -6551,6 +6561,7 @@ export default function App(){
           if(currentMod==='reports')   return <Reports contacts={contacts} leads={myLeads} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='equipo')    return <Equipo user={user} isSuperAdmin={isSuperAdmin} teamId={teamId}/>
           if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} setCampaigns={setCampaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
+          if(currentMod==='documentos') return <DocumentosHub user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='webcontent'&&isSuperAdmin) return <WebContentHub isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='education'&&(isSuperAdmin||staffProfile?.role==='admin')) return <EducationAdmin user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
