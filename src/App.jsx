@@ -1248,7 +1248,21 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       p_to_group:has?null:groupId,
       p_note:null,p_copiar:false,
     })
-    if(error){console.error('toggleMember:',error);loadGroups()}
+    if(error){console.error('toggleMember:',error);loadGroups();return}
+    // Salir del padre implica salir de sus subgrupos: un contacto que se queda
+    // en el subgrupo pero fuera del padre no se ve en ninguna parte y aun así
+    // recibiría las campañas dirigidas a ese subgrupo.
+    if(has){
+      const hijos=groups.filter(x=>x.parent_id===groupId)
+      for(const h of hijos){
+        if(!(memberships[contactId]||[]).includes(h.id))continue
+        await supabase.rpc('transfer_contacts_between_groups',{
+          p_contact_ids:[contactId],p_from_group:h.id,p_to_group:null,
+          p_note:'Baja automática al salir del grupo padre',p_copiar:false,
+        })
+      }
+      if(hijos.length)loadGroups()
+    }
   }
 
   // Crear un subgrupo desde dentro del grupo padre: el padre no se elige, se
@@ -1306,6 +1320,17 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         p_copiar:false,
       })
       if(error)throw error
+      // Igual que en toggleMember: quien sale del padre sale de sus subgrupos
+      if(!agregar){
+        for(const h of groups.filter(x=>x.parent_id===groupId)){
+          const enHijo=ids.filter(id=>(memberships[id]||[]).includes(h.id))
+          if(!enHijo.length)continue
+          await supabase.rpc('transfer_contacts_between_groups',{
+            p_contact_ids:enHijo,p_from_group:h.id,p_to_group:null,
+            p_note:'Baja automática al salir del grupo padre',p_copiar:false,
+          })
+        }
+      }
       await loadGroups()
       setBulkMsg({type:'ok',text:`${data?.movidos||0} contacto(s) ${agregar?'agregados':'quitados'}${data?.omitidos?` · ${data.omitidos} omitidos`:''}.`})
     }catch(e){
@@ -2330,10 +2355,20 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         const esMiembro=c=>(memberships[c.id]||[]).includes(g.id)
         const miembros=reales.filter(esMiembro)
         const dentro=miembros.length
-        const listaBase=reales.filter(coincide)
+        // Un subgrupo es una partición del padre, no una lista aparte: sólo
+        // puede tomar gente que ya esté en el grupo padre.
+        const padre=g.parent_id?groups.find(x=>x.id===g.parent_id):null
+        // Se incluye a los que ya son miembros aunque hayan salido del padre:
+        // ocultarlos los dejaría recibiendo campañas sin poder verlos ni sacarlos.
+        const universo=padre?reales.filter(c=>(memberships[c.id]||[]).includes(padre.id)||esMiembro(c)):reales
+        // Y dentro de un mismo padre, cada contacto vive en UN solo subgrupo:
+        // si ya está en otro hermano, se mueve con Traspasar, no se duplica.
+        const hermanos=padre?groups.filter(x=>x.parent_id===padre.id&&x.id!==g.id):[]
+        const ocupadoPor=c=>hermanos.find(h=>(memberships[c.id]||[]).includes(h.id))
+        const listaBase=universo.filter(coincide)
         // La pertenencia se aplica al final: los botones en bloque necesitan
         // saber cuántos del filtro faltan y cuántos ya están.
-        const porAgregar=listaBase.filter(c=>!esMiembro(c))
+        const porAgregar=listaBase.filter(c=>!esMiembro(c)&&!ocupadoPor(c))
         const porQuitar=listaBase.filter(esMiembro)
         const lista=memberFilter.pertenencia==='fuera'?porAgregar
           :memberFilter.pertenencia==='dentro'?porQuitar:listaBase
@@ -2346,7 +2381,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             <Btn variant="ghost" onClick={()=>{setManagingGroup(null);setGroupSearch('');setTransferMode(false);setPicked([]);setTransferMsg(null);setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}} style={{fontSize:11,padding:'5px 10px'}}>← Volver</Btn>
             <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
             <span style={{fontSize:14,fontWeight:700,color:P.text}}>{g.name}</span>
-            <span style={{fontSize:11,color:P.muted}}>{dentro} de {reales.length} contactos</span>
+            <span style={{fontSize:11,color:P.muted}}>
+              {dentro} de {universo.length} contactos{padre?` de ${padre.name}`:''}
+            </span>
             <Btn variant="ghost" onClick={()=>{setTransferMode(v=>!v);setPicked([]);setGroupSearch('');setTransferMsg(null);setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}}
               style={{fontSize:11,padding:'5px 10px',marginLeft:'auto',color:transferMode?P.purple:P.textSub}}
               title="Mover o copiar contactos de este grupo a otro, dejando historial">
@@ -2397,9 +2434,10 @@ function Contacts({user,isSuperAdmin,staffProfile}){
           {!transferMode&&g.parent_id&&(()=>{
             const padre=groups.find(x=>x.id===g.parent_id)
             if(!padre)return null
-            return <p style={{fontSize:11.5,color:P.muted,margin:'0 0 12px'}}>
+            return <p style={{fontSize:11.5,color:P.muted,margin:'0 0 12px',lineHeight:1.6}}>
               Subgrupo de <button onClick={()=>{setManagingGroup(padre.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null)}}
                 style={{background:'none',border:'none',padding:0,cursor:'pointer',fontFamily:'inherit',fontSize:11.5,color:padre.color,fontWeight:600,textDecoration:'underline dotted',textUnderlineOffset:2}}>{padre.name}</button>
+              {hermanos.length>0&&<> · sólo se puede tomar gente de ese grupo, y quien ya esté en otro subgrupo aparece bloqueado: para moverlo, usa <strong style={{color:P.textSub}}>⇄ Traspasar</strong> desde el subgrupo donde está.</>}
             </p>
           })()}
 
@@ -2471,6 +2509,11 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8}}>
             <span style={{fontSize:11.5,color:P.textSub}}>
               {lista.length} coinciden · <strong style={{color:P.green}}>{porAgregar.length}</strong> fuera del grupo · <strong style={{color:g.color}}>{porQuitar.length}</strong> dentro
+              {(()=>{
+                // Sin este dato el conteo no cuadra y parece que faltan contactos
+                const bloq=listaBase.filter(c=>!esMiembro(c)&&ocupadoPor(c)).length
+                return bloq>0?<> · <strong style={{color:P.orange}}>{bloq}</strong> en otro subgrupo</>:null
+              })()}
             </span>
             <div style={{display:'flex',gap:6,marginLeft:'auto',flexWrap:'wrap'}}>
               <Btn variant="ghost" onClick={()=>bulkMembership(g.id,porAgregar.map(c=>c.id),true)} disabled={bulkBusy||!porAgregar.length}
@@ -2487,16 +2530,22 @@ function Contacts({user,isSuperAdmin,staffProfile}){
           <div style={{maxHeight:340,overflowY:'auto',display:'flex',flexDirection:'column',gap:6}}>
             {lista.map(c=>{
               const on=(memberships[c.id]||[]).includes(g.id)
+              // Ya está en otro subgrupo hermano: se muestra bloqueado en vez de
+              // desaparecer, porque si desaparece nadie entiende por qué falta.
+              const ocupado=!on&&ocupadoPor(c)
               // La fila es un div y no un button para poder llevar dentro el
               // botón de quitar: un button anidado en otro no es HTML válido.
-              return <div key={c.id} onClick={()=>toggleMember(c.id,g.id)}
-                style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderRadius:8,cursor:'pointer',textAlign:'left',
+              return <div key={c.id} onClick={()=>{if(!ocupado)toggleMember(c.id,g.id)}}
+                title={ocupado?`Ya está en «${ocupado.name}». Para moverlo usa ⇄ Traspasar desde ese subgrupo.`:undefined}
+                style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderRadius:8,cursor:ocupado?'not-allowed':'pointer',textAlign:'left',opacity:ocupado?0.55:1,
                   background:on?g.color+'18':'rgba(255,255,255,0.03)',border:`1px solid ${on?g.color+'55':P.border}`}}>
-                <span style={{fontSize:13,color:on?g.color:P.muted,flexShrink:0}}>{on?'☑':'☐'}</span>
+                <span style={{fontSize:13,color:on?g.color:P.muted,flexShrink:0}}>{ocupado?'🔒':on?'☑':'☐'}</span>
                 <span style={{flex:1,minWidth:0}}>
                   <span style={{display:'block',fontSize:13,color:P.text,fontWeight:600}}>{c.full_name}</span>
                   <span style={{display:'block',fontSize:11,color:P.muted,fontFamily:'monospace'}}>{c.email}</span>
                 </span>
+                {ocupado&&<span style={{fontSize:10,fontWeight:700,padding:'2px 8px',borderRadius:5,flexShrink:0,whiteSpace:'nowrap',
+                  background:ocupado.color+'22',color:ocupado.color,border:`1px solid ${ocupado.color}45`}}>en {ocupado.name}</span>}
                 {/* Quitar del grupo explícito: el clic en la fila alterna, pero
                     eso no se ve, y con la lista llena de marcados uno duda. */}
                 {on&&<button onClick={e=>{e.stopPropagation();toggleMember(c.id,g.id)}}
