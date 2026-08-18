@@ -113,7 +113,13 @@ export default function CampaignSender({ user }) {
     header_image_url: '',
     contact_group_id: '',   // vacío = campaign_leads; con valor = grupo de contactos
     body_variable: '',      // vacío = primer nombre de cada destinatario
+    dedupe_scope: 'campaign', // a quién NO se le vuelve a escribir
+    dedupe_days: '30',        // ventana en días para template/global
   })
+
+  // Previsualización: cuántos recibirían realmente el mensaje
+  const [preview, setPreview] = useState(null)
+  const [previewing, setPreviewing] = useState(false)
 
   const tplSeleccionada = templates.find(t => t.id === form.template_id)
   const imagenCampanaValida = /^https:\/\/.+/i.test((form.header_image_url || '').trim())
@@ -137,6 +143,59 @@ export default function CampaignSender({ user }) {
       setLoading(false)
     })
   }, [])
+
+  // Cuenta los destinatarios reales antes de enviar, con las mismas reglas que
+  // aplica runCampaign: dedup por teléfono, bajas y ya contactados. Sin esto la
+  // exclusión es invisible y una campaña que no sale parece rota.
+  useEffect(() => {
+    if (tab !== 'crear') return
+    let vivo = true
+    const t = setTimeout(async () => {
+      setPreviewing(true)
+      try {
+        const dig = v => String(v || '').replace(/\D/g, '')
+        let filas = []
+        if (form.contact_group_id) {
+          const { data } = await supabase.from('crm_contact_group_members')
+            .select('crm_contacts(phone)').eq('group_id', form.contact_group_id)
+          filas = (data || []).map(r => r.crm_contacts).filter(c => c && c.phone)
+        } else {
+          let q = supabase.from('campaign_leads').select('phone').not('phone', 'is', null)
+          if (form.variant_key) q = q.eq('variant', form.variant_key)
+          if (form.etapas.length) q = q.in('etapa', form.etapas)
+          if (form.campaign_id) q = q.eq('campaign_id', form.campaign_id)
+          const { data } = await q
+          filas = data || []
+        }
+        const unicos = [...new Set(filas.map(f => dig(f.phone)).filter(p => p.length >= 8))]
+
+        const { data: bajas } = await supabase.from('whatsapp_opt_outs')
+          .select('client_phone').is('opted_in_at', null)
+        const bloqueados = new Set((bajas || []).map(b => dig(b.client_phone)))
+
+        // Con 'campaign' no hay nada previo que mirar: la campaña aún no existe
+        let ya = new Set()
+        if (form.dedupe_scope !== 'campaign') {
+          let q = supabase.from('whatsapp_campaign_recipients').select('phone').eq('outcome', 'sent')
+          const tplName = templates.find(t => t.id === form.template_id)?.template_name
+          if (form.dedupe_scope === 'template' && tplName) q = q.eq('template_name', tplName)
+          const dias = Number(form.dedupe_days)
+          if (dias > 0) q = q.gte('created_at', new Date(Date.now() - dias * 86400000).toISOString())
+          const { data } = await q
+          ya = new Set((data || []).map(r => r.phone))
+        }
+        const conBaja = unicos.filter(p => bloqueados.has(p)).length
+        const yaCont = unicos.filter(p => !bloqueados.has(p) && ya.has(p)).length
+        if (vivo) setPreview({ total: unicos.length, conBaja, yaCont, envia: unicos.length - conBaja - yaCont })
+      } catch (e) {
+        if (vivo) setPreview({ error: e.message || 'No se pudo calcular' })
+      } finally {
+        if (vivo) setPreviewing(false)
+      }
+    }, 400)
+    return () => { vivo = false; clearTimeout(t) }
+  }, [tab, form.contact_group_id, form.variant_key, form.etapas, form.campaign_id,
+      form.dedupe_scope, form.dedupe_days, form.template_id, templates])
 
   function toggleEtapa(n) {
     setForm(f => ({
@@ -176,6 +235,9 @@ export default function CampaignSender({ user }) {
       target_filter: Object.keys(targetFilter).length ? targetFilter : null,
       header_image_url: form.header_image_url.trim() || null,
       body_variable: form.body_variable.trim() || null,
+      dedupe_scope: form.dedupe_scope,
+      // Los días sólo tienen sentido cuando se mira hacia atrás
+      dedupe_days: form.dedupe_scope === 'campaign' ? null : (Number(form.dedupe_days) || null),
       scheduled_at: localAISO(form.scheduled_at),
       status: form.scheduled_at ? 'scheduled' : 'draft',
       created_by: user?.id || null,
@@ -189,7 +251,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '', dedupe_scope: 'campaign', dedupe_days: '30' })
         await recargarCampanas()
         setTab('historial')
       } else {
@@ -269,6 +331,8 @@ export default function CampaignSender({ user }) {
         target_filter: wc.target_filter,
         header_image_url: wc.header_image_url,
         body_variable: wc.body_variable,
+        dedupe_scope: wc.dedupe_scope || 'campaign',
+        dedupe_days: wc.dedupe_days,
         status: 'draft',
         created_by: user?.id || null,
       }).select().single()
@@ -290,7 +354,7 @@ export default function CampaignSender({ user }) {
     const r = await dispararCampana(wc.id)
     setSendingId(null)
     setRowMsg(r.success
-      ? { id: wc.id, type: 'ok', text: `Enviada: ${r.sent} de ${r.total}${r.failed ? ` · ${r.failed} fallidos` : ''}${r.skipped_opt_out ? ` · ${r.skipped_opt_out} con baja` : ''}` }
+      ? { id: wc.id, type: 'ok', text: `Enviada: ${r.sent} de ${r.total}${r.failed ? ` · ${r.failed} fallidos` : ''}${r.skipped_opt_out ? ` · ${r.skipped_opt_out} con baja` : ''}${r.skipped_already_sent ? ` · ${r.skipped_already_sent} ya contactados` : ''}` }
       : { id: wc.id, type: 'err', text: r.error || 'No se pudo enviar' })
     await recargarCampanas()
   }
@@ -404,6 +468,52 @@ export default function CampaignSender({ user }) {
               </p>
             </div>
 
+            {/* Evitar repetir: la exclusión la aplica whatsapp-send, no el navegador */}
+            <div>
+              <Lbl>No volver a escribirle a…</Lbl>
+              <Sel value={form.dedupe_scope} onChange={v => setForm(f => ({ ...f, dedupe_scope: v }))}
+                options={[
+                  { value: 'campaign', label: 'Quien ya recibió esta misma campaña' },
+                  { value: 'template', label: 'Quien ya recibió esta plantilla hace poco' },
+                  { value: 'global', label: 'Quien recibió cualquier campaña hace poco' },
+                ]} />
+              {form.dedupe_scope !== 'campaign' && (
+                <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ fontSize: 12, color: C.textSub }}>Ventana:</span>
+                  <div style={{ width: 90 }}>
+                    <Input type="number" value={form.dedupe_days} onChange={v => setForm(f => ({ ...f, dedupe_days: v }))} placeholder="30" />
+                  </div>
+                  <span style={{ fontSize: 12, color: C.textSub }}>días hacia atrás</span>
+                </div>
+              )}
+              <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0', lineHeight: 1.5 }}>
+                {form.dedupe_scope === 'campaign'
+                  ? 'Cada contacto recibe esta campaña una sola vez, aunque se dispare dos veces o el planificador la reintente.'
+                  : form.dedupe_scope === 'template'
+                    ? 'Además de lo anterior, quedan fuera los que ya recibieron esta misma plantilla dentro de la ventana.'
+                    : 'Además de lo anterior, quedan fuera los que recibieron cualquier otra campaña dentro de la ventana.'}
+              </p>
+            </div>
+
+            {/* Cuántos reciben de verdad, antes de pulsar enviar */}
+            <div style={{ background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 10, padding: '12px 14px' }}>
+              <p style={{ fontSize: 10, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, margin: '0 0 8px' }}>
+                Destinatarios reales {previewing && <span style={{ color: C.muted, fontWeight: 400, textTransform: 'none', letterSpacing: 0 }}>· calculando…</span>}
+              </p>
+              {preview?.error
+                ? <p style={{ fontSize: 12, color: C.red, margin: 0 }}>No se pudo calcular: {preview.error}</p>
+                : preview
+                  ? <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'baseline' }}>
+                      <span style={{ fontSize: 22, fontWeight: 700, color: preview.envia > 0 ? C.green : C.orange, fontFamily: 'monospace' }}>{preview.envia}</span>
+                      <span style={{ fontSize: 12, color: C.textSub }}>
+                        recibirán el mensaje, de {preview.total} en el filtro
+                        {preview.conBaja > 0 && <> · <span style={{ color: C.red }}>{preview.conBaja} con baja</span></>}
+                        {preview.yaCont > 0 && <> · <span style={{ color: C.orange }}>{preview.yaCont} ya contactados</span></>}
+                      </span>
+                    </div>
+                  : <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>Elige los destinatarios para ver el conteo.</p>}
+            </div>
+
             <div>
               <Lbl>Campaña CRM (opcional)</Lbl>
               <Sel value={form.campaign_id} onChange={v => setForm(f => ({ ...f, campaign_id: v }))}
@@ -457,6 +567,8 @@ export default function CampaignSender({ user }) {
                 <p style={{ color: C.green, fontSize: 13, fontWeight: 700, margin: '0 0 4px' }}>✓ Campaña enviada</p>
                 <p style={{ color: C.textSub, fontSize: 12, margin: 0 }}>
                   {result.sent} enviados · {result.failed} fallidos · {result.total} total
+                  {result.skipped_opt_out ? ` · ${result.skipped_opt_out} con baja` : ''}
+                  {result.skipped_already_sent ? ` · ${result.skipped_already_sent} ya contactados` : ''}
                 </p>
               </div>
             )}
