@@ -1,3 +1,19 @@
+// whatsapp-send v19
+// CAMBIOS v19:
+//  - No se le escribe dos veces al mismo contacto. Cada destinatario deja una
+//    fila en whatsapp_campaign_recipients (sent | failed | skipped_opt_out |
+//    skipped_already_sent), incluidos los omitidos: antes sólo quedaba rastro
+//    de los envíos que Meta aceptaba, así que no había forma de saber a quién
+//    ya se le había escrito.
+//  - La política la fija la campaña en whatsapp_campaigns.dedupe_scope:
+//      'campaign' (por defecto) → no repetir dentro de esta campaña. Es además
+//                                 el candado contra el doble disparo y contra
+//                                 el reintento del cron a medio envío.
+//      'template'               → ni la misma plantilla en dedupe_days días
+//      'global'                 → ni ninguna campaña en dedupe_days días
+//    Un intento fallido no consume el cupo: sólo cuentan los 'sent'.
+//  - La respuesta suma skipped_already_sent junto a skipped_opt_out.
+//
 // whatsapp-send v18
 // CAMBIOS v18:
 //  - normalizePhone() pasa a dejar SOLO DIGITOS (antes conservaba el '+').
@@ -282,15 +298,74 @@ async function runCampaign(
   const { data: optOuts } = await supabase
     .from('whatsapp_opt_outs').select('client_phone').is('opted_in_at', null)
   const blocked = new Set((optOuts || []).map((o: any) => o.client_phone))
-  const recipients = unique.filter((l: any) => !blocked.has(normalizePhone(l.phone)))
-  const skipped_opt_out = unique.length - recipients.length
+  const sinBaja = unique.filter((l: any) => !blocked.has(normalizePhone(l.phone)))
+  const conBaja = unique.filter((l: any) => blocked.has(normalizePhone(l.phone)))
+  const skipped_opt_out = conBaja.length
+
+  // 5) Excluir a quien YA fue contactado, según la política de la campaña.
+  //    'campaign' (por defecto) sólo mira esta campaña; 'template' y 'global'
+  //    además miran hacia atrás en el tiempo (dedupe_days).
+  const scope: string = wc.dedupe_scope || 'campaign'
+  const days: number | null = wc.dedupe_days ?? null
+  const yaContactados = new Set<string>()
+
+  // Siempre: lo ya registrado en ESTA campaña. Es el candado contra el doble
+  // disparo y contra el reintento del cron sobre una campaña a medio enviar.
+  {
+    const { data } = await supabase
+      .from('whatsapp_campaign_recipients')
+      .select('phone')
+      .eq('wa_campaign_id', wa_campaign_id)
+    for (const r of data || []) yaContactados.add(r.phone)
+  }
+  if (scope === 'template' || scope === 'global') {
+    let q = supabase
+      .from('whatsapp_campaign_recipients')
+      .select('phone')
+      .eq('outcome', 'sent')          // un intento fallido no consume el cupo
+      .neq('wa_campaign_id', wa_campaign_id)
+    if (scope === 'template') q = q.eq('template_name', tpl.template_name)
+    if (days && days > 0) {
+      q = q.gte('created_at', new Date(Date.now() - days * 86400000).toISOString())
+    }
+    const { data } = await q
+    for (const r of data || []) yaContactados.add(r.phone)
+  }
+
+  const recipients = sinBaja.filter((l: any) => !yaContactados.has(normalizePhone(l.phone)))
+  const yaEnviados = sinBaja.filter((l: any) => yaContactados.has(normalizePhone(l.phone)))
+  const skipped_already_sent = yaEnviados.length
+
+  // Deja constancia de los omitidos: sin esto la campaña dice "0 enviados" y no
+  // hay forma de saber a quién se dejó fuera ni por qué.
+  // ignoreDuplicates: los omitidos por esta misma campaña ya tienen su fila.
+  const registrarOmitidos = async (filas: any[], outcome: string) => {
+    if (!filas.length) return
+    await supabase.from('whatsapp_campaign_recipients').upsert(
+      filas.map((l: any) => ({
+        wa_campaign_id: wa_campaign_id,
+        contact_id:     fromGroup ? l.id : null,
+        lead_id:        fromGroup ? null : l.id,
+        phone:          normalizePhone(l.phone),
+        full_name:      l.full_name || null,
+        template_name:  tpl.template_name,
+        outcome,
+      })),
+      { onConflict: 'wa_campaign_id,phone', ignoreDuplicates: true },
+    )
+  }
+  await registrarOmitidos(conBaja, 'skipped_opt_out')
+  await registrarOmitidos(yaEnviados, 'skipped_already_sent')
 
   if (!recipients.length) {
     // Se marca como fallida: si queda 'scheduled' el cron la reintentaría en bucle
     await supabase.from('whatsapp_campaigns').update({
       status: 'failed', completed_at: new Date().toISOString(), total_recipients: 0,
     }).eq('id', wa_campaign_id)
-    return { status: 400, body: { success: false, error: 'No hay destinatarios que cumplan el filtro', total: 0, skipped_opt_out } }
+    const motivo = skipped_already_sent
+      ? `Los ${skipped_already_sent} destinatarios del filtro ya habían recibido esta campaña (o una anterior, según la política de repetición).`
+      : 'No hay destinatarios que cumplan el filtro'
+    return { status: 400, body: { success: false, error: motivo, total: 0, skipped_opt_out, skipped_already_sent } }
   }
   // Tope por invocación: la función tiene límite de tiempo y la cuenta
   // tiene límite diario de conversaciones iniciadas.
@@ -299,12 +374,12 @@ async function runCampaign(
     return { status: 400, body: { error: `${recipients.length} destinatarios supera el tope de ${MAX_RECIPIENTS} por envío. Afina el filtro.` } }
   }
 
-  // 5) Marcar como enviando
+  // 6) Marcar como enviando
   await supabase.from('whatsapp_campaigns').update({
     status: 'sending', started_at: new Date().toISOString(), total_recipients: recipients.length,
   }).eq('id', wa_campaign_id)
 
-  // 6) Enviar en tandas pequeñas
+  // 7) Enviar en tandas pequeñas
   const errors: any[] = []
   let sent = 0
   const CONCURRENCY = 5
@@ -318,6 +393,19 @@ async function runCampaign(
     const valorVariable = (wc.body_variable || '').trim() || firstName
     const bodyValues = (tpl.variables_count || 0) > 0 ? [valorVariable] : []
     const components = buildComponents(tpl.header_type, bodyValues, wc.header_image_url)
+    // Un registro por destinatario, salga bien o mal. Es el historial que
+    // consulta la ficha del contacto y el que bloquea el reenvío.
+    const registrar = (outcome: string, extra: Record<string, unknown> = {}) =>
+      supabase.from('whatsapp_campaign_recipients').upsert({
+        wa_campaign_id: wa_campaign_id,
+        contact_id:     fromGroup ? lead.id : null,
+        lead_id:        fromGroup ? null : lead.id,
+        phone,
+        full_name:      lead.full_name || null,
+        template_name:  tpl.template_name,
+        outcome,
+        ...extra,
+      }, { onConflict: 'wa_campaign_id,phone', ignoreDuplicates: true })
     try {
       const res = await fetch(`${GRAPH_API}/${PHONE_ID}/messages`, {
         method: 'POST',
@@ -346,12 +434,17 @@ async function runCampaign(
           campaign_id:     wc.campaign_id || null,
           wa_campaign_id:  wa_campaign_id,
         })
+        await registrar('sent', { meta_message_id: r.messages[0].id })
         sent++
       } else {
-        errors.push({ phone, error: r.error?.message || 'Meta error', code: r.error?.code })
+        const msg = r.error?.message || 'Meta error'
+        await registrar('failed', { error: msg })
+        errors.push({ phone, error: msg, code: r.error?.code })
       }
     } catch (e) {
-      errors.push({ phone, error: e instanceof Error ? e.message : String(e) })
+      const msg = e instanceof Error ? e.message : String(e)
+      await registrar('failed', { error: msg })
+      errors.push({ phone, error: msg })
     }
   }
 
@@ -371,6 +464,7 @@ async function runCampaign(
       sent,
       failed: errors.length,
       skipped_opt_out,
+      skipped_already_sent,
       errors: errors.slice(0, 20),
     },
   }
