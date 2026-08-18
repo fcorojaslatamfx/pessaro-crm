@@ -412,3 +412,9 @@ enabled = true
 # declarative_schema_path = "./database"
 # JSON string passed through to pg-delta SQL formatting.
 # format_options = "{\"keywordCase\":\"upper\",\"indent\":2,\"maxWidth\":80,\"commaStyle\":\"trailing\"}"
+
+# documento_acceso atiende a invitados que no tienen cuenta: la llaman desde la
+# página pública /documento/<token> sin ningún JWT. El control de acceso es el
+# OTP contra crm_doc_invitados, y la action de staff valida el token a mano.
+[functions.documento_acceso]
+verify_jwt = false
