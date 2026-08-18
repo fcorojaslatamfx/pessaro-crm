@@ -1070,7 +1070,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[memberships,setMemberships]=useState({})   // contact_id -> [group_id]
   const[groupFilter,setGroupFilter]=useState('todos')
   const[showGroups,setShowGroups]=useState(false)
-  const[groupForm,setGroupForm]=useState({name:'',description:'',color:GROUP_COLORS[0]})
+  const[groupForm,setGroupForm]=useState({name:'',description:'',color:GROUP_COLORS[0],parent_id:''})
   const[editingGroup,setEditingGroup]=useState(null)
   const[managingGroup,setManagingGroup]=useState(null) // grupo cuyos miembros se están editando
   const[groupSearch,setGroupSearch]=useState('')
@@ -1103,6 +1103,11 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[bulkMsg,setBulkMsg]=useState(null) // {type,text}
   // Campañas WABA que ya recibió el contacto abierto en la ficha
   const[campanas,setCampanas]=useState([])
+  // Reasignación de cartera en bloque (sólo super admin, igual que la columna)
+  const[selIds,setSelIds]=useState([])
+  const[bulkAsesor,setBulkAsesor]=useState('')
+  const[asignando,setAsignando]=useState(false)
+  const[asignaMsg,setAsignaMsg]=useState(null)
   // Gestión comercial dentro de la ficha
   const[actForm,setActForm]=useState({tipo:'llamada',notas:'',resultado:'',fecha:new Date().toISOString().slice(0,10)})
   const[actSaving,setActSaving]=useState(false)
@@ -1154,24 +1159,26 @@ function Contacts({user,isSuperAdmin,staffProfile}){
     const name=groupForm.name.trim()
     if(!name){setGroupErr('El nombre es obligatorio');return}
     setGroupErr('')
+    const padre=groupForm.parent_id||null
     if(editingGroup){
       const{error}=await supabase.from('crm_contact_groups')
-        .update({name,description:groupForm.description||null,color:groupForm.color,updated_at:new Date().toISOString()}).eq('id',editingGroup)
+        .update({name,description:groupForm.description||null,color:groupForm.color,parent_id:padre,updated_at:new Date().toISOString()}).eq('id',editingGroup)
+      // P0001 = el trigger de un solo nivel; su mensaje ya explica el porqué
       if(error){setGroupErr(error.message);return}
     }else{
       const{error}=await supabase.from('crm_contact_groups')
-        .insert({name,description:groupForm.description||null,color:groupForm.color,user_id:user.id})
+        .insert({name,description:groupForm.description||null,color:groupForm.color,parent_id:padre,user_id:user.id})
       // 23505 = choca con UNIQUE(user_id,name): el mismo asesor no repite nombre
       if(error){setGroupErr(error.code==='23505'?'Ya tienes un grupo con ese nombre.':error.message);return}
     }
-    setGroupForm({name:'',description:'',color:GROUP_COLORS[0]});setEditingGroup(null);loadGroups()
+    setGroupForm({name:'',description:'',color:GROUP_COLORS[0],parent_id:''});setEditingGroup(null);loadGroups()
   }
 
   const deleteGroup=async(id)=>{
     const{error}=await supabase.from('crm_contact_groups').delete().eq('id',id)
     if(error){setGroupErr(error.message);return}
     if(groupFilter===id)setGroupFilter('todos')
-    if(editingGroup===id){setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0]})}
+    if(editingGroup===id){setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0],parent_id:''})}
     loadGroups()
   }
 
@@ -1335,6 +1342,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       ||(!esSub&&c.sales_stage===stageFilter)
     return ms&&mst&&mu&&mg&&mt&&me&&mf
   })
+  // Los formularios web (sub_) no son crm_contacts: no se pueden reasignar
+  const seleccionables=filtered.filter(c=>!String(c.id).startsWith('sub_'))
+  const marcados=selIds.filter(id=>seleccionables.some(c=>c.id===id))
   // Cuántos entrarían al grupo si se pulsa «Agrupar»: sólo contactos reales
   const nuevosDelRango=desdeFecha
     ?contacts.filter(c=>!String(c.id).startsWith('sub_')&&c.created_at&&new Date(c.created_at)>=desdeFecha).length
@@ -1586,6 +1596,28 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       load()
     }catch(e){console.error('handleAssigneeChange:',e)}
     setEditingAssignee(null)
+  }
+
+  // Reasignar cartera de una vez. Uno por uno era inviable con 200 contactos:
+  // el traspaso entre asesores se hace por tandas, no de a gotas.
+  const asignarEnBloque=async()=>{
+    if(!selIds.length||!bulkAsesor)return
+    setAsignando(true);setAsignaMsg(null)
+    try{
+      const destino=bulkAsesor==='ninguno'?null:bulkAsesor
+      const{error}=await supabase.from('crm_contacts').update({user_id:destino}).in('id',selIds)
+      if(error)throw error
+      const nombre=destino?(staffList.find(s=>s.user_id===destino)?.display_name||'otro asesor'):'sin asesor'
+      // La actividad se registra por contacto: la ficha de cada uno debe poder
+      // contar su propia historia, aunque el cambio viniera de un lote.
+      for(const id of selIds)logActivity(user.id,id,'asignacion',`Contacto asignado a ${nombre}`,{lote:true})
+      await load()
+      setSelIds([])
+      setAsignaMsg({type:'ok',text:`${selIds.length} contacto(s) asignados a ${nombre}.`})
+    }catch(e){
+      console.error('asignarEnBloque:',e)
+      setAsignaMsg({type:'err',text:e.message||'No se pudo reasignar'})
+    }finally{setAsignando(false)}
   }
 
   const saveContactEdit=async(contactId)=>{
@@ -2018,7 +2050,13 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         options={[{value:'todos',label:'Todas las etapas'},{value:'pendientes',label:'Sin cerrar'},
           ...SALES_STAGES.map(s=>({value:s.id,label:s.label}))]}/>
       {isSuperAdmin&&staffList.length>0&&<Sel value={userFilter} onChange={setUserFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los asesores'},...staffList.map(s=>({value:s.user_id,label:s.display_name}))]}/>}
-      {groups.length>0&&<Sel value={groupFilter} onChange={setGroupFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los grupos'},...groups.map(g=>({value:g.id,label:`${g.name} (${Object.values(memberships).filter(ids=>ids.includes(g.id)).length})`}))]}/>}
+      {groups.length>0&&<Sel value={groupFilter} onChange={setGroupFilter} style={{maxWidth:200}} options={[{value:'todos',label:'Todos los grupos'},
+        // Los subgrupos van bajo su padre y sangrados, no sueltos en la lista
+        ...groups.filter(g=>!g.parent_id).flatMap(p=>{
+          const cuenta=g=>Object.values(memberships).filter(ids=>ids.includes(g.id)).length
+          return [{value:p.id,label:`${p.name} (${cuenta(p)})`},
+            ...groups.filter(h=>h.parent_id===p.id).map(h=>({value:h.id,label:`   ↳ ${h.name} (${cuenta(h)})`}))]
+        })]}/>}
       {/* Fecha de creación: el caso del día a día es "qué cargué hoy" */}
       <Sel value={dateFilter} onChange={v=>{setDateFilter(v);setAgrupaMsg(null)}} style={{maxWidth:170}} options={RANGOS_FECHA}/>
       <Btn variant="ghost" onClick={load} style={{padding:'9px 12px'}}>↺</Btn>
@@ -2035,12 +2073,39 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         {agrupando?'Agrupando…':`🗂 Agrupar en «${dateFilter==='hoy'?nombreGrupoDia():`${nombreGrupoDia()} (${dateFilter==='7d'?'7':'30'} días)`}»`}
       </Btn>
       {agrupaMsg&&<span style={{fontSize:11.5,color:agrupaMsg.type==='ok'?P.green:P.red}}>{agrupaMsg.text}</span>}
+
+    </div>}
+
+    {/* Reasignar cartera en bloque. Aparece sólo con algo marcado para no
+        meter una barra permanente que estorbe el día a día. */}
+    {isSuperAdmin&&tab==='lista'&&marcados.length>0&&<div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:12,padding:'10px 14px',
+      background:P.purpleDim,border:`1px solid ${P.purpleBorder}`,borderRadius:10}}>
+      <span style={{fontSize:12.5,color:P.text,fontWeight:600}}>{marcados.length} contacto{marcados.length!==1?'s':''} marcado{marcados.length!==1?'s':''}</span>
+      <Sel value={bulkAsesor} onChange={setBulkAsesor} style={{maxWidth:210}}
+        options={[{value:'',label:'Asignar a…'},...staffList.map(s=>({value:s.user_id,label:s.display_name})),{value:'ninguno',label:'Dejar sin asesor'}]}/>
+      <Btn onClick={asignarEnBloque} disabled={asignando||!bulkAsesor} style={{fontSize:11,padding:'7px 14px'}}>
+        {asignando?'Asignando…':`Asignar los ${marcados.length}`}
+      </Btn>
+      <Btn variant="ghost" onClick={()=>{setSelIds([]);setAsignaMsg(null)}} style={{fontSize:11,padding:'7px 12px'}}>Quitar marcas</Btn>
+      {asignaMsg&&<span style={{fontSize:11.5,color:asignaMsg.type==='ok'?P.green:P.red}}>{asignaMsg.text}</span>}
+    </div>}
+    {isSuperAdmin&&tab==='lista'&&!marcados.length&&asignaMsg&&<div style={{marginBottom:12,padding:'9px 14px',borderRadius:10,
+      background:asignaMsg.type==='ok'?P.greenDim:P.redDim,border:`1px solid ${asignaMsg.type==='ok'?P.green:P.red}30`}}>
+      <span style={{fontSize:12,color:asignaMsg.type==='ok'?P.green:P.red}}>{asignaMsg.text}</span>
     </div>}
 
     {loading?<Spinner/>:<GlassCard style={{padding:0}}>
       <div style={{overflowX:'auto'}}>
       <table style={{width:'100%',borderCollapse:'collapse',minWidth:600}}>
         <thead><tr style={{borderBottom:`1px solid ${P.border}`}}>
+          {isSuperAdmin&&<th style={{padding:'12px 0 12px 18px',width:30}}>
+            <button title={marcados.length===seleccionables.length&&seleccionables.length>0?'Quitar todas las marcas':'Marcar todos los que se ven'}
+              onClick={()=>setSelIds(marcados.length===seleccionables.length&&seleccionables.length>0?[]:seleccionables.map(c=>c.id))}
+              style={{background:'none',border:'none',cursor:'pointer',fontSize:13,padding:0,
+                color:marcados.length&&marcados.length===seleccionables.length?P.purpleLight:P.muted}}>
+              {marcados.length&&marcados.length===seleccionables.length?'☑':'☐'}
+            </button>
+          </th>}
           {[...(isSuperAdmin?['Asesor']:[]),(isSuperAdmin?'Capital':''),'Nombre','Email','Teléfono','Etapa','Estado','Origen',''].filter(Boolean).map(h=>(
             <th key={h} style={{padding:'12px 18px',textAlign:'left',fontSize:10,color:P.muted,textTransform:'uppercase',letterSpacing:'0.10em',fontWeight:600}}>{h}</th>
           ))}
@@ -2051,6 +2116,15 @@ function Contacts({user,isSuperAdmin,staffProfile}){
               onMouseEnter={e=>e.currentTarget.style.background='rgba(255,255,255,0.025)'}
               onMouseLeave={e=>e.currentTarget.style.background='transparent'}
               onClick={()=>openContact(c)}>
+              {isSuperAdmin&&<td style={{padding:'12px 0 12px 18px'}} onClick={e=>e.stopPropagation()}>
+                {String(c.id).startsWith('sub_')
+                  ?<span title="Un formulario web todavía no es un contacto: no se puede asignar" style={{fontSize:12,color:P.border}}>–</span>
+                  :<button onClick={()=>setSelIds(p=>p.includes(c.id)?p.filter(x=>x!==c.id):[...p,c.id])}
+                    style={{background:'none',border:'none',cursor:'pointer',fontSize:13,padding:0,
+                      color:selIds.includes(c.id)?P.purpleLight:P.muted}}>
+                    {selIds.includes(c.id)?'☑':'☐'}
+                  </button>}
+              </td>}
               {isSuperAdmin&&<td style={{padding:'12px 18px'}} onClick={e=>e.stopPropagation()}>
                 {editingAssignee===c.id?(
                   <select value={assigneeValue} onChange={e=>handleAssigneeChange(c.id,e.target.value)} onBlur={()=>setEditingAssignee(null)} autoFocus
@@ -2110,7 +2184,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         if(selected?.id===c.id)setActivities(p=>[{id:Date.now().toString(),activity_type:'whatsapp_chat',description:'Plantilla de WhatsApp enviada',created_at:new Date().toISOString()},...p])
       }}/>}
 
-    {showGroups&&<Modal title="Grupos de contactos" onClose={()=>{setShowGroups(false);setManagingGroup(null);setEditingGroup(null);setGroupErr('');setGroupForm({name:'',description:'',color:GROUP_COLORS[0]});setTransferMode(false);setPicked([]);setTransferMsg(null)}}>
+    {showGroups&&<Modal title="Grupos de contactos" onClose={()=>{setShowGroups(false);setManagingGroup(null);setEditingGroup(null);setGroupErr('');setGroupForm({name:'',description:'',color:GROUP_COLORS[0],parent_id:''});setTransferMode(false);setPicked([]);setTransferMsg(null)}}>
       {!managingGroup&&<div style={{display:'flex',gap:6,marginBottom:16,borderBottom:`1px solid ${P.border}`,paddingBottom:10}}>
         {[['grupos','🗂 Grupos'],['historial','📜 Historial de movimientos']].map(([k,l])=>(
           <button key={k} onClick={()=>setGroupTab(k)}
@@ -2322,31 +2396,54 @@ function Contacts({user,isSuperAdmin,staffProfile}){
         </div>
       })():<div>
         <div style={{display:'flex',flexDirection:'column',gap:8,marginBottom:18}}>
-          {groups.map(g=>{
-            const n=Object.values(memberships).filter(ids=>ids.includes(g.id)).length
-            return <div key={g.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10}}>
-              <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
-              <div style={{flex:1,minWidth:0}}>
-                <p style={{margin:0,fontSize:13,fontWeight:600,color:P.text}}>{g.name}</p>
-                <p style={{margin:'2px 0 0',fontSize:11,color:P.muted}}>
-                  {n} contacto{n!==1?'s':''}{g.description?` · ${g.description}`:''}
-                  {isSuperAdmin&&g.user_id!==user.id?` · ${getAdvisorName(g.user_id)}`:''}
-                </p>
+          {(()=>{
+            // Los subgrupos se pintan bajo su padre, indentados. Sin esto la
+            // lista es plana y no se ve qué bloque forma parte de cuál.
+            const fila=(g,esHijo)=>{
+              const n=Object.values(memberships).filter(ids=>ids.includes(g.id)).length
+              return <div key={g.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',marginLeft:esHijo?22:0,
+                background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:10,
+                borderLeft:esHijo?`3px solid ${g.color}55`:`1px solid ${P.border}`}}>
+                <span style={{width:10,height:10,borderRadius:'50%',background:g.color,flexShrink:0}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <p style={{margin:0,fontSize:13,fontWeight:600,color:P.text}}>{esHijo?'↳ ':''}{g.name}</p>
+                  <p style={{margin:'2px 0 0',fontSize:11,color:P.muted}}>
+                    {n} contacto{n!==1?'s':''}{g.description?` · ${g.description}`:''}
+                    {isSuperAdmin&&g.user_id!==user.id?` · ${getAdvisorName(g.user_id)}`:''}
+                  </p>
+                </div>
+                <Btn variant="ghost" onClick={()=>{setManagingGroup(g.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null);setTransferMode(false);setPicked([])}} style={{fontSize:11,padding:'5px 10px'}}>Contactos</Btn>
+                <Btn variant="ghost" onClick={()=>{setEditingGroup(g.id);setGroupForm({name:g.name,description:g.description||'',color:g.color,parent_id:g.parent_id||''})}} style={{fontSize:11,padding:'5px 10px'}}>✏️</Btn>
+                <Btn variant="ghost" onClick={()=>{if(confirmDeleteGroup===g.id)deleteGroup(g.id);else setConfirmDeleteGroup(g.id)}}
+                  title={groups.some(x=>x.parent_id===g.id)?'Ojo: borrar el grupo borra también sus subgrupos':'Borrar el grupo'}
+                  style={{fontSize:11,padding:'5px 10px',color:confirmDeleteGroup===g.id?P.red:P.muted}}>
+                  {confirmDeleteGroup===g.id?(groups.some(x=>x.parent_id===g.id)?'¿Y sus subgrupos?':'¿Seguro?'):'🗑'}
+                </Btn>
               </div>
-              <Btn variant="ghost" onClick={()=>{setManagingGroup(g.id);setGroupSearch('');setMemberFilter(MEMBER_FILTER_0);setBulkMsg(null);setTransferMode(false);setPicked([])}} style={{fontSize:11,padding:'5px 10px'}}>Contactos</Btn>
-              <Btn variant="ghost" onClick={()=>{setEditingGroup(g.id);setGroupForm({name:g.name,description:g.description||'',color:g.color})}} style={{fontSize:11,padding:'5px 10px'}}>✏️</Btn>
-              <Btn variant="ghost" onClick={()=>{if(confirmDeleteGroup===g.id)deleteGroup(g.id);else setConfirmDeleteGroup(g.id)}}
-                style={{fontSize:11,padding:'5px 10px',color:confirmDeleteGroup===g.id?P.red:P.muted}}>
-                {confirmDeleteGroup===g.id?'¿Seguro?':'🗑'}
-              </Btn>
-            </div>
-          })}
+            }
+            return groups.filter(g=>!g.parent_id).flatMap(p=>[
+              fila(p,false),
+              ...groups.filter(h=>h.parent_id===p.id).map(h=>fila(h,true)),
+            ])
+          })()}
           {groups.length===0&&<p style={{fontSize:12,color:P.muted,fontStyle:'italic',margin:0}}>Todavía no hay grupos. Crea el primero abajo.</p>}
         </div>
         <div style={{borderTop:`1px solid ${P.border}`,paddingTop:16}}>
           <Lbl>{editingGroup?'Editar grupo':'Nuevo grupo'}</Lbl>
           <Input value={groupForm.name} onChange={v=>setGroupForm(p=>({...p,name:v}))} placeholder="Nombre del grupo" style={{marginBottom:8}}/>
           <Input value={groupForm.description} onChange={v=>setGroupForm(p=>({...p,description:v}))} placeholder="Descripción (opcional)" style={{marginBottom:10}}/>
+          {/* Sólo un nivel: se ofrecen como padre los grupos que no son ya
+              subgrupos, y nunca el propio grupo que se está editando. */}
+          {(()=>{
+            const posibles=groups.filter(g=>!g.parent_id&&g.id!==editingGroup&&!groups.some(h=>h.parent_id===editingGroup&&h.id===g.id))
+            const tieneHijos=editingGroup&&groups.some(g=>g.parent_id===editingGroup)
+            if(!posibles.length)return null
+            return <div style={{marginBottom:10}}>
+              <Sel value={groupForm.parent_id} onChange={v=>setGroupForm(p=>({...p,parent_id:v}))}
+                options={[{value:'',label:'Grupo principal (sin padre)'},...posibles.map(g=>({value:g.id,label:`Subgrupo de: ${g.name}`}))]}/>
+              {tieneHijos&&<p style={{fontSize:10.5,color:P.muted,margin:'5px 0 0'}}>Este grupo ya tiene subgrupos, así que no puede ser a su vez subgrupo de otro.</p>}
+            </div>
+          })()}
           <div style={{display:'flex',gap:6,marginBottom:12,flexWrap:'wrap'}}>
             {GROUP_COLORS.map(col=>(
               <button key={col} onClick={()=>setGroupForm(p=>({...p,color:col}))}
@@ -2357,7 +2454,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
           {groupErr&&<p style={{fontSize:11,color:P.red,margin:'0 0 10px'}}>{groupErr}</p>}
           <div style={{display:'flex',gap:8}}>
             <Btn onClick={saveGroup}>{editingGroup?'Guardar cambios':'+ Crear grupo'}</Btn>
-            {editingGroup&&<Btn variant="ghost" onClick={()=>{setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0]});setGroupErr('')}}>Cancelar</Btn>}
+            {editingGroup&&<Btn variant="ghost" onClick={()=>{setEditingGroup(null);setGroupForm({name:'',description:'',color:GROUP_COLORS[0],parent_id:''});setGroupErr('')}}>Cancelar</Btn>}
           </div>
         </div>
       </div>}

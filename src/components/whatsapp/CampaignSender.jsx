@@ -191,6 +191,7 @@ export default function CampaignSender({ user }) {
     scheduled_at: '',
     header_image_url: '',
     contact_group_id: '',   // vacío = campaign_leads; con valor = grupo de contactos
+    subgrupos: [],          // subgrupos marcados que se suman al grupo elegido
     body_variable: '',      // vacío = primer nombre de cada destinatario
     // Por defecto no se le escribe a quien ya recibió CUALQUIER campaña en los
     // últimos 30 días. Es la regla de la casa; se puede aflojar por campaña.
@@ -210,7 +211,7 @@ export default function CampaignSender({ user }) {
       supabase.from('whatsapp_templates').select('*').eq('status', 'APPROVED'),
       supabase.from('campaigns').select('id,name').order('name'),
       supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false }),
-      supabase.from('crm_contact_groups').select('id,name,color').order('name'),
+      supabase.from('crm_contact_groups').select('id,name,color,parent_id').order('name'),
       supabase.from('crm_contact_group_members').select('group_id'),
     ]).then(([t, c, wc, g, gm]) => {
       setTemplates(t.data || [])
@@ -237,8 +238,10 @@ export default function CampaignSender({ user }) {
         const dig = v => String(v || '').replace(/\D/g, '')
         let filas = []
         if (form.contact_group_id) {
+          // El grupo elegido más los subgrupos marcados. Un contacto que esté
+          // en dos de ellos se deduplica luego por teléfono, como en el envío.
           const { data } = await supabase.from('crm_contact_group_members')
-            .select('crm_contacts(phone)').eq('group_id', form.contact_group_id)
+            .select('crm_contacts(phone)').in('group_id', [form.contact_group_id, ...form.subgrupos])
           filas = (data || []).map(r => r.crm_contacts).filter(c => c && c.phone)
         } else {
           let q = supabase.from('campaign_leads').select('phone').not('phone', 'is', null)
@@ -276,7 +279,7 @@ export default function CampaignSender({ user }) {
     }, 400)
     return () => { vivo = false; clearTimeout(t) }
   }, [tab, form.contact_group_id, form.variant_key, form.etapas, form.campaign_id,
-      form.dedupe_scope, form.dedupe_days, form.template_id, templates])
+      form.dedupe_scope, form.dedupe_days, form.template_id, templates, form.subgrupos])
 
   // El portapapeles necesita contexto seguro (https); si el navegador lo niega
   // se avisa en el propio botón en vez de fallar en silencio.
@@ -314,7 +317,10 @@ export default function CampaignSender({ user }) {
     // apunta a crm_contacts y variant/etapa sólo existen en campaign_leads.
     const targetFilter = {}
     if (form.contact_group_id) {
+      // Se guarda la lista completa (grupo + subgrupos marcados).
+      // contact_group_id se mantiene por compatibilidad con las campañas viejas.
       targetFilter.contact_group_id = form.contact_group_id
+      targetFilter.contact_group_ids = [form.contact_group_id, ...form.subgrupos]
     } else {
       if (form.variant_key) targetFilter.variant = form.variant_key
       if (form.etapas.length) targetFilter.etapa = form.etapas
@@ -344,7 +350,7 @@ export default function CampaignSender({ user }) {
       setSending(false)
       if (r.success) {
         setResult(r)
-        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', body_variable: '', dedupe_scope: 'global', dedupe_days: '30' })
+        setForm({ name: '', template_id: templates[0]?.id || '', campaign_id: '', variant_key: '', etapas: [], scheduled_at: '', header_image_url: '', contact_group_id: '', subgrupos: [], body_variable: '', dedupe_scope: 'global', dedupe_days: '30' })
         await recargarCampanas()
         setTab('historial')
       } else {
@@ -564,11 +570,51 @@ export default function CampaignSender({ user }) {
 
             <div>
               <Lbl>Destinatarios</Lbl>
-              <Sel value={form.contact_group_id} onChange={v => setForm(f => ({ ...f, contact_group_id: v }))}
+              {/* Al elegir un grupo se limpian los subgrupos marcados: si no,
+                  quedarían arrastrados de otro grupo y se enviaría de más. */}
+              <Sel value={form.contact_group_id} onChange={v => setForm(f => ({ ...f, contact_group_id: v, subgrupos: [] }))}
                 options={[
                   { value: '', label: 'Leads de campaña (filtrados abajo)' },
-                  ...contactGroups.map(g => ({ value: g.id, label: `Grupo: ${g.name} (${g.count} contacto${g.count !== 1 ? 's' : ''})` })),
+                  // Los subgrupos van sangrados bajo su padre, no sueltos
+                  ...contactGroups.filter(g => !g.parent_id).flatMap(p => [
+                    { value: p.id, label: `Grupo: ${p.name} (${p.count} contacto${p.count !== 1 ? 's' : ''})` },
+                    ...contactGroups.filter(h => h.parent_id === p.id)
+                      .map(h => ({ value: h.id, label: `   ↳ ${h.name} (${h.count} contacto${h.count !== 1 ? 's' : ''})` })),
+                  ]),
                 ]} />
+
+              {/* Subgrupos del grupo elegido, por nombre y con su conteo */}
+              {(() => {
+                const hijos = contactGroups.filter(g => g.parent_id === form.contact_group_id)
+                if (!form.contact_group_id || !hijos.length) return null
+                const padre = contactGroups.find(g => g.id === form.contact_group_id)
+                return (
+                  <div style={{ marginTop: 10, padding: '11px 13px', background: 'rgba(255,255,255,0.03)', border: `1px solid ${C.border}`, borderRadius: 10 }}>
+                    <p style={{ fontSize: 10.5, color: C.muted, textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 700, margin: '0 0 9px' }}>
+                      Subgrupos de {padre?.name}
+                    </p>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                      {hijos.map(h => {
+                        const on = form.subgrupos.includes(h.id)
+                        return (
+                          <button key={h.id}
+                            onClick={() => setForm(f => ({ ...f, subgrupos: on ? f.subgrupos.filter(x => x !== h.id) : [...f.subgrupos, h.id] }))}
+                            style={{ display: 'flex', alignItems: 'center', gap: 9, background: 'none', border: 'none', padding: 0, cursor: 'pointer', textAlign: 'left', fontFamily: 'inherit' }}>
+                            <span style={{ fontSize: 13, color: on ? C.green : C.muted }}>{on ? '☑' : '☐'}</span>
+                            <span style={{ fontSize: 12.5, color: on ? C.text : C.textSub, fontWeight: on ? 600 : 400 }}>{h.name}</span>
+                            <span style={{ fontSize: 11, color: C.muted }}>({h.count})</span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    <p style={{ fontSize: 11, color: C.muted, margin: '9px 0 0', lineHeight: 1.5 }}>
+                      {form.subgrupos.length
+                        ? <>Se enviará a <strong style={{ color: C.textSub }}>{padre?.name}</strong> más {form.subgrupos.map(id => contactGroups.find(g => g.id === id)?.name).filter(Boolean).join(', ')}.</>
+                        : <>Sin marcar ninguno, sólo reciben los que están directamente en <strong style={{ color: C.textSub }}>{padre?.name}</strong>.</>}
+                    </p>
+                  </div>
+                )
+              })()}
               <p style={{ fontSize: 11, color: C.muted, margin: '6px 0 0' }}>
                 {form.contact_group_id
                   ? 'Se enviará a los contactos del grupo. Los filtros de lead no aplican.'
