@@ -1,5 +1,7 @@
 # Pessaro Capital CRM — Changelog
 
+**Repo hermano:** `pessarocl` (`C:\Users\fcoro\documents\pessarocl`, sitio público y portal de clientes) tiene su propio registro histórico en `HISTORICO.md` — no se fusiona con este archivo porque describe trabajo de otro repo, pero comparte el mismo proyecto Supabase. Ver `SUPABASE_COMPARTIDO.md` (duplicado literal en ambos repos) para lo que cruza a los dos.
+
 ## [2026-08-14] — El análisis del CRM volvía a fecharse un día antes que el portal
 
 ### Síntoma
