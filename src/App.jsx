@@ -2426,7 +2426,11 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                 // Reparto: se toman los que aún no están en ningún subgrupo, en
                 // el orden de la lista de abajo. Así se puede trocear el grupo
                 // en tandas seguidas: 30 al primero, los 30 siguientes al otro.
-                const libres=miembros.filter(c=>!hijos.some(h=>(memberships[c.id]||[]).includes(h.id)))
+                // Respeta los filtros de arriba, para poder armar un subgrupo
+                // con un criterio ("los B2B", "los de esta semana") y no sólo
+                // por posición en la lista.
+                const hayFiltro=groupSearch.trim()!==''||JSON.stringify(memberFilter)!==JSON.stringify(MEMBER_FILTER_0)
+                const libres=miembros.filter(coincide).filter(c=>!hijos.some(h=>(memberships[c.id]||[]).includes(h.id)))
                 const n=Math.max(0,Math.min(Number(subForm.cuantos)||0,libres.length))
                 const seLleva=libres.slice(0,n)
                 return <div style={{marginTop:10}}>
@@ -2459,7 +2463,9 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                         background:'rgba(255,255,255,0.04)',color:P.muted,border:`1px solid ${P.border}`}}>Ninguno</button>
                   </div>
                   <p style={{fontSize:11,color:P.muted,margin:'0 0 8px',lineHeight:1.6}}>
-                    Quedan <strong style={{color:P.textSub}}>{libres.length}</strong> sin subgrupo en «{g.name}».
+                    {hayFiltro
+                      ?<><strong style={{color:P.orange}}>{libres.length}</strong> sin subgrupo <strong style={{color:P.orange}}>de los que cumplen los filtros de arriba</strong>.</>
+                      :<>Quedan <strong style={{color:P.textSub}}>{libres.length}</strong> sin subgrupo en «{g.name}».</>}
                     {n>0
                       ?<> Se llevará los <strong style={{color:P.textSub}}>{n} primeros</strong>: {seLleva.slice(0,3).map(c=>c.full_name).join(', ')}{n>3?` y ${n-3} más`:''}.</>
                       :<> No se llevará a nadie: podrás agregarlos después.</>}
