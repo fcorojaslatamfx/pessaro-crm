@@ -15,7 +15,7 @@
 // Disparo: pg_cron a las 08:00 de Chile. El secreto viaja en el BODY porque la
 // función tiene verify_jwt activo (mismo patrón que whatsapp-send).
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2"
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.112.3"
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",

@@ -34,6 +34,7 @@ No hay script de lint ni de typecheck configurado (no hay ESLint ni `tsconfig.js
 ## Reglas duras
 
 - **`whatsapp-webhook` existe en este repo pero es una copia vieja — no desplegarla.** La versión real y desplegada vive en `pessarocl`. Ver `SUPABASE_COMPARTIDO.md`.
+- **Nunca trackear `deno.lock`** (ignorado en `.gitignore`). Un lockfile generado localmente puede romper `supabase functions deploy` con errores de `eszip`. Los imports remotos de las Edge Functions van con versión exacta (`@2.112.3`, nunca solo `@2`) — ver `SUPABASE_COMPARTIDO.md`.
 - **No hay base de staging separada.** Todo el trabajo (incluida `staging`) escribe sobre el mismo proyecto Supabase que ve producción. Marca cualquier fila de prueba de forma reconocible antes de crearla.
 - Los roles del sistema están en **español** (`cliente`, `interno`, `asesor`, `super_admin`) — no existe `client` en inglés.
 - El teléfono está en solo dígitos en las 6 tablas de la cadena WhatsApp/CRM (`crm_contacts`, `campaign_leads`, `contact_submissions`, `whatsapp_messages`, `whatsapp_assignments`, `whatsapp_opt_outs`), pero **no** en las tablas del portal (`pessarocl`). Cualquier cruce busca los dos formatos.

@@ -44,6 +44,24 @@ Si trabajas sin Claude Code o su memoria no está disponible, pregunta a Francis
 
 La migración `20260813_telefonos_solo_digitos.sql` (repo pessaro-crm) dejó en solo dígitos las 6 tablas de la cadena WhatsApp/CRM (`crm_contacts`, `campaign_leads`, `contact_submissions`, `whatsapp_messages`, `whatsapp_assignments`, `whatsapp_opt_outs`), pero **no** las del portal (pessarocl): `client_profiles_2026_02_08_22_02`, `risk_profiles_2026_02_08_21_16`, `newsletter_subscriptions`, `education_downloads`, `live_chat_otp`, `crm_staff_profiles` siguen mezclando `+56...` y `56...`. Cualquier consulta que cruce un teléfono entre las dos familias de tablas busca **los dos formatos** (`.in([phone, '+' + phone])`), nunca `.eq()`.
 
+## Edge Functions (Deno): sin lockfile, con versión pineada en cada import
+
+**Nunca trackear `deno.lock`** en ninguno de los dos repos (ambos lo ignoran en `.gitignore`). Un `deno.lock` generado localmente (típicamente por la extensión de Deno de VS Code, sin que nadie lo pida) puede traer una versión de formato distinta a la que espera el entorno de despliegue de Supabase y romper `supabase functions deploy` con errores de `eszip` — es un problema real y documentado del CLI (`supabase/cli#1584`, `supabase/supabase#17901`, `supabase/cli#621`), no hipotético. Si ves un `deno.lock` en el árbol de trabajo, bórralo; no lo agregues al commit.
+
+En su lugar, la reproducibilidad de los imports remotos se logra **pineando la versión exacta en cada `import`** — nunca solo el major:
+
+```typescript
+// ❌ Prohibido — versión flotante: esm.sh resuelve "lo último 2.x" en cada
+// deploy, así que el mismo código puede correr con dependencias distintas
+// sin que nadie haya tocado una línea.
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+
+// ✅ Obligatorio — versión exacta.
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.112.3'
+```
+
+Antes de modificar, crear o desplegar cualquier Edge Function: (1) confirma que no se está arrastrando un `deno.lock`; (2) revisa que cada `import` de CDN (`esm.sh`, `deno.land`) tenga versión exacta — si encuentras `@2` u otro pin de solo major, corrígelo a la versión estable vigente del proyecto antes de tocar el resto del archivo.
+
 ## Convención de roles
 
 Los roles del sistema están en **español**: `cliente`, `interno`, `asesor`, `super_admin`. No existe `client` en inglés — un valor en inglés escrito por error no matchea ninguna política ni ningún chequeo de rol, y falla en silencio.
@@ -51,3 +69,4 @@ Los roles del sistema están en **español**: `cliente`, `interno`, `asesor`, `s
 ## Historial de cambios de este documento
 
 - 2026-08-19 — creado. Primera versión incluía detalle de hallazgos de seguridad sin corregir; se reescribió antes de commitear nada porque ambos repos son públicos — el detalle vive solo en memoria local de Claude Code, nunca en este archivo.
+- 2026-08-19 — agregada la sección de Edge Functions/Deno (prohibido trackear `deno.lock`, versión pineada en cada import), tras encontrar un `deno.lock` suelto en `pessaro-crm` y confirmar 14 imports flotantes de `@supabase/supabase-js@2` entre los dos repos.

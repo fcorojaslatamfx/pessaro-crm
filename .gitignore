@@ -20,3 +20,11 @@ SPEC_* v*.md
 # crm.pessaro.cl, así que una captura del CRM ahí queda accesible a cualquiera.
 public/Captura de pantalla*
 public/*.pdf
+
+# Deno (lockfile de las Edge Functions). Prohibido trackearlo: un deno.lock
+# generado localmente (ej. por la extensión de VS Code) puede traer una
+# versión de formato distinta a la que espera el entorno de despliegue de
+# Supabase y romper `supabase functions deploy` con errores de eszip. La
+# reproducibilidad de los imports remotos se logra pineando la versión exacta
+# en cada `import`, no con un lockfile — ver SUPABASE_COMPARTIDO.md.
+deno.lock
