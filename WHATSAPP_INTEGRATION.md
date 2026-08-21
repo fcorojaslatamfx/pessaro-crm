@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS whatsapp_config (
 CREATE TABLE IF NOT EXISTS whatsapp_messages (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   meta_message_id  TEXT UNIQUE,            -- ID devuelto por Meta
-  client_phone     TEXT NOT NULL,          -- Formato E.164: "+56912345678"
+  client_phone     TEXT NOT NULL,          -- Solo digitos, sin "+": "56912345678" (ver 12)
   client_name      TEXT,                   -- Nombre del contacto si disponible
   direction        TEXT NOT NULL CHECK (direction IN ('inbound', 'outbound')),
   message_type     TEXT NOT NULL,          -- 'text', 'template', 'image', 'document', 'button', 'interactive'
@@ -748,7 +748,22 @@ graph.facebook.com
 
 ## 12. Formato de teléfono (2026-08-13)
 
-**Formato único en todo el sistema: sólo dígitos**, sin `+` ni espacios (`56973312927`). Es lo que espera Meta y lo que devuelve `msg.from`.
+**En toda la cadena de WhatsApp y del CRM: sólo dígitos**, sin `+` ni espacios (`56973312927`). Es lo que espera Meta y lo que devuelve `msg.from`.
+
+**No lo generalices al resto de la base.** La migración `20260813_telefonos_solo_digitos.sql` normalizó seis tablas, no todas: las del sitio y el portal quedaron fuera y **siguen guardando el `+`**. Medido en producción el 2026-08-19 (filas con `+` sobre filas con teléfono):
+
+| Sólo dígitos | Todavía con `+` |
+|---|---|
+| `crm_contacts` 0/281 | `client_profiles_2026_02_08_22_02` **7/11** |
+| `campaign_leads` 0/24 | `crm_staff_profiles` **5/6** |
+| `contact_submissions.mobile` 0/54 | `education_downloads` **4/6** |
+| `whatsapp_messages` 0/122 | `newsletter_subscriptions` **4/5** |
+| `whatsapp_assignments` 0/28 | `risk_profiles_2026_02_08_21_16` **4/4** |
+| `whatsapp_opt_outs` 0/0 | `live_chat_otp` **3/3** |
+
+Las tablas nacidas después de la migración ya son sólo dígitos: `whatsapp_campaign_recipients` 0/40 y `waba_onboarding_state` 0/2.
+
+Consecuencia práctica: **toda consulta que cruce un teléfono de WhatsApp contra una tabla del portal tiene que buscar los dos formatos.** Es lo que hace `debeCongelar()` del bot con `.in('phone', [phone, '+' + phone])`. Escrita con `.eq()` sobre un solo formato falla en silencio: un cliente real no queda congelado y el bot le contesta como si fuera un lead.
 
 No es una preferencia estética: **el mismo string enlaza** `crm_contacts.phone` y `campaign_leads.phone` con las claves de WhatsApp (`whatsapp_messages.client_phone`, `whatsapp_assignments.client_phone`, `whatsapp_opt_outs.client_phone`). Si se cambia el formato en un lado y no en el otro, **falla en silencio**:
 

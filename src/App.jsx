@@ -3978,7 +3978,7 @@ function CampaignsHub({campaigns,setCampaigns,user,isSuperAdmin,staffProfile,glo
       ))}
     </div>
 
-    {canal==='waba'&&<CampaignSender user={user}/>}
+    {canal==='waba'&&<CampaignSender user={user} logoUri={LOGO_URI}/>}
 
     {canal==='admin'&&isSuperAdmin&&<AdminCampaigns campaigns={campaigns} setCampaigns={setCampaigns} user={user}/>}
 
