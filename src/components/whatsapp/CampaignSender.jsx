@@ -163,7 +163,7 @@ function SelectorImagen({ onPick, onClose }) {
   )
 }
 
-export default function CampaignSender({ user }) {
+export default function CampaignSender({ user, logoUri }) {
   const [tab, setTab] = useState('crear')
   const [templates, setTemplates] = useState([])
   const [campaigns, setCampaigns] = useState([])
@@ -181,6 +181,11 @@ export default function CampaignSender({ user }) {
   const [contactGroups, setContactGroups] = useState([])
   const [showMedia, setShowMedia] = useState(false)   // selector de imagen del encabezado
   const [copiado, setCopiado] = useState(null)        // 'ok' | 'err'
+
+  // Detalle por destinatario de una campaña (enviados/entregados/leídos/fallidos por número)
+  const [detailFor, setDetailFor] = useState(null)     // campaña abierta, o null
+  const [detailRows, setDetailRows] = useState([])
+  const [detailLoading, setDetailLoading] = useState(false)
 
   const [form, setForm] = useState({
     name: '',
@@ -396,6 +401,20 @@ export default function CampaignSender({ user }) {
     const { data: wcs } = await supabase.from('whatsapp_campaigns').select('*,whatsapp_templates(template_name)').order('created_at', { ascending: false })
     setWaCampaigns(wcs || [])
   }
+
+  // Detalle por número: enviados/entregados/leídos/fallidos, uno por destinatario
+  async function abrirDetalle(wc) {
+    setDetailFor(wc)
+    setDetailLoading(true)
+    const { data } = await supabase
+      .from('whatsapp_campaign_recipients')
+      .select('*')
+      .eq('wa_campaign_id', wc.id)
+      .order('created_at', { ascending: true })
+    setDetailRows(data || [])
+    setDetailLoading(false)
+  }
+  function cerrarDetalle() { setDetailFor(null); setDetailRows([]) }
 
   // Llama a la edge function con el JWT del usuario (send_campaign es super_admin)
   async function dispararCampana(waCampaignId) {
@@ -802,6 +821,12 @@ export default function CampaignSender({ user }) {
                         Cancelar
                       </button>
                     )}
+                    {wc.total_recipients > 0 && (
+                      <button onClick={() => abrirDetalle(wc)} title="Detalle por número: enviados, entregados, leídos y fallidos"
+                        style={{ padding: '6px 11px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: C.blueDim, color: C.blue, border: `1px solid ${C.blue}40` }}>
+                        📋 Ver detalle
+                      </button>
+                    )}
                     <button onClick={() => duplicar(wc)} title="Crear un borrador nuevo con la misma configuración"
                       style={{ padding: '6px 11px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: C.textSub, border: `1px solid ${C.border}` }}>
                       ⧉ Reutilizar
@@ -839,6 +864,245 @@ export default function CampaignSender({ user }) {
           onPick={url => { setForm(f => ({ ...f, header_image_url: url })); setShowMedia(false) }}
         />
       )}
+
+      {detailFor && (
+        <DetalleCampanaModal
+          campana={detailFor}
+          filas={detailRows}
+          cargando={detailLoading}
+          logoUri={logoUri}
+          onClose={cerrarDetalle}
+        />
+      )}
     </div>
   )
+}
+
+const OUTCOME_LABEL = {
+  sent: 'Enviado',
+  failed: 'Fallido',
+  skipped_opt_out: 'Omitido (baja)',
+  skipped_already_sent: 'Omitido (ya contactado)',
+}
+const OUTCOME_COLOR = {
+  sent: C.blue, failed: C.red, skipped_opt_out: C.muted, skipped_already_sent: C.orange,
+}
+const DELIVERY_LABEL = { sent: 'Enviado', delivered: 'Entregado', read: 'Leído', failed: 'Fallido' }
+const DELIVERY_COLOR = { sent: C.blue, delivered: C.purple, read: C.green, failed: C.red }
+
+// Detalle por destinatario: enviados/entregados/leídos/fallidos, uno por número.
+// Se consulta al abrir (no en cada visita a Campañas) porque una campaña grande
+// puede tener miles de filas en whatsapp_campaign_recipients.
+function DetalleCampanaModal({ campana, filas, cargando, logoUri, onClose }) {
+  const counts = {
+    total: filas.length,
+    sent: filas.filter(r => r.outcome === 'sent').length,
+    delivered: filas.filter(r => r.status === 'delivered' || r.status === 'read').length,
+    read: filas.filter(r => r.status === 'read').length,
+    failed: filas.filter(r => r.outcome === 'failed' || r.status === 'failed').length,
+    optOut: filas.filter(r => r.outcome === 'skipped_opt_out').length,
+    yaEnviado: filas.filter(r => r.outcome === 'skipped_already_sent').length,
+  }
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.78)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200, padding: 20 }}>
+      <div onClick={e => e.stopPropagation()}
+        style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 14, width: 'min(980px,100%)', maxHeight: '86vh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '16px 20px', borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, color: C.text }}>{campana.name}</h3>
+            <p style={{ margin: '2px 0 0', fontSize: 11, color: C.muted }}>
+              {campana.whatsapp_templates?.template_name || '—'} · {counts.total} destinatario{counts.total !== 1 ? 's' : ''}
+            </p>
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <button onClick={() => exportCampaignDetailHTML(campana, filas)}
+              style={{ padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'rgba(255,255,255,0.05)', color: C.textSub, border: `1px solid ${C.border}` }}>
+              ⬇ HTML
+            </button>
+            <button onClick={() => exportCampaignDetailPDF(campana, filas, logoUri)}
+              style={{ padding: '6px 12px', borderRadius: 7, fontSize: 12, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', background: 'linear-gradient(135deg,#0a1f5c,#2563eb)', color: '#fff', border: 'none' }}>
+              ⬇ PDF
+            </button>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', fontFamily: 'inherit' }}>✕</button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 8, padding: '12px 20px 0', flexWrap: 'wrap' }}>
+          <MetricBadge label="Total" value={counts.total} color={C.textSub} />
+          <MetricBadge label="Enviados" value={counts.sent} color={C.blue} />
+          <MetricBadge label="Entregados" value={counts.delivered} color={C.purple} />
+          <MetricBadge label="Leídos" value={counts.read} color={C.green} />
+          <MetricBadge label="Fallidos" value={counts.failed} color={C.red} />
+          {counts.optOut > 0 && <MetricBadge label="Bajas" value={counts.optOut} color={C.muted} />}
+          {counts.yaEnviado > 0 && <MetricBadge label="Ya contactados" value={counts.yaEnviado} color={C.orange} />}
+        </div>
+
+        <div style={{ padding: 20, overflowY: 'auto' }}>
+          {cargando ? (
+            <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>Cargando…</p>
+          ) : filas.length === 0 ? (
+            <p style={{ fontSize: 12, color: C.muted, margin: 0 }}>Sin destinatarios registrados.</p>
+          ) : (
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12.5 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', color: C.muted, fontSize: 10.5, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Contacto</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Teléfono</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Resultado</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Estado entrega</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Entregado</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Leído</th>
+                  <th style={{ padding: '6px 10px', borderBottom: `1px solid ${C.border}` }}>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filas.map(r => (
+                  <tr key={r.id} style={{ borderBottom: `1px solid ${C.border}` }}>
+                    <td style={{ padding: '7px 10px', color: C.text }}>{r.full_name || '—'}</td>
+                    <td style={{ padding: '7px 10px', color: C.textSub, fontFamily: 'monospace' }}>{r.phone}</td>
+                    <td style={{ padding: '7px 10px' }}>
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: OUTCOME_COLOR[r.outcome] || C.muted, background: (OUTCOME_COLOR[r.outcome] || C.muted) + '20', border: `1px solid ${(OUTCOME_COLOR[r.outcome] || C.muted)}35`, borderRadius: 4, padding: '2px 7px' }}>
+                        {OUTCOME_LABEL[r.outcome] || r.outcome}
+                      </span>
+                    </td>
+                    <td style={{ padding: '7px 10px' }}>
+                      {r.status
+                        ? <span style={{ fontSize: 10.5, fontWeight: 700, color: DELIVERY_COLOR[r.status] || C.muted, background: (DELIVERY_COLOR[r.status] || C.muted) + '20', border: `1px solid ${(DELIVERY_COLOR[r.status] || C.muted)}35`, borderRadius: 4, padding: '2px 7px' }}>
+                            {DELIVERY_LABEL[r.status] || r.status}
+                          </span>
+                        : <span style={{ color: C.muted }}>—</span>}
+                    </td>
+                    <td style={{ padding: '7px 10px', color: C.muted, fontSize: 11 }}>{fmtFechaHora(r.delivered_at)}</td>
+                    <td style={{ padding: '7px 10px', color: C.muted, fontSize: 11 }}>{fmtFechaHora(r.read_at)}</td>
+                    <td style={{ padding: '7px 10px', color: C.red, fontSize: 11 }}>{r.error_message || r.error || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Export del detalle: mismo patrón que exportContactsHTML/PDF (App.jsx) ──
+// window.print() hace de "PDF": no hay dependencia de una librería de PDF.
+function exportCampaignDetailHTML(campana, filas) {
+  const now = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const rows = filas.map(r => `
+    <tr>
+      <td><strong>${esc(r.full_name || '—')}</strong></td>
+      <td style="font-family:monospace;font-size:12px">${esc(r.phone)}</td>
+      <td><span style="background:${OUTCOME_COLOR[r.outcome] || '#888'}22;color:${OUTCOME_COLOR[r.outcome] || '#888'};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${esc(OUTCOME_LABEL[r.outcome] || r.outcome)}</span></td>
+      <td>${r.status ? `<span style="background:${DELIVERY_COLOR[r.status] || '#888'}22;color:${DELIVERY_COLOR[r.status] || '#888'};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:600">${esc(DELIVERY_LABEL[r.status] || r.status)}</span>` : '—'}</td>
+      <td style="font-size:11px;color:#64748b">${esc(fmtFechaHora(r.delivered_at))}</td>
+      <td style="font-size:11px;color:#64748b">${esc(fmtFechaHora(r.read_at))}</td>
+      <td style="font-size:11px;color:#dc2626">${esc(r.error_message || r.error || '—')}</td>
+    </tr>`).join('')
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Detalle de campaña — ${esc(campana.name)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',sans-serif;background:#f8fafc;color:#1e293b;padding:32px}
+.header{background:linear-gradient(135deg,#050816,#1e3a8a);padding:24px 32px;border-radius:12px 12px 0 0;display:flex;align-items:center;justify-content:space-between}
+.header h1{color:#fff;font-size:18px;font-weight:700}.header small{color:#94a3b8;font-size:11px}
+.meta{background:#1e3a8a;padding:10px 32px;border-bottom:3px solid #f0a500}.meta span{color:#e2e8f0;font-size:12px}
+table{width:100%;border-collapse:collapse;background:#fff;border-radius:0 0 12px 12px;overflow:hidden;box-shadow:0 4px 24px rgba(0,0,0,.08)}
+th{background:#f1f5f9;color:#475569;font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;padding:11px 16px;text-align:left;border-bottom:2px solid #e2e8f0}
+td{padding:11px 16px;border-bottom:1px solid #f1f5f9;font-size:13px;vertical-align:middle}
+tr:last-child td{border-bottom:none}tr:hover td{background:#f8fafc}
+.foot{margin-top:16px;text-align:right;font-size:11px;color:#94a3b8}
+.btn{display:inline-block;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;padding:10px 20px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;border:none;margin-bottom:16px;font-family:'Inter',sans-serif}
+@media print{.btn{display:none}body{padding:0}}</style></head><body>
+<button class="btn" onclick="window.print()">🖨 Imprimir / Guardar PDF</button>
+<div class="header"><div><h1>📋 Detalle de campaña — ${esc(campana.name)}</h1><small>CRM Interno · Uso confidencial</small></div><div style="text-align:right"><small style="color:#94a3b8">${now}</small><br><strong style="color:#f0a500;font-size:20px">${filas.length}</strong><small style="color:#e2e8f0"> destinatarios</small></div></div>
+<div class="meta"><span>Plantilla: <strong>${esc(campana.whatsapp_templates?.template_name || '—')}</strong> · Generado ${now}</span></div>
+<table><thead><tr><th>Contacto</th><th>Teléfono</th><th>Resultado</th><th>Estado entrega</th><th>Entregado</th><th>Leído</th><th>Error</th></tr></thead>
+<tbody>${rows}</tbody></table>
+<div class="foot">Pessaro Capital SpA · crm.pessaro.cl · Confidencial — No distribuir</div>
+</body></html>`
+  const w = window.open('', '_blank'); w.document.write(html); w.document.close()
+}
+
+function exportCampaignDetailPDF(campana, filas, logoUri) {
+  const now = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })
+  const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  const counts = {
+    sent: filas.filter(r => r.outcome === 'sent').length,
+    delivered: filas.filter(r => r.status === 'delivered' || r.status === 'read').length,
+    read: filas.filter(r => r.status === 'read').length,
+    failed: filas.filter(r => r.outcome === 'failed' || r.status === 'failed').length,
+  }
+  const rows = filas.map(r => `
+    <tr>
+      <td><strong>${esc(r.full_name || '—')}</strong><br><span style="font-size:10px;color:#64748b;font-family:monospace">${esc(r.phone)}</span></td>
+      <td><span style="background:${OUTCOME_COLOR[r.outcome] || '#888'}22;color:${OUTCOME_COLOR[r.outcome] || '#888'};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600">${esc(OUTCOME_LABEL[r.outcome] || r.outcome)}</span></td>
+      <td>${r.status ? `<span style="background:${DELIVERY_COLOR[r.status] || '#888'}22;color:${DELIVERY_COLOR[r.status] || '#888'};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600">${esc(DELIVERY_LABEL[r.status] || r.status)}</span>` : '—'}</td>
+      <td style="font-size:10px;color:#94a3b8">${esc(fmtFechaHora(r.delivered_at))}</td>
+      <td style="font-size:10px;color:#94a3b8">${esc(fmtFechaHora(r.read_at))}</td>
+      <td style="font-size:10px;color:#dc2626">${esc(r.error_message || r.error || '—')}</td>
+    </tr>`).join('')
+  const html = `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Informe de campaña — ${esc(campana.name)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'Inter',sans-serif;background:#f0f4f8;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.toolbar{background:#050816;padding:14px 32px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.08)}
+.brand{display:flex;align-items:center;gap:12px}.brand img{width:36px;height:36px;border-radius:8px}
+.brand strong{color:#fff;font-size:14px;display:block}.brand small{color:#94a3b8;font-size:10px;letter-spacing:1.5px;text-transform:uppercase}
+.btns{display:flex;gap:10px}.btn{border:none;cursor:pointer;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;padding:9px 18px;border-radius:9px}
+.btn-p{background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.35)}
+.btn-g{background:rgba(255,255,255,.06);color:#e6ecff;border:1px solid rgba(255,255,255,.14)}
+@media print{.toolbar{display:none!important}body{background:#fff}.wrap{margin:0;padding:0}}
+.wrap{max-width:1000px;margin:24px auto 48px;padding:0 20px}
+.card{background:#fff;border-radius:14px;box-shadow:0 20px 50px rgba(0,0,0,.18);overflow:hidden}
+.band{background:linear-gradient(135deg,#050816 0%,#0a1f5c 40%,#1e3a8a 70%,#2563eb 100%);padding:24px 40px;display:flex;align-items:center;gap:16px;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.band-logo{width:48px;height:48px;border-radius:10px;overflow:hidden;border:1px solid rgba(255,255,255,.2)}
+.band-logo img{width:100%;height:100%;object-fit:cover}
+.band h1{font-size:18px;font-weight:700;color:#fff}.band-sub{color:#b9c5e6;font-size:12px;margin-top:2px}
+.band-right{margin-left:auto;text-align:right}
+.band-right .val{color:#f0a500;font-size:28px;font-weight:800}.band-right small{color:#b9c5e6;font-size:11px}
+.gold{height:4px;background:linear-gradient(135deg,#b8860b,#d4af37,#fbbf24);-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.body{padding:28px 40px 24px}
+.kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:24px}
+.kpi{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;text-align:center}
+.kpi-lbl{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;color:#64748b;margin-bottom:4px}
+.kpi-val{font-size:18px;font-weight:800;color:#0a1f5c}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{background:#f1f5f9;color:#475569;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;font-weight:600;padding:9px 12px;text-align:left;border-bottom:2px solid #e2e8f0}
+td{padding:9px 12px;border-bottom:1px solid #f8fafc;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.disc{margin-top:20px;padding:10px 14px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;font-size:10px;color:#78350f;line-height:1.6;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.foot{margin-top:20px;padding-top:12px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center}
+.foot-brand{display:flex;align-items:center;gap:8px}.foot-brand img{width:22px;height:22px;border-radius:4px}
+.foot-brand span{font-size:11px;color:#94a3b8}.foot-note{font-size:10px;color:#cbd5e1;text-align:right;line-height:1.6}
+</style></head><body>
+<div class="toolbar">
+  <div class="brand"><img src="${logoUri}" alt="Pessaro"><div><strong>Pessaro Capital</strong><small>CRM Interno</small></div></div>
+  <div class="btns"><button class="btn btn-p" onclick="window.print()">🖨 Imprimir / Guardar PDF</button><button class="btn btn-g" onclick="window.close()">✕ Cerrar</button></div>
+</div>
+<div class="wrap"><div class="card">
+  <div class="band">
+    <div class="band-logo"><img src="${logoUri}" alt="Pessaro"></div>
+    <div><h1>Informe de campaña — ${esc(campana.name)}</h1><div class="band-sub">Pessaro Capital SpA · CRM Interno · Plantilla ${esc(campana.whatsapp_templates?.template_name || '—')} · ${now}</div></div>
+    <div class="band-right"><div class="val">${filas.length}</div><small>destinatarios</small></div>
+  </div>
+  <div class="gold"></div>
+  <div class="body">
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-lbl">Enviados</div><div class="kpi-val" style="color:#2563eb">${counts.sent}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Entregados</div><div class="kpi-val" style="color:#6c5ce7">${counts.delivered}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Leídos</div><div class="kpi-val" style="color:#00d084">${counts.read}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Fallidos</div><div class="kpi-val" style="color:#dc2626">${counts.failed}</div></div>
+      <div class="kpi"><div class="kpi-lbl">Total</div><div class="kpi-val">${filas.length}</div></div>
+    </div>
+    <table><thead><tr><th>Contacto</th><th>Resultado</th><th>Estado entrega</th><th>Entregado</th><th>Leído</th><th>Error</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="disc">⚠️ <strong>Confidencial:</strong> Este informe es de uso interno exclusivo de Pessaro Capital SpA. Contiene datos personales protegidos. No distribuir.</div>
+    <div class="foot">
+      <div class="foot-brand"><img src="${logoUri}" alt="Pessaro"><span>Pessaro Capital SpA · pessaro.cl</span></div>
+      <div class="foot-note">CRM Interno · ${now}<br>Confidencial — No distribuir</div>
+    </div>
+  </div>
+</div></div></body></html>`
+  const w = window.open('', '_blank'); w.document.write(html); w.document.close()
 }
