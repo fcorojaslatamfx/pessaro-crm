@@ -4054,6 +4054,104 @@ function CampaignsHub({campaigns,setCampaigns,user,isSuperAdmin,staffProfile,glo
   </div>
 }
 
+// ─── ACCESOS (auditoría de login) ──────────────────────────────────────────
+// Lee admin_audit_log() (pessarocl, migración admin_audit_log_2026_08_21.sql):
+// espeja auth.audit_log_entries, que Supabase graba nativamente para todo
+// login/logout/signup de staff y de clientes por igual, porque comparten un
+// solo Auth. La función ya verifica super_admin adentro (SECURITY DEFINER);
+// acá solo se llama y se muestra — nada de lógica de permisos en el cliente.
+const AUDIT_ACTION_LABEL={
+  login:'Inicio de sesión', logout:'Cierre de sesión',
+  user_signedup:'Registro', user_invited:'Invitación',
+  token_refreshed:'Sesión renovada', token_revoked:'Sesión revocada',
+  user_recovery_requested:'Recuperación de contraseña',
+  user_confirmation_requested:'Confirmación de correo',
+  user_reauthenticate_requested:'Reautenticación',
+  user_modified:'Perfil modificado', user_deleted:'Cuenta eliminada',
+  mfa_challenge_and_verify:'Verificación MFA',
+}
+const AUDIT_ACTION_COLOR={
+  login:P.green, logout:P.muted, user_signedup:P.blue,
+  user_recovery_requested:P.orange, user_deleted:P.red, user_modified:P.purple,
+}
+
+function AuditLogPanel(){
+  const[rows,setRows]=useState([])
+  const[loading,setLoading]=useState(true)
+  const[error,setError]=useState('')
+  const[page,setPage]=useState(0)
+  const[soloStaff,setSoloStaff]=useState(false)
+  const PAGE_SIZE=50
+
+  const cargar=useCallback(async()=>{
+    setLoading(true);setError('')
+    const{data,error:err}=await supabase.rpc('admin_audit_log',{p_limit:PAGE_SIZE,p_offset:page*PAGE_SIZE})
+    if(err){setError(err.message||'No se pudo cargar el registro de accesos');setRows([])}
+    else setRows(data||[])
+    setLoading(false)
+  },[page])
+
+  useEffect(()=>{cargar()},[cargar])
+
+  const visibles=soloStaff?rows.filter(r=>r.es_staff):rows
+
+  return <div>
+    <SHdr title="Accesos" sub="Login y registro de staff y clientes — solo super admin"/>
+
+    <div style={{display:'flex',gap:10,alignItems:'center',marginBottom:16,flexWrap:'wrap'}}>
+      <button onClick={()=>{setSoloStaff(v=>!v);setPage(0)}}
+        style={{padding:'7px 14px',borderRadius:8,fontSize:12,cursor:'pointer',fontFamily:'inherit',
+          background:soloStaff?P.purpleDim:'rgba(255,255,255,0.04)',
+          color:soloStaff?P.purpleLight:P.muted,
+          border:`1px solid ${soloStaff?P.purpleBorder:P.border}`}}>
+        {soloStaff?'☑':'☐'} Solo staff
+      </button>
+      <Btn variant="ghost" onClick={cargar} style={{fontSize:12,padding:'7px 14px'}}>⟳ Recargar</Btn>
+      <span style={{fontSize:12,color:P.muted,marginLeft:'auto'}}>{visibles.length} en esta página</span>
+    </div>
+
+    {error&&<GlassCard style={{marginBottom:16}}><p style={{color:P.red,fontSize:13,margin:0}}>⚠ {error}</p></GlassCard>}
+
+    {loading?<Spinner/>:(
+      <GlassCard style={{padding:0,overflow:'auto'}}>
+        <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+          <thead>
+            <tr style={{textAlign:'left',color:P.muted,fontSize:10.5,textTransform:'uppercase',letterSpacing:'0.06em'}}>
+              <th style={{padding:'10px 16px',borderBottom:`1px solid ${P.border}`}}>Fecha</th>
+              <th style={{padding:'10px 16px',borderBottom:`1px solid ${P.border}`}}>Acción</th>
+              <th style={{padding:'10px 16px',borderBottom:`1px solid ${P.border}`}}>Quién</th>
+              <th style={{padding:'10px 16px',borderBottom:`1px solid ${P.border}`}}>Tipo</th>
+              <th style={{padding:'10px 16px',borderBottom:`1px solid ${P.border}`}}>IP</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibles.length===0&&<tr><td colSpan={5} style={{padding:24,textAlign:'center',color:P.muted,fontSize:13}}>Sin registros{soloStaff?' de staff':''} en esta página.</td></tr>}
+            {visibles.map(r=>{
+              const color=AUDIT_ACTION_COLOR[r.action]||P.blue
+              return <tr key={r.id} style={{borderBottom:`1px solid ${P.border}`}}>
+                <td style={{padding:'9px 16px',color:P.textSub,fontSize:12,whiteSpace:'nowrap'}}>{new Date(r.created_at).toLocaleString('es-CL',{dateStyle:'short',timeStyle:'short'})}</td>
+                <td style={{padding:'9px 16px'}}><Badge label={AUDIT_ACTION_LABEL[r.action]||r.action||'—'} color={color}/></td>
+                <td style={{padding:'9px 16px',color:P.text}}>
+                  {r.full_name||r.actor_email||'—'}
+                  {r.full_name&&r.actor_email&&<div style={{fontSize:11,color:P.muted}}>{r.actor_email}</div>}
+                </td>
+                <td style={{padding:'9px 16px'}}>{r.es_staff?<Badge label={r.staff_role||'Staff'} color={P.orange}/>:<Badge label="Cliente" color={P.muted}/>}</td>
+                <td style={{padding:'9px 16px',color:P.muted,fontSize:11.5,fontFamily:'monospace'}}>{r.ip_address||'—'}</td>
+              </tr>
+            })}
+          </tbody>
+        </table>
+      </GlassCard>
+    )}
+
+    <div style={{display:'flex',gap:10,justifyContent:'center',alignItems:'center',marginTop:16}}>
+      <Btn variant="ghost" onClick={()=>setPage(p=>Math.max(0,p-1))} disabled={page===0} style={{fontSize:12,padding:'7px 16px'}}>← Anterior</Btn>
+      <span style={{fontSize:12,color:P.muted}}>Página {page+1}</span>
+      <Btn variant="ghost" onClick={()=>setPage(p=>p+1)} disabled={rows.length<PAGE_SIZE} style={{fontSize:12,padding:'7px 16px'}}>Siguiente →</Btn>
+    </div>
+  </div>
+}
+
 // ─── ADMIN CAMPAÑAS ───────────────────────────────────────────────────────────
 function AdminCampaigns({campaigns,setCampaigns,user}){
   const[showNew,setShowNew]=useState(false)
@@ -6776,6 +6874,7 @@ export default function App(){
     // convoca la reunión es quien reparte el material.
     'documentos',
     ...(isSuperAdmin          ?['webcontent']:[]),
+    ...(isSuperAdmin          ?['auditoria']:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?['education']:[]),
     ...(canAccess('mensajes') ?['mensajes']:[]),
     ...(canAccess('mensajes') ?['wafinance']:[]),
@@ -6794,6 +6893,7 @@ export default function App(){
     canAccess('equipo')   ?{id:'equipo',   label:'Equipo',    icon:'👥'}:null,
     {id:'documentos',label:'Documentos',icon:'📁',color:P.orange},
     ...(isSuperAdmin?[{id:'webcontent',label:'Contenido Web',icon:'🌐',color:P.blue}]:[]),
+    ...(isSuperAdmin?[{id:'auditoria',label:'Accesos',icon:'🛡️',color:P.purple}]:[]),
     ...((isSuperAdmin||staffProfile?.role==='admin')?[{id:'education',label:'Educación',icon:'🎓',color:P.green}]:[]),
     canAccess('mensajes')?{id:'mensajes',label:'Mensajes WA',icon:'💬',color:P.green}:null,
     canAccess('mensajes')?{id:'wafinance',label:'WAFinance',icon:'💹',color:'#f0a500'}:null,
@@ -6958,6 +7058,7 @@ export default function App(){
           if(currentMod==='campaigns') return <CampaignsHub campaigns={campaigns} setCampaigns={setCampaigns} user={user} isSuperAdmin={isSuperAdmin} staffProfile={staffProfile} globalLeads={myLeads} setGlobalLeads={setLeads}/>
           if(currentMod==='documentos') return <DocumentosHub user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='webcontent'&&isSuperAdmin) return <WebContentHub isSuperAdmin={isSuperAdmin}/>
+          if(currentMod==='auditoria'&&isSuperAdmin) return <AuditLogPanel/>
           if(currentMod==='education'&&(isSuperAdmin||staffProfile?.role==='admin')) return <EducationAdmin user={user} isSuperAdmin={isSuperAdmin}/>
           if(currentMod==='mensajes') return <WhatsAppMessages user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin} waAssignments={waAssignments} setWaAssignments={setWaAssignments} navPhone={waNavPhone} onNavConsumed={()=>setWaNavPhone(null)} onPhoneChange={setWaViewingPhone}/>
           if(currentMod==='wafinance') return <WAFinanceChatInbox user={user} staffProfile={staffProfile} isSuperAdmin={isSuperAdmin}/>
