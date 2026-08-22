@@ -10,13 +10,15 @@ import { P, GlassCard, Btn, Badge, Lbl, Spinner, Modal, fmtDate, fmtSize } from 
 const T_PROFILES='client_profiles_2026_02_08_22_02'
 const T_KYC='client_kyc_documents_2026_03_16'
 const KYC_BUCKET='kyc-documents'
-const STATUS_META={active:{label:'Activa',color:P.green},pending:{label:'Pendiente',color:P.orange},suspended:{label:'Suspendida',color:P.red},inactive:{label:'Inactiva',color:P.muted}}
+const STATUS_META={active:{label:'Activa',color:P.green},pending:{label:'Pendiente',color:P.orange},suspended:{label:'Suspendida',color:P.red},inactive:{label:'Inactiva',color:P.muted},lead_educacion:{label:'Lead Academia',color:P.blue}}
+const VIA_LABELS={waba:'WhatsApp',web:'Web',web_registration:'Web',web_registration_otp:'Web (OTP)',risk_profile:'Perfil de riesgo',risk_profile_registration:'Perfil de riesgo'}
 const DOC_META={pending:{label:'Pendiente',color:P.orange},approved:{label:'Aprobado',color:P.green},rejected:{label:'Rechazado',color:P.red}}
 
 function ClientsPortalKYC({user}){
   const[clients,setClients]=useState([])
   const[loading,setLoading]=useState(true)
   const[search,setSearch]=useState('')
+  const[viaFilter,setViaFilter]=useState('todos')
   const[selected,setSelected]=useState(null)
   const[docs,setDocs]=useState([])
   const[docsLoading,setDocsLoading]=useState(false)
@@ -70,17 +72,29 @@ function ClientsPortalKYC({user}){
     finally{setActingId(null)}
   }
 
+  // Vías presentes en los datos reales, no una lista fija: si mañana aparece un
+  // created_via nuevo, el filtro lo muestra igual (con su valor crudo como label).
+  const viasPresentes=[...new Set(clients.map(c=>c.created_via).filter(Boolean))]
+
   const q=search.toLowerCase()
-  const filtered=q?clients.filter(c=>
+  const porVia=viaFilter==='todos'?clients:clients.filter(c=>c.created_via===viaFilter)
+  const filtered=q?porVia.filter(c=>
     `${c.first_name||''} ${c.last_name||''}`.toLowerCase().includes(q)||
-    (c.email||'').toLowerCase().includes(q)||(c.document_number||'').includes(q)):clients
+    (c.email||'').toLowerCase().includes(q)||(c.document_number||'').includes(q)):porVia
   const fullName=c=>`${c.first_name||''} ${c.last_name||''}`.trim()||c.email
 
   return <div>
     <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:14,gap:10,flexWrap:'wrap'}}>
-      <p style={{fontSize:12,color:P.muted,margin:0}}>{clients.length} clientes del portal · perfiles de registro + verificación KYC</p>
-      <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre, email o documento..."
-        style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none',width:280,fontFamily:'inherit'}}/>
+      <p style={{fontSize:12,color:P.muted,margin:0}}>{filtered.length} de {clients.length} clientes del portal · perfiles de registro + verificación KYC</p>
+      <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+        {viasPresentes.length>0&&<select value={viaFilter} onChange={e=>setViaFilter(e.target.value)}
+          style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none',fontFamily:'inherit'}}>
+          <option value="todos">Todas las vías</option>
+          {viasPresentes.map(v=><option key={v} value={v}>{VIA_LABELS[v]||v}</option>)}
+        </select>}
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Buscar por nombre, email o documento..."
+          style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 12px',color:P.text,fontSize:13,outline:'none',width:280,fontFamily:'inherit'}}/>
+      </div>
     </div>
     {loading?<Spinner/>:
       filtered.length===0?<GlassCard><p style={{fontSize:13,color:P.muted,textAlign:'center',margin:0}}>Sin clientes.</p></GlassCard>:
@@ -94,6 +108,7 @@ function ClientsPortalKYC({user}){
               <p style={{fontSize:14,fontWeight:600,color:P.text,margin:0}}>{fullName(c)}</p>
               {c.account_status&&<Badge label={(STATUS_META[c.account_status]||{label:c.account_status}).label} color={(STATUS_META[c.account_status]||{color:P.muted}).color}/>}
               {c.account_type&&<span style={{fontSize:11,color:P.blue}}>{c.account_type}</span>}
+              {c.created_via&&<span style={{fontSize:11,color:P.muted}}>· {VIA_LABELS[c.created_via]||c.created_via}</span>}
             </div>
             <p style={{fontSize:11,color:P.muted,margin:'2px 0 0'}}>{c.email}{c.phone?` · ${c.phone}`:''}{c.country?` · ${c.country}`:''} · Registro {fmtDate(c.created_at)}</p>
           </div>
