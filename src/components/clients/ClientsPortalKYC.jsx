@@ -82,12 +82,15 @@ function ClientsPortalKYC({user,onVerFicha}){
         found=data
       }
       if(!found){
+        // source tiene CHECK (manual/csv/formulario) — verificado en vivo
+        // (crm_contacts_source_check). 'manual' es correcto acá: lo crea la
+        // acción explícita de un super_admin, no un import ni un formulario.
         const{data:creado,error:errCrear}=await supabase.from('crm_contacts').insert({
           user_id:user.id,
           full_name:`${c.first_name||''} ${c.last_name||''}`.trim()||c.email||tel||'Sin nombre',
           email:c.email||null,
           phone:tel||null,
-          source:'portal_kyc',
+          source:'manual',
         }).select('id').single()
         if(errCrear)throw errCrear
         found=creado
