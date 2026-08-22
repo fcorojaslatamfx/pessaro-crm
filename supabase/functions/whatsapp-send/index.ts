@@ -1,3 +1,17 @@
+// whatsapp-send v20
+// CAMBIOS v20:
+//  - send_service_template (NUEVO): un envío a un solo destinatario, disparado
+//      por otro servicio (no por un asesor del CRM) — ej. el recordatorio de
+//      estudio de pessarocl (PLAN_RECORDATORIOS_CALENDARIO_ESTUDIO_2026_08_21.md
+//      fase 2). Autorización por secreto compartido en el BODY (WA_CRON_SECRET),
+//      mismo patrón que run_due_campaigns: quien llama no es una sesión de
+//      staff, así que no aplica canSendToPhone() ni ownership.
+//      El consentimiento de marketing (la plantilla quedó aprobada como
+//      Marketing, no Utility) lo registra y garantiza quien llama —
+//      study-reminder-dispatcher en pessarocl, ver whatsapp_consent_at en
+//      education_study_schedule — acá solo se valida OPT-OUT y que la
+//      plantilla exista y esté APPROVED.
+//
 // whatsapp-send v19
 // CAMBIOS v19:
 //  - No se le escribe dos veces al mismo contacto. Cada destinatario deja una
@@ -527,6 +541,64 @@ serve(async (req) => {
         }
       }
       return json({ success: true, due: (due || []).length, results })
+    }
+
+    // ── send_service_template (otro servicio, no un asesor del CRM) ────
+    // Mismo patrón de autorización que run_due_campaigns: el secreto va en
+    // el BODY porque el caller (study-reminder-dispatcher en pessarocl)
+    // manda la anon key en Authorization, no un JWT de usuario — por eso se
+    // resuelve antes de authenticate() y no aplica canSendToPhone()/ownership.
+    if (action === 'send_service_template') {
+      const cronSecret = Deno.env.get('WA_CRON_SECRET') ?? ''
+      if (!cronSecret || payload.cron_secret !== cronSecret) {
+        return json({ error: 'Solo un servicio autorizado puede ejecutar esta action' }, 403)
+      }
+
+      const { to, template_name, language, params } = payload
+      if (!to || !template_name) return json({ error: 'to y template_name requeridos' }, 400)
+      if (await isOptedOut(supabase, to)) return json({ error: OPT_OUT_MSG }, 403)
+
+      // Se consulta el catálogo en vez de confiar en el llamador: evita un
+      // envío a Meta con una plantilla que ya no existe o quedó rechazada.
+      const { data: tpl } = await supabase
+        .from('whatsapp_templates')
+        .select('header_type, variables_count, status')
+        .eq('template_name', template_name)
+        .eq('language', language || 'es')
+        .maybeSingle()
+      if (!tpl) return json({ error: `Plantilla "${template_name}" no encontrada en el catálogo sincronizado` }, 404)
+      if (tpl.status !== 'APPROVED') {
+        return json({ error: `La plantilla "${template_name}" está en estado ${tpl.status}, no APPROVED` }, 400)
+      }
+
+      const bodyValues = (tpl.variables_count || 0) > 0 && Array.isArray(params) ? params : []
+      const components = buildComponents(tpl.header_type, bodyValues)
+      const phone = normalizePhone(to)
+
+      const res = await fetch(`${GRAPH_API}/${PHONE_ID}/messages`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${TOKEN}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: toWaNumber(phone),
+          type: 'template',
+          template: { name: template_name, language: { code: language || 'es' }, components },
+        }),
+      })
+      const result = await res.json()
+      if (result.messages?.[0]?.id) {
+        await supabase.from('whatsapp_messages').insert({
+          meta_message_id: result.messages[0].id,
+          client_phone:    phone,
+          direction:       'outbound',
+          message_type:    'template',
+          template_name,
+          content:         { template_name, components },
+          status:          'sent',
+        })
+        return json({ success: true, message_id: result.messages[0].id })
+      }
+      return json({ success: false, error: result.error?.message || 'Meta error', meta_response: result }, 400)
     }
 
     // Autenticación común al resto de actions
