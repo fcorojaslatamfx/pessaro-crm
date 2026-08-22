@@ -151,12 +151,32 @@ const RANGOS_FECHA = [
   {value:'30d',   label:'Últimos 30 días'},
 ]
 const desdeRango = rango => {
-  if(!rango||rango==='todos')return null
+  if(!rango||rango==='todos'||rango==='personalizado')return null
   const d=new Date(); d.setHours(0,0,0,0)
   if(rango==='7d') d.setDate(d.getDate()-6)
   if(rango==='30d')d.setDate(d.getDate()-29)
   return d
 }
+// Compara un timestamptz contra un <input type="date"> (YYYY-MM-DD, hora local
+// del navegador): para el filtro "Fecha personalizada", no un rango sino un día exacto.
+const mismoDia = (creadoISO, ymd) => {
+  if(!creadoISO||!ymd)return false
+  const c=new Date(creadoISO)
+  const[y,m,d]=ymd.split('-').map(Number)
+  return c.getFullYear()===y&&c.getMonth()===m-1&&c.getDate()===d
+}
+// RANGOS_FECHA + fecha personalizada — solo para los dos filtros que la piden
+// (Contactos, Clientes Portal). Aparte para no ofrecer "Fecha personalizada"
+// en el filtro de fecha del modal de grupos, que no tiene el <input> asociado.
+const RANGOS_FECHA_PERSONALIZABLE = [...RANGOS_FECHA, {value:'personalizado', label:'📅 Fecha personalizada'}]
+
+// Verificación KYC dentro de la ficha del contacto (solo super_admin, ver
+// .claude/skills/kyc-flow en pessarocl). kyc_verifications.status llega
+// literal de Didit — 'pending'/'Approved'/'Declined', con esa mayúscula, no se
+// normaliza. client_kyc_documents_2026_03_16.status es propio del repo:
+// not_uploaded/pending_review/approved/rejected.
+const KYC_VERIF_META={pending:{label:'En revisión',color:P.orange},Approved:{label:'Verificado',color:P.green},Declined:{label:'Rechazado',color:P.red}}
+const KYC_DOC_META={pending_review:{label:'Pendiente',color:P.orange},approved:{label:'Aprobado',color:P.green},rejected:{label:'Rechazado',color:P.red}}
 // Nombre del grupo del día: estable, para que pulsarlo dos veces no cree otro
 const nombreGrupoDia = (d=new Date()) => {
   const p=n=>String(n).padStart(2,'0')
@@ -1079,7 +1099,7 @@ function Dashboard({contacts,leads:allLeads,onNav,isSuperAdmin,user,staffProfile
 }
 
 // ─── CONTACTS (SUPER ADMIN = todos, asesor = propios) ─────────────────────────
-function Contacts({user,isSuperAdmin,staffProfile}){
+function Contacts({user,isSuperAdmin,staffProfile,openContactId,onFichaAbierta}){
   const isSARef=useRef(isSuperAdmin)
   useEffect(()=>{isSARef.current=isSuperAdmin},[isSuperAdmin])
   const[contacts,setContacts]=useState([])
@@ -1127,6 +1147,7 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const[groupErr,setGroupErr]=useState('')
   // Filtro por fecha de creación + agrupar de un golpe los del día
   const[dateFilter,setDateFilter]=useState('todos')
+  const[dateFilterCustom,setDateFilterCustom]=useState('') // solo con dateFilter==='personalizado'
   const[agrupando,setAgrupando]=useState(false)
   const[agrupaMsg,setAgrupaMsg]=useState(null)   // {type,text}
   // Import CSV: grupo destino, creado antes de importar si hace falta
@@ -1373,14 +1394,15 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   // Convierte el filtro de fecha en un grupo real. Idempotente: reutiliza el
   // grupo del día si ya existe y la RPC omite a los que ya están dentro.
   const agruparDelRango=async()=>{
-    const desde=desdeRango(dateFilter)
-    if(!desde)return
-    const delRango=contacts.filter(c=>!String(c.id).startsWith('sub_')&&c.created_at&&new Date(c.created_at)>=desde)
+    const esPersonalizado=dateFilter==='personalizado'
+    if(esPersonalizado&&!dateFilterCustom)return
+    if(!esPersonalizado&&!desdeRango(dateFilter))return
+    const delRango=contacts.filter(c=>!String(c.id).startsWith('sub_')&&c.created_at&&coincideFecha(c))
     if(!delRango.length){setAgrupaMsg({type:'err',text:'No hay contactos en ese rango.'});return}
     setAgrupando(true);setAgrupaMsg(null)
     try{
-      const hoy=nombreGrupoDia()
-      const nombre=dateFilter==='hoy'?hoy:`${hoy} (${dateFilter==='7d'?'7':'30'} días)`
+      const hoy=esPersonalizado?nombreGrupoDia(new Date(`${dateFilterCustom}T00:00:00`)):nombreGrupoDia()
+      const nombre=(dateFilter==='hoy'||esPersonalizado)?hoy:`${hoy} (${dateFilter==='7d'?'7':'30'} días)`
       let grupo=groups.find(g=>g.name===nombre&&g.user_id===user.id)
       if(!grupo){
         const{data,error}=await supabase.from('crm_contact_groups').insert({
@@ -1435,10 +1457,14 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   useEffect(()=>{load()},[load])
 
   const desdeFecha=desdeRango(dateFilter)
+  // 'personalizado' compara el día exacto (mismoDia); el resto sigue siendo un
+  // rango "desde X hasta ahora" (desdeFecha).
+  const coincideFecha=c=>dateFilter==='personalizado'
+    ?(!dateFilterCustom||mismoDia(c.created_at,dateFilterCustom))
+    :(!desdeFecha||(c.created_at&&new Date(c.created_at)>=desdeFecha))
   const filtered=contacts.filter(c=>{
     const ms=`${c.full_name} ${c.email} ${c.phone}`.toLowerCase().includes(search.toLowerCase())
-    // Rango por fecha de creación (medianoche local, ver desdeRango)
-    const mf=!desdeFecha||(c.created_at&&new Date(c.created_at)>=desdeFecha)
+    const mf=coincideFecha(c)
     const mst=statusFilter==='todos'||(statusFilter==='activos'&&c.status!=='inactivo')||c.status===statusFilter
     const mu=userFilter==='todos'||c.user_id===userFilter
     const mg=groupFilter==='todos'||(memberships[c.id]||[]).includes(groupFilter)
@@ -1455,9 +1481,8 @@ function Contacts({user,isSuperAdmin,staffProfile}){
   const seleccionables=filtered.filter(c=>!String(c.id).startsWith('sub_'))
   const marcados=selIds.filter(id=>seleccionables.some(c=>c.id===id))
   // Cuántos entrarían al grupo si se pulsa «Agrupar»: sólo contactos reales
-  const nuevosDelRango=desdeFecha
-    ?contacts.filter(c=>!String(c.id).startsWith('sub_')&&c.created_at&&new Date(c.created_at)>=desdeFecha).length
-    :0
+  const nuevosDelRango=dateFilter==='todos'?0
+    :contacts.filter(c=>!String(c.id).startsWith('sub_')&&c.created_at&&coincideFecha(c)).length
 
   const validate=()=>{
     const e={}
@@ -1583,20 +1608,68 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       const tickets=[...(tkByContact.data||[]),...(tkByMail.data||[])]
         .filter((t,i,a)=>a.findIndex(x=>x.id===t.id)===i)
         .sort((a,b)=>new Date(b.created_at)-new Date(a.created_at))
+      const clienteRow=(cliente.data||[])[0]||null
+      // KYC solo se pide si hay cuenta de portal y quien mira es super_admin:
+      // client_kyc_documents_2026_03_16/kyc_verifications tienen RLS de staff
+      // (get_my_role()='super_admin'), así que para cualquier otro rol la
+      // consulta solo gastaría una ida y vuelta para volver vacía.
+      let kycVerif=null,kycDocs=[]
+      if(isSuperAdmin&&clienteRow?.user_id){
+        const[kv,kd]=await Promise.all([
+          supabase.from('kyc_verifications').select('*').eq('user_id',clienteRow.user_id).order('updated_at',{ascending:false}).limit(1),
+          supabase.from('client_kyc_documents_2026_03_16').select('*').eq('user_id',clienteRow.user_id).order('created_at',{ascending:false}),
+        ])
+        kycVerif=(kv.data||[])[0]||null
+        kycDocs=kd.data||[]
+      }
       setFicha({
         wa:wa.data||[],
         lead:(leadById.data||[])[0]||(leadByMail.data||[])[0]||null,
         subs:subs.data||[],
         tickets,
         tasks:tasks.data||[],
-        cliente:(cliente.data||[])[0]||null,
+        cliente:clienteRow,
+        kycVerif,
+        kycDocs,
       })
     }catch(e){console.error('loadFicha:',e)}
     finally{setLoadingFicha(false)}
   }
 
+  // Revisión de documentos KYC dentro de la ficha (solo super_admin, ver
+  // KYC_DOC_META arriba). Firmado corto (60s) porque nunca se guarda: se abre
+  // y se descarta, igual que en pessaro-crm/ClientsPortalKYC.jsx.
+  const[kycActingId,setKycActingId]=useState(null)
+  const[kycError,setKycError]=useState('')
+  const verDocumentoKyc=async d=>{
+    setKycError('')
+    try{
+      const{data,error}=await supabase.storage.from('kyc-documents').createSignedUrl(d.file_path,60)
+      if(error)throw error
+      if(data?.signedUrl)window.open(data.signedUrl,'_blank')
+    }catch(e){console.error(e);setKycError('No se pudo generar el enlace del documento')}
+  }
+  const revisarDocumentoKyc=async(d,status)=>{
+    let reason=null
+    if(status==='rejected'){
+      reason=window.prompt('Motivo de rechazo:')
+      if(reason===null)return
+    }
+    setKycActingId(d.id);setKycError('')
+    try{
+      const{data,error}=await supabase.from('client_kyc_documents_2026_03_16').update({
+        status,rejection_reason:reason||null,
+        reviewed_by:user?.id||null,reviewed_at:new Date().toISOString(),
+        updated_at:new Date().toISOString()
+      }).eq('id',d.id).select().single()
+      if(error)throw error
+      setFicha(p=>p?{...p,kycDocs:(p.kycDocs||[]).map(x=>x.id===data.id?data:x)}:p)
+    }catch(e){console.error(e);setKycError('No se pudo actualizar el documento')}
+    finally{setKycActingId(null)}
+  }
+
   const openContact=async c=>{
-    setSelected(c);setNotes([]);setNoteText('');setNoteErr('');setComErr('');setActivities([])
+    setSelected(c);setNotes([]);setNoteText('');setNoteErr('');setComErr('');setActivities([]);setKycError('')
     loadFicha(c)
     try{
       let q=supabase.from('crm_notes').select('*').order('created_at',{ascending:false})
@@ -1621,6 +1694,20 @@ function Contacts({user,isSuperAdmin,staffProfile}){
       }catch(e){console.error('markRead:',e)}
     }
   }
+
+  // Puente con ClientsPortalKYC.jsx: al pulsar "Ver ficha completa" ahí, se
+  // resuelve/crea el crm_contacts correspondiente y se pide abrirlo acá. Se
+  // trae siempre fresco por id (no desde `contacts`, que puede tener otra
+  // página o filtro activo y no contener esta fila).
+  useEffect(()=>{
+    if(!openContactId)return
+    ;(async()=>{
+      const{data,error}=await supabase.from('crm_contacts').select('*').eq('id',openContactId).maybeSingle()
+      if(error)console.error('openContactId:',error)
+      else if(data)openContact(data)
+      onFichaAbierta?.()
+    })()
+  },[openContactId])
 
   const addNote=async()=>{
     if(!noteText.trim()||!selected)return
@@ -2195,19 +2282,22 @@ function Contacts({user,isSuperAdmin,staffProfile}){
             ...groups.filter(h=>h.parent_id===p.id).map(h=>({value:h.id,label:`   ↳ ${h.name} (${cuenta(h)})`}))]
         })]}/>}
       {/* Fecha de creación: el caso del día a día es "qué cargué hoy" */}
-      <Sel value={dateFilter} onChange={v=>{setDateFilter(v);setAgrupaMsg(null)}} style={{maxWidth:170}} options={RANGOS_FECHA}/>
+      <Sel value={dateFilter} onChange={v=>{setDateFilter(v);setAgrupaMsg(null)}} style={{maxWidth:170}} options={RANGOS_FECHA_PERSONALIZABLE}/>
+      {dateFilter==='personalizado'&&<input type="date" value={dateFilterCustom} onChange={e=>{setDateFilterCustom(e.target.value);setAgrupaMsg(null)}}
+        max={new Date().toISOString().slice(0,10)}
+        style={{background:'rgba(255,255,255,0.03)',border:`1px solid ${P.border}`,borderRadius:8,padding:'8px 10px',color:P.text,fontSize:13,outline:'none',fontFamily:'inherit'}}/>}
       <Btn variant="ghost" onClick={load} style={{padding:'9px 12px'}}>↺</Btn>
     </div>
 
     {/* Convertir el recorte por fecha en un grupo de verdad, de una pasada */}
-    {tab==='lista'&&dateFilter!=='todos'&&<div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:16,padding:'10px 14px',
+    {tab==='lista'&&dateFilter!=='todos'&&(dateFilter!=='personalizado'||dateFilterCustom)&&<div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',marginBottom:16,padding:'10px 14px',
       background:P.greenDim,border:`1px solid ${P.green}30`,borderRadius:10}}>
       <span style={{fontSize:12,color:P.text}}>
-        <strong>{nuevosDelRango}</strong> contacto{nuevosDelRango!==1?'s':''} {dateFilter==='hoy'?'creado(s) hoy':`en los últimos ${dateFilter==='7d'?7:30} días`}
+        <strong>{nuevosDelRango}</strong> contacto{nuevosDelRango!==1?'s':''} {dateFilter==='hoy'?'creado(s) hoy':dateFilter==='personalizado'?`creado(s) el ${dateFilterCustom}`:`en los últimos ${dateFilter==='7d'?7:30} días`}
       </span>
       <Btn variant="ghost" onClick={agruparDelRango} disabled={agrupando||!nuevosDelRango} style={{fontSize:11,padding:'6px 12px'}}
         title="Crea (o reutiliza) el grupo del día y agrega estos contactos">
-        {agrupando?'Agrupando…':`🗂 Agrupar en «${dateFilter==='hoy'?nombreGrupoDia():`${nombreGrupoDia()} (${dateFilter==='7d'?'7':'30'} días)`}»`}
+        {agrupando?'Agrupando…':`🗂 Agrupar en «${dateFilter==='hoy'?nombreGrupoDia():dateFilter==='personalizado'?nombreGrupoDia(new Date(`${dateFilterCustom}T00:00:00`)):`${nombreGrupoDia()} (${dateFilter==='7d'?'7':'30'} días)`}»`}
       </Btn>
       {agrupaMsg&&<span style={{fontSize:11.5,color:agrupaMsg.type==='ok'?P.green:P.red}}>{agrupaMsg.text}</span>}
 
@@ -2888,6 +2978,39 @@ function Contacts({user,isSuperAdmin,staffProfile}){
                     color={selected.managed_type&&selected.managed_type!=='ninguno'?P.purpleLight:undefined}/>
                   <FField label="Equidad o balance inicial" value={selected.initial_balance!==null&&selected.initial_balance!==undefined&&selected.initial_balance!==''?fmtUSD(selected.initial_balance):''} mono color={P.green}/>
                 </FGrid>
+              </FSection>}
+
+              {/* Exclusivo super_admin: mismo criterio que el resto de acciones
+                  sensibles de esta ficha (WABA, reasignar cartera). Solo aparece
+                  si el contacto tiene cuenta de portal (f.cliente, resuelta por
+                  email en loadFicha) — un lead sin cuenta no tiene nada que
+                  verificar. */}
+              {isSuperAdmin&&f.cliente&&<FSection title="Verificación KYC" icon="🪪" accent={P.orange}
+                right={<Badge label={f.kycVerif?(KYC_VERIF_META[f.kycVerif.status]||{}).label||f.kycVerif.status:'Sin verificar'} color={f.kycVerif?(KYC_VERIF_META[f.kycVerif.status]||{}).color||P.muted:P.muted}/>}>
+                {kycError&&<p style={{fontSize:12,color:P.red,margin:'0 0 8px'}}>{kycError}</p>}
+                {(f.kycDocs||[]).length===0
+                  ?<p style={{fontSize:12,color:P.muted,margin:0}}>Este cliente no ha subido documentos.</p>
+                  :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+                    {f.kycDocs.map(d=>{
+                      const m=KYC_DOC_META[d.status]||{label:d.status||'—',color:P.muted}
+                      return <div key={d.id} style={{background:'rgba(255,255,255,0.03)',borderRadius:10,padding:'10px 14px',display:'flex',gap:12,alignItems:'center',flexWrap:'wrap'}}>
+                        <span style={{fontSize:18}}>📄</span>
+                        <div style={{flex:1,minWidth:180}}>
+                          <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                            <span style={{fontSize:12.5,fontWeight:600,color:P.text}}>{d.document_type||'Documento'}</span>
+                            <Badge label={m.label} color={m.color}/>
+                          </div>
+                          <p style={{fontSize:10.5,color:P.muted,margin:'2px 0 0'}}>{d.file_name}{d.created_at?` · Subido ${fmtDate(d.created_at)}`:''}{d.reviewed_at?` · Revisado ${fmtDate(d.reviewed_at)}`:''}</p>
+                          {d.status==='rejected'&&d.rejection_reason&&<p style={{fontSize:11,color:P.red,margin:'3px 0 0'}}>Motivo: {d.rejection_reason}</p>}
+                        </div>
+                        <div style={{display:'flex',gap:6,flexShrink:0}}>
+                          <Btn variant="ghost" style={{padding:'4px 10px',fontSize:11}} onClick={()=>verDocumentoKyc(d)}>Ver ↗</Btn>
+                          {d.status!=='approved'&&<Btn style={{padding:'4px 10px',fontSize:11,background:P.greenDim,color:P.green,border:'1px solid rgba(0,208,132,0.3)'}} onClick={()=>revisarDocumentoKyc(d,'approved')} disabled={kycActingId===d.id}>✓ Aprobar</Btn>}
+                          {d.status!=='rejected'&&<Btn variant="danger" style={{padding:'4px 10px',fontSize:11}} onClick={()=>revisarDocumentoKyc(d,'rejected')} disabled={kycActingId===d.id}>✕ Rechazar</Btn>}
+                        </div>
+                      </div>
+                    })}
+                  </div>}
               </FSection>}
 
               {!esSub&&<FSection title="Depósitos y retiros" icon="💰" accent={P.green}
